@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#17243a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Samen Thuis">
+  <meta name="description" content="Het gezamenlijke thuisdashboard van Kees en Daphne.">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="stylesheet" href="styles.css">
+  <title>Samen Thuis</title>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Hoofdnavigatie">
+      <div class="brand"><span class="brand-mark">S</span><div><strong>Samen Thuis</strong><small>Kees & Daphne</small></div></div>
+      <nav id="nav"></nav>
+      <div class="sidebar-footer">
+        <button class="nav-item" data-action="backup"><span>↥</span> Back-up maken</button>
+        <button class="nav-item" data-action="restore"><span>↧</span> Back-up laden</button>
+        <input id="restoreInput" type="file" accept="application/json" hidden>
+      </div>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <div><p id="eyebrow">Goedemorgen</p><h1 id="pageTitle">Vandaag</h1></div>
+        <div class="top-actions">
+          <span id="saveState" class="save-state">Lokaal bewaard</span>
+          <button id="laptopSaveBtn" class="secondary laptop-save" aria-label="Back-up opslaan voor laptop"><span class="full-label">⇩ Opslaan voor laptop</span><span class="short-label">⇩ Laptop</span></button>
+          <button id="addBtn" class="primary">＋ Toevoegen</button>
+        </div>
+      </header>
+      <div id="view" class="view" aria-live="polite"></div>
+    </main>
+  </div>
+
+  <dialog id="itemDialog">
+    <form id="itemForm" method="dialog">
+      <div class="dialog-head"><div><p class="eyebrow">Nieuw item</p><h2 id="dialogTitle">Toevoegen</h2></div><button type="button" data-close-dialog class="icon-btn" aria-label="Sluiten">×</button></div>
+      <div id="formFields" class="form-grid"></div>
+      <div class="dialog-actions"><button type="button" data-close-dialog class="secondary">Annuleren</button><button id="saveBtn" type="submit" class="primary">Opslaan</button></div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status"></div>
+  <script src="app.js"></script>
+</body>
+</html>
