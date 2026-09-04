@@ -490,15 +490,133 @@ function renderTrips() {
 
 function renderSettings() {
   const configured = syncConfigured();
-  const sql = `create table public.household_data (\n  id text primary key,\n  payload jsonb not null,\n  updated_at timestamptz not null default now()\n);\n\nalter table public.household_data enable row level security;\n\ncreate policy "encrypted household read" on public.household_data\n  for select to anon using (true);\ncreate policy "encrypted household insert" on public.household_data\n  for insert to anon with check (true);\ncreate policy "encrypted household update" on public.household_data\n  for update to anon using (true) with check (true);`;
+
+  const SUPABASE_URL = 'https://vwfuetxgapzfivydzhxc.supabase.co';
+  const SUPABASE_KEY = 'sb_publishable_Xa1oLeM64F-jog1vVjJbkQ_BE3UV6mR';
+
   return `<div class="settings-grid">
-    <section class="card settings-card"><div class="card-head"><div><p class="eyebrow">Apparaten</p><h2>Versleutelde synchronisatie</h2></div><span class="tag ${configured ? 'green' : ''}">${configured ? 'Ingesteld' : 'Nog instellen'}</span></div><p>De app werkt zelfstandig. Met een gratis Supabase-project blijven iPhone, iPad en laptop gelijk. De inhoud wordt vóór verzending versleuteld met jullie huishoudcode.</p>
-      <form id="syncForm" class="form-grid compact-form"><div class="field"><label for="syncProjectUrl">Supabase-project-URL</label><input id="syncProjectUrl" name="projectUrl" type="url" value="${esc(syncConfig.projectUrl)}" placeholder="https://abc.supabase.co"></div><div class="field"><label for="syncAnonKey">Publishable / anon key</label><input id="syncAnonKey" name="anonKey" type="password" value="${esc(syncConfig.anonKey)}" autocomplete="off"></div><div class="field"><label for="syncHouseholdCode">Gedeelde huishoudcode (minimaal 12 tekens)</label><input id="syncHouseholdCode" name="householdCode" type="password" value="${esc(syncConfig.householdCode)}" minlength="12" autocomplete="off"></div><div class="button-row"><button class="primary" type="submit">Bewaren en verbinden</button>${configured ? '<button class="secondary" type="button" data-sync-now>Nu synchroniseren</button>' : ''}</div></form>
-      <details><summary>Eenmalige Supabase-instelling</summary><ol><li>Maak een project op Supabase.</li><li>Open de SQL Editor en voer onderstaande code één keer uit.</li><li>Kopieer bij Project Settings → API de Project URL en publishable/anon key hierboven.</li><li>Gebruik op elk apparaat exact dezelfde huishoudcode.</li></ol><pre><code>${esc(sql)}</code></pre></details>
+
+    <section class="card settings-card">
+      <div class="card-head">
+        <div>
+          <p class="eyebrow">Apparaten</p>
+          <h2>Versleutelde synchronisatie</h2>
+        </div>
+
+        <span class="tag ${configured ? 'green' : ''}">
+          ${configured ? 'Verbonden' : 'Nog verbinden'}
+        </span>
+      </div>
+
+      <p>
+        Synchroniseer jullie gegevens tussen iPhone, iPad en laptop.
+        De gegevens worden vóór verzending versleuteld met jullie gedeelde huishoudcode.
+      </p>
+
+      <form id="syncForm" class="form-grid compact-form">
+
+        <!-- Supabase-instellingen staan al vast in de app -->
+        <input
+          type="hidden"
+          id="syncProjectUrl"
+          name="projectUrl"
+          value="${SUPABASE_URL}"
+        >
+
+        <input
+          type="hidden"
+          id="syncAnonKey"
+          name="anonKey"
+          value="${SUPABASE_KEY}"
+        >
+
+        <div class="field">
+          <label for="syncHouseholdCode">
+            Gedeelde huishoudcode
+          </label>
+
+          <input
+            id="syncHouseholdCode"
+            name="householdCode"
+            type="password"
+            value="${esc(syncConfig.householdCode)}"
+            minlength="12"
+            autocomplete="off"
+            placeholder="Vul jullie huishoudcode in"
+            required
+          >
+
+          <small>
+            Gebruik op ieder apparaat exact dezelfde code.
+          </small>
+        </div>
+
+        <div class="button-row">
+          <button class="primary" type="submit">
+            ${configured ? 'Bewaren' : 'Verbinden'}
+          </button>
+
+          ${
+            configured
+              ? '<button class="secondary" type="button" data-sync-now>Nu synchroniseren</button>'
+              : ''
+          }
+        </div>
+
+      </form>
     </section>
+
     ${renderCalendarSettings()}
-    <section class="card settings-card"><div class="card-head"><div><p class="eyebrow">Gegevens</p><h2>Back-up</h2></div></div><p>Maak een los JSON-bestand of laad een eerdere back-up. De synchronisatiecode en sleutel worden niet in de back-up gezet.</p><div class="button-row"><button class="secondary" data-action="backup">Back-up maken</button><button class="secondary" data-action="restore">Back-up laden</button></div></section>
-    <section class="card settings-card"><div class="card-head"><div><p class="eyebrow">Apple Opdracht</p><h2>Eenvoudig tekstformaat</h2></div></div><p>Laat de Opdracht per afspraak één regel maken:</p><pre><code>Agendanaam | 2026-09-04 | 09:00 | Titel</code></pre><p>De persoon volgt uit de agenda. Een vijfde veld met Kees, Daphne of Samen is optioneel en gaat voor de agendakeuze. Een zesde veld mag de eindtijd bevatten. Bij onbekende namen kies je de persoon één keer.</p><p>Dit is een import, geen tweerichtingskoppeling. Verplaatsen of verwijderen in Apple Agenda wordt niet automatisch overgenomen.</p></section>
+
+    <section class="card settings-card">
+      <div class="card-head">
+        <div>
+          <p class="eyebrow">Gegevens</p>
+          <h2>Back-up</h2>
+        </div>
+      </div>
+
+      <p>
+        Maak een los JSON-bestand of laad een eerdere back-up.
+        De synchronisatiecode en sleutel worden niet in de back-up gezet.
+      </p>
+
+      <div class="button-row">
+        <button class="secondary" data-action="backup">
+          Back-up maken
+        </button>
+
+        <button class="secondary" data-action="restore">
+          Back-up laden
+        </button>
+      </div>
+    </section>
+
+    <section class="card settings-card">
+      <div class="card-head">
+        <div>
+          <p class="eyebrow">Apple Opdracht</p>
+          <h2>Eenvoudig tekstformaat</h2>
+        </div>
+      </div>
+
+      <p>Laat de Opdracht per afspraak één regel maken:</p>
+
+      <pre><code>Agendanaam | 2026-09-04 | 09:00 | Titel</code></pre>
+
+      <p>
+        De persoon volgt uit de agenda. Een vijfde veld met Kees, Daphne
+        of Samen is optioneel en gaat voor de agendakeuze.
+        Een zesde veld mag de eindtijd bevatten.
+        Bij onbekende namen kies je de persoon één keer.
+      </p>
+
+      <p>
+        Dit is een import, geen tweerichtingskoppeling.
+        Verplaatsen of verwijderen in Apple Agenda wordt niet automatisch overgenomen.
+      </p>
+    </section>
+
   </div>`;
 }
 
