@@ -22,6 +22,9 @@
         <button class="nav-item" data-action="backup"><span>↥</span> Back-up maken</button>
         <button class="nav-item" data-action="restore"><span>↧</span> Back-up laden</button>
         <input id="restoreInput" type="file" accept="application/json" hidden>
+        <input id="groceryImportFile" type="file" accept=".txt,.csv,.json,text/plain,text/csv,application/json" hidden>
+        <input id="ostaImportFile" type="file" accept=".txt,.csv,.json,text/plain,text/csv,application/json" hidden>
+        <input id="calendarImportFile" type="file" accept=".txt,.csv,.json,text/plain,text/csv,application/json" hidden>
       </div>
     </aside>
 
@@ -29,6 +32,7 @@
       <header class="topbar">
         <div><p id="eyebrow">Goedemorgen</p><h1 id="pageTitle">Vandaag</h1></div>
         <div class="top-actions">
+          <span id="syncState" class="sync-state" title="Synchronisatiestatus">Alleen dit apparaat</span>
           <span id="saveState" class="save-state">Lokaal bewaard</span>
           <button id="laptopSaveBtn" class="secondary laptop-save" aria-label="Back-up opslaan voor laptop"><span class="full-label">⇩ Opslaan voor laptop</span><span class="short-label">⇩ Laptop</span></button>
           <button id="addBtn" class="primary">＋ Toevoegen</button>
@@ -46,7 +50,21 @@
     </form>
   </dialog>
 
+  <dialog id="questionDialog">
+    <form id="questionForm" method="dialog">
+      <div class="dialog-head"><div><p class="eyebrow">Vraag van vandaag</p><h2 id="questionTitle">Jouw antwoord</h2></div><button type="button" data-close-question class="icon-btn" aria-label="Sluiten">×</button></div>
+      <p id="questionText" class="question-dialog-text"></p>
+      <input id="questionPerson" name="person" type="hidden">
+      <div class="field"><label for="questionAnswer">Antwoord</label><textarea id="questionAnswer" name="answer" required maxlength="800" placeholder="Schrijf je antwoord…"></textarea></div>
+      <div class="dialog-actions"><button type="button" data-close-question class="secondary">Annuleren</button><button type="submit" class="primary">Bewaren</button></div>
+    </form>
+  </dialog>
+
   <div id="toast" class="toast" role="status"></div>
+  <div id="brainyQuoteSource" class="brainy-source" aria-hidden="true">
+    <script src="https://www.brainyquote.com/link/quotebr.js"></script>
+    <a href="https://www.brainyquote.com/quote_of_the_day" target="_blank" rel="nofollow noopener">more Quotes</a>
+  </div>
   <script src="app.js"></script>
 </body>
 </html>

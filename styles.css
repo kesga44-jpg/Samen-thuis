@@ -25,3 +25,121 @@ dialog{border:0;border-radius:20px;padding:0;width:min(570px,calc(100vw - 28px))
 .toast{position:fixed;left:50%;bottom:28px;transform:translate(-50%,25px);background:var(--ink);color:white;border-radius:11px;padding:11px 16px;opacity:0;pointer-events:none;transition:.22s;z-index:20}.toast.show{opacity:1;transform:translate(-50%,0)}
 @media(max-width:900px){.app-shell{grid-template-columns:82px 1fr}.sidebar{padding-left:11px;padding-right:11px}.brand div,.nav-item:not(.active){font-size:0}.brand{padding-left:9px}.brand-mark{flex:0 0 40px}.nav-item{justify-content:center;padding:13px}.nav-item span{font-size:1.25rem}.nav-item.active{font-size:0}.grid.three{grid-template-columns:1fr 1fr}.stat-row{grid-template-columns:1fr 1fr}.save-state{display:none}.full-label{display:none}.short-label{display:inline}}
 @media(max-width:650px){.app-shell{display:block}.sidebar{position:fixed;bottom:0;top:auto;left:0;right:0;height:auto;z-index:10;padding:8px max(8px,env(safe-area-inset-right)) max(8px,env(safe-area-inset-bottom));display:block}.brand,.sidebar-footer{display:none}nav{grid-template-columns:repeat(8,1fr);display:flex;overflow-x:auto}.nav-item,.nav-item.active,.nav-item:not(.active){font-size:0;min-width:54px}.topbar{height:92px;padding:18px}.topbar h1{font-size:1.5rem}.top-actions{gap:7px}.laptop-save{padding:10px}.short-label{font-size:0}.short-label:first-letter{font-size:1.1rem}.top-actions .primary{font-size:0;padding:10px}.top-actions .primary:first-letter{font-size:1.1rem}.view{padding:8px 16px 100px}.grid.two,.grid.three{grid-template-columns:1fr}.welcome{align-items:flex-start;flex-direction:column;gap:18px}.stat-row{grid-template-columns:1fr 1fr}.week{grid-template-columns:repeat(7,155px)}}
+
+/* Dagelijks, agenda, imports en synchronisatie */
+.brainy-source{display:none!important}
+.sync-state{font-size:.76rem;font-weight:700;color:var(--muted);padding:7px 10px;border:1px solid var(--line);border-radius:999px;background:white;white-space:nowrap}
+.sync-state.connected{color:var(--green);border-color:#bfddd2;background:var(--green-soft)}
+.today-dailies{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(280px,.75fr);gap:18px;margin:18px 0}
+.daily-question{background:linear-gradient(145deg,#fff,#edf5fa)}
+.daily-question .card-head{align-items:flex-start}.daily-question h2{font-size:1.38rem;line-height:1.3;max-width:720px}
+.daily-icon{display:grid;place-items:center;flex:0 0 42px;width:42px;height:42px;border-radius:50%;background:var(--blue);color:white;font-size:1.25rem;font-weight:800}
+.question-hint,.quote-offline{color:var(--muted);line-height:1.55;margin:8px 0 18px}
+.answer-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:13px 0 18px}
+.answer-grid article{background:white;border:1px solid var(--line);border-radius:13px;padding:14px}
+.answer-grid span{font-size:.76rem;text-transform:uppercase;letter-spacing:.08em;font-weight:800;color:var(--blue)}
+.answer-grid p{margin:7px 0 0;line-height:1.5;white-space:pre-wrap}
+.button-row{display:flex;gap:9px;align-items:center;flex-wrap:wrap}
+.quote-card{background:#fff7ed;border-color:#f4d9c6;display:flex;flex-direction:column;justify-content:space-between;min-height:100%}
+.quote-card .quote-content{font-family:Georgia,serif;font-size:1.08rem;line-height:1.55;color:#3d352f;margin-top:10px}
+.quote-card blockquote{margin:0}.quote-card .quote-content p{margin:8px 0 0;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",sans-serif;font-size:.86rem;color:#806c5d}
+.quote-card .quote-content a{color:inherit;text-decoration:none}.quote-card>a{color:#9b5d36;font-size:.78rem;font-weight:700;margin-top:18px}
+.question-dialog-text{font-size:1.08rem;line-height:1.5;font-weight:700;margin:20px 0}
+.week-controls{display:flex;align-items:center;gap:9px;flex-wrap:wrap}.week-controls strong{font-size:.9rem;margin:0 4px}.icon-control{padding:9px 12px}
+.calendar-toolbar{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:16px}
+.calendar-filters{display:flex;gap:7px;flex-wrap:wrap}.calendar-filter{border:1px solid var(--line);border-radius:999px;background:white;color:var(--muted);padding:8px 11px;font-weight:700;font-size:.78rem;display:flex;align-items:center;gap:7px;opacity:.62}.calendar-filter.active{opacity:1;color:var(--ink);border-color:#b9c4cf}.calendar-filter i{display:block;width:9px;height:9px;border-radius:50%}
+.calendar-event{position:relative;background:white;border-left:4px solid var(--event-color);box-shadow:0 3px 12px rgba(23,36,58,.07);border-radius:9px;padding:9px 24px 9px 10px;margin-bottom:8px}.calendar-event small,.calendar-event strong,.calendar-event span{display:block}.calendar-event small{font-weight:800;color:var(--event-color);font-size:.74rem}.calendar-event strong{font-size:.9rem;margin-top:3px;line-height:1.25}.calendar-event span{font-size:.7rem;color:var(--muted);margin-top:4px}.calendar-event .delete{position:absolute;right:2px;top:1px;font-size:1rem}
+.day-empty{color:var(--muted);font-size:.86rem}.calendar-week .day{min-height:330px}
+.import-card{margin-top:18px;display:grid;grid-template-columns:minmax(230px,.65fr) minmax(310px,1fr);align-items:center;gap:18px}.import-card h2{margin-top:2px}.import-card p{color:var(--muted);line-height:1.5;margin:8px 0 0}.import-card textarea{width:100%;min-height:105px;border:1px solid #ccd4dd;border-radius:12px;padding:12px;resize:vertical;background:#fbfcfd;color:var(--ink)}.import-card .button-row{grid-column:2}
+.grocery-import{margin-top:0;margin-bottom:18px}.grocery-groups{align-items:start}
+
+/* Het volledige huishoudschema */
+.household-board{background:linear-gradient(145deg,#ffe995,#f9d768);border:1px solid #e2bd43;border-radius:22px;padding:22px;box-shadow:0 14px 32px rgba(150,112,6,.12);margin-bottom:26px;overflow:hidden}
+.household-board-head{display:flex;align-items:flex-start;justify-content:space-between;gap:20px}.household-board-head .eyebrow{color:#7b5e08}.household-board-head h2{font-size:1.5rem;margin:2px 0 5px}.household-board-head p:last-child{margin:0;color:#715b1a}.household-board .progress{background:rgba(255,255,255,.55);margin:18px 0}.household-board .progress span{background:#826913}
+.household-week{display:grid;grid-template-columns:repeat(7,minmax(155px,1fr));gap:10px;overflow-x:auto;padding-bottom:5px}
+.household-day{background:rgba(255,255,255,.66);border:1px solid rgba(118,85,0,.2);border-radius:14px;padding:11px;min-height:230px}.household-day.today{background:#fff;border:2px solid #765900}.household-day-title{display:flex;justify-content:space-between;align-items:center;text-transform:capitalize;border-bottom:1px solid rgba(118,85,0,.16);padding-bottom:8px;margin-bottom:8px}.household-day-title span{font-size:.76rem;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:#715b1a}.household-day-title strong{font-size:1.25rem}.household-items{display:grid;gap:7px}.household-items>p{color:#8b7739;font-size:.82rem;margin:10px 2px}
+.chore-chip{display:flex;gap:8px;align-items:flex-start;background:white;border:1px solid rgba(118,85,0,.12);border-radius:10px;padding:8px}.chore-chip.is-done{opacity:.66}.chore-chip .check{width:20px;height:20px;border-radius:6px;margin-top:1px}.chore-chip strong{font-size:.82rem;line-height:1.25}.chore-chip small{font-size:.68rem;color:var(--muted);margin-top:3px}
+.templates-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin:0 0 14px}.templates-head h2{margin:2px 0 0}.second-weekday[hidden]{display:none}
+
+/* Instellingen en algemene hulpmiddelen */
+.settings-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;align-items:start}.settings-card>p{color:var(--muted);line-height:1.55}.compact-form{margin:20px 0}.settings-card details{border-top:1px solid var(--line);padding-top:15px;margin-top:18px}.settings-card summary{cursor:pointer;font-weight:800;color:var(--blue)}.settings-card ol{color:var(--muted);line-height:1.55;padding-left:21px}.settings-card pre{background:#17243a;color:#eaf1f6;border-radius:12px;padding:14px;overflow:auto;font-size:.75rem;line-height:1.5;white-space:pre-wrap}.calendar-settings{display:grid;gap:8px;margin:17px 0}.calendar-setting{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:11px;padding:10px 12px;font-weight:700}.calendar-setting input[type=color]{border:0;width:30px;height:26px;padding:0;background:transparent}.inline-form{display:flex;gap:8px}.inline-form input{min-width:0;flex:1;border:1px solid #ccd4dd;border-radius:10px;padding:10px 12px}
+.muted{color:var(--muted)}.body-copy{line-height:1.55}.stock-controls{display:flex;align-items:center;justify-content:space-between;margin-top:18px}.stock-controls>strong{font-size:1.5rem}.stock-controls small{font-size:.75rem;color:var(--muted)}.stock-min{display:block;text-align:center;color:var(--muted);margin-top:12px}.section-title{margin:28px 0 14px}.float-delete{float:right}.idea h3{margin:10px 0 0}.trip-date{min-width:55px;text-align:center}.trip-date strong{display:block;font-size:1.35rem}.trip-date small{display:block;color:var(--muted)}
+
+@media(max-width:1100px){.today-dailies{grid-template-columns:1fr}.settings-grid{grid-template-columns:1fr}.household-board-head{flex-direction:column}.import-card{grid-template-columns:1fr}.import-card .button-row{grid-column:auto}.sync-state{display:none}}
+@media(max-width:650px){.today-dailies{gap:12px}.answer-grid{grid-template-columns:1fr}.daily-question h2{font-size:1.16rem}.household-board{padding:15px;margin-left:-5px;margin-right:-5px;border-radius:17px}.household-week{grid-template-columns:repeat(7,150px)}.household-day{min-height:210px}.week-controls strong{order:-1;width:100%}.templates-head{align-items:flex-start;flex-direction:column}.import-card textarea{min-width:0}.button-row .primary,.button-row .secondary{font-size:.85rem}.settings-card pre{font-size:.68rem}.calendar-toolbar{align-items:flex-start}.calendar-filters{overflow-x:auto;flex-wrap:nowrap;max-width:100%;padding-bottom:3px}.calendar-filter{flex:0 0 auto}}
+
+/* Responsive: dezelfde gegevens, een indeling passend bij de beschikbare ruimte. */
+html{line-height:1.5;-webkit-text-size-adjust:100%}
+.app-shell{grid-template-columns:245px minmax(0,1fr)}
+.sidebar{height:100dvh;overflow-y:auto;padding-top:max(28px,env(safe-area-inset-top))}
+.view{container-type:inline-size}
+.view *, .topbar>*{min-width:0}
+.card,.idea,.day,.household-day,.item-main,.dialog-head,.calendar-setting{overflow-wrap:anywhere}
+.card-head,.dialog-head{gap:12px}
+.topbar{height:auto;min-height:106px;gap:16px;flex-wrap:wrap;padding-top:max(24px,env(safe-area-inset-top))}
+.top-actions{flex-wrap:wrap}
+.primary,.secondary,.icon-btn,.text-btn,.calendar-filter{min-height:44px}
+.check,.chore-chip .check{width:44px;height:44px;flex:0 0 44px}
+.delete{min-width:44px;min-height:44px;flex-shrink:0}
+.calendar-event{padding-right:46px}
+.calendar-event .delete{top:0;right:0}
+.calendar-event span,.chore-chip small,.field label{font-size:.875rem}
+.chore-chip strong{font-size:.9375rem}
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:3px solid var(--orange);outline-offset:3px}
+input,select,textarea{font-size:1rem;max-width:100%}
+.week,.household-week{grid-template-columns:repeat(7,minmax(0,1fr));overflow:visible}
+.day,.calendar-week .day,.household-day{min-height:180px}
+.inline-form{flex-wrap:wrap}
+.inline-form input{flex:1 1 180px}
+.calendar-setting>span{flex:1;overflow-wrap:anywhere}
+.calendar-setting input[type=checkbox]{width:24px;height:24px;flex-shrink:0}
+.calendar-setting input[type=color]{width:44px;height:44px;flex-shrink:0}
+.stock-controls{gap:10px;flex-wrap:wrap}
+.stock-controls>strong{overflow-wrap:anywhere}
+.tag{white-space:normal;overflow-wrap:anywhere}
+dialog{max-height:calc(100dvh - 32px);overflow-y:auto;overscroll-behavior:contain}
+dialog form{padding:clamp(16px,4vw,24px)}
+.dialog-actions{flex-wrap:wrap;margin-top:18px}
+.toast{max-width:calc(100vw - 32px);width:max-content;overflow-wrap:anywhere;text-align:center}
+.settings-card pre{overflow-wrap:anywhere;font-size:.875rem}
+@container(max-width:1150px){.week,.household-week{grid-template-columns:repeat(4,minmax(0,1fr))}}
+@container(max-width:850px){.week,.household-week{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@container(max-width:620px){.week,.household-week{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@container(max-width:440px){.week,.household-week{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:1100px){
+  .app-shell{grid-template-columns:210px minmax(0,1fr)}
+  .grid.three{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .welcome{flex-wrap:wrap;gap:18px}
+  .welcome .date-chip{white-space:normal}
+}
+@media(max-width:900px){
+  .app-shell{grid-template-columns:82px minmax(0,1fr)}
+  .brand div{display:none}
+}
+@media(max-width:650px){
+  .app-shell{display:block}
+  .sidebar{height:auto;overflow-y:visible;padding:6px max(8px,env(safe-area-inset-right)) max(8px,env(safe-area-inset-bottom)) max(8px,env(safe-area-inset-left))}
+  nav{gap:4px}
+  .nav-item,.nav-item.active,.nav-item:not(.active){font-size:.75rem;min-width:86px;width:auto;flex:0 0 auto;flex-direction:column;gap:2px;padding:6px}
+  .nav-item span{font-size:1.2rem}
+  .topbar{position:static;min-height:0;padding: max(16px,env(safe-area-inset-top)) max(16px,env(safe-area-inset-right)) 12px max(16px,env(safe-area-inset-left))}
+  .topbar>div:first-child{flex:1 1 100%}
+  .top-actions{width:100%}
+  .top-actions .primary{font-size:.875rem;margin-left:auto}
+  .short-label{font-size:.875rem}
+  .sync-state{display:inline-block;white-space:normal;max-width:45%}
+  .view{padding:8px max(16px,env(safe-area-inset-right)) calc(116px + env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left))}
+  .grid.two,.grid.three{grid-template-columns:minmax(0,1fr)}
+  .week,.household-week{grid-template-columns:minmax(0,1fr)}
+  .day,.calendar-week .day,.household-day{min-height:0}
+  .day-date{margin-bottom:8px}
+  .card{padding:16px}
+  .card-head{flex-wrap:wrap}
+  .household-board{margin-left:0;margin-right:0}
+  .button-row>*{flex:1 1 150px}
+  .calendar-filters{overflow:visible;flex-wrap:wrap}
+  .calendar-filter{flex:0 1 auto;text-align:left}
+  .calendar-filter i{flex-shrink:0}
+  .toast{bottom:calc(94px + env(safe-area-inset-bottom))}
+}
+@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}
