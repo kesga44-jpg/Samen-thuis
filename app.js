@@ -96,9 +96,11 @@ const initialData = {
     { id: 'h1', title: 'Rookmelder testen', category: 'Onderhoud', due: addDays(todayISO(), 14), note: 'Testknop indrukken' },
     { id: 'h2', title: 'Afmetingen woonkamer', category: 'Woninginfo', due: '', note: 'Nog toevoegen' }
   ],
+  tripFolders: [
+    { id: 'trip-vietnam', name: 'Vietnam', startDate: '2027-01-08', endDate: '2027-01-31', note: 'Bruiloft in Nha Trang op 29 januari' }
+  ],
   trips: [
-    { id: 'r1', title: 'Vietnam', date: '2027-01-08', type: 'Reis', note: 'Bruiloft in Nha Trang op 29 januari' },
-    { id: 'r2', title: 'Paspoorten controleren', date: addDays(todayISO(), 7), type: 'Voorbereiding', note: 'Controleer geldigheid' }
+    { id: 'r2', tripFolderId: 'trip-vietnam', title: 'Paspoorten controleren', date: addDays(todayISO(), 7), type: 'Voorbereiding', note: 'Controleer geldigheid' }
   ],
   dailyAnswers: {}
 };
@@ -119,6 +121,26 @@ function migrateData(raw) {
   ['planning', 'meals', 'groceries', 'chores', 'stock', 'ideas', 'home', 'trips'].forEach(key => {
     if (Array.isArray(raw[key])) migrated[key] = raw[key];
   });
+  if (Array.isArray(raw.tripFolders)) {
+    migrated.tripFolders = raw.tripFolders.filter(folder => folder && folder.id && folder.name).map(folder => ({ endDate: '', note: '', ...folder }));
+  } else {
+    const oldTrips = Array.isArray(raw.trips) ? raw.trips : [];
+    const oldJourneys = oldTrips.filter(item => item.type === 'Reis');
+    migrated.tripFolders = oldJourneys.map(item => ({
+      id: `folder-${item.id}`,
+      name: item.title,
+      startDate: item.date || '',
+      endDate: '',
+      note: item.note || ''
+    }));
+    if (!migrated.tripFolders.length && oldTrips.length) {
+      migrated.tripFolders = [{ id: 'folder-algemeen', name: 'Reisplannen', startDate: '', endDate: '', note: '' }];
+    }
+    const fallbackFolderId = migrated.tripFolders[0]?.id || '';
+    migrated.trips = oldTrips.filter(item => item.type !== 'Reis').map(item => ({ ...item, tripFolderId: item.tripFolderId || fallbackFolderId }));
+  }
+  const validFolderIds = new Set(migrated.tripFolders.map(folder => folder.id));
+  migrated.trips = migrated.trips.map(item => ({ ...item, tripFolderId: validFolderIds.has(item.tripFolderId) ? item.tripFolderId : (migrated.tripFolders[0]?.id || '') }));
   migrated.excludedCalendars = Array.isArray(raw.excludedCalendars)
     ? raw.excludedCalendars.filter(item => item && typeof item.name === 'string').map(item => ({ ...item }))
     : [];
@@ -170,6 +192,7 @@ let syncTimer;
 let syncing = false;
 let syncError = '';
 let calendarOperation = null;
+let addMode = 'item';
 
 const sections = {
   today: { label: 'Vandaag', icon: '⌂' },
@@ -208,7 +231,7 @@ function formConfig(view) {
     stock: { title: 'Voorraad toevoegen', fields: [['title', 'Product', 'text'], ['category', 'Plek', 'select', ['Voorraadkast', 'Koelkast', 'Vriezer', 'Badkamer', 'Schoonmaak', 'Overig']], ['amount', 'Aantal', 'number'], ['min', 'Minimum', 'number'], ['unit', 'Eenheid', 'text']] },
     ideas: { title: 'Idee toevoegen', fields: [['title', 'Idee', 'text'], ['category', 'Categorie', 'select', ['Thuis', 'Uit', 'Actief', 'Gratis', 'Eten']], ['note', 'Notitie', 'textarea'], ['icon', 'Emoji', 'text']] },
     home: { title: 'Woningitem toevoegen', fields: [['title', 'Onderwerp', 'text'], ['category', 'Categorie', 'select', ['Onderhoud', 'Klus', 'Garantie', 'Woninginfo', 'Handleiding']], ['due', 'Datum (optioneel)', 'date'], ['note', 'Notitie', 'textarea']] },
-    trips: { title: 'Reisitem toevoegen', fields: [['title', 'Onderwerp', 'text'], ['date', 'Datum', 'date'], ['type', 'Soort', 'select', ['Reis', 'Voorbereiding', 'Reservering', 'Paklijst']], ['note', 'Notitie', 'textarea']] }
+    trips: { title: 'Onderdeel aan reis toevoegen', fields: [['tripFolderId', 'Reismap', 'select', data.tripFolders.map(folder => [folder.id, folder.name])], ['title', 'Onderwerp', 'text'], ['date', 'Datum (optioneel)', 'date'], ['type', 'Soort', 'select', ['Voorbereiding', 'Reservering', 'Vervoer', 'Verblijf', 'Activiteit', 'Paklijst', 'Notitie']], ['note', 'Notitie', 'textarea']] }
   };
   return configs[view];
 }
@@ -273,13 +296,13 @@ function questionForDate(date) {
 function renderDailyQuestion() {
   const answers = data.dailyAnswers[todayISO()] || {};
   const bothAnswered = Boolean(answers.Kees && answers.Daphne);
-  const personButton = person => answers[person] && !bothAnswered
-    ? `<button class="secondary" disabled>${person} heeft geantwoord</button>`
-    : `<button class="${answers[person] ? 'secondary' : 'primary'}" data-answer-person="${person}">${answers[person] ? `Antwoord van ${person} wijzigen` : `${person} beantwoordt`}</button>`;
+  const personButton = person => answers[person]
+    ? `<button class="secondary" disabled>${bothAnswered ? `${person}: antwoord staat vast` : `${person} heeft geantwoord`}</button>`
+    : `<button class="primary" data-answer-person="${person}">${person} beantwoordt</button>`;
   return `<section class="card daily-question">
     <div class="card-head"><div><p class="eyebrow">Vraag van vandaag</p><h2>${esc(questionForDate(todayISO()))}</h2></div><span class="daily-icon">?</span></div>
     ${bothAnswered ? `<div class="answer-grid"><article><span>Kees</span><p>${esc(answers.Kees.answer)}</p></article><article><span>Daphne</span><p>${esc(answers.Daphne.answer)}</p></article></div>` : `<p class="question-hint">Antwoorden blijven verborgen tot jullie allebei hebben geantwoord. ${answers.Kees || answers.Daphne ? 'Eén antwoord is binnen.' : ''}</p>`}
-    <div class="button-row">${personButton('Kees')}${personButton('Daphne')}</div>
+    <div class="button-row">${personButton('Kees')}${personButton('Daphne')}</div>${bothAnswered ? '<p class="answer-locked">Beide antwoorden zijn definitief en kunnen niet meer worden gewijzigd.</p>' : ''}
   </section>`;
 }
 
@@ -484,139 +507,34 @@ function renderHome() {
 }
 
 function renderTrips() {
-  const upcoming = [...data.trips].sort((a, b) => a.date.localeCompare(b.date));
-  return `<div class="grid two"><section class="card"><div class="card-head"><h2>Komende momenten</h2><span class="tag orange">${upcoming.length}</span></div><div class="list">${upcoming.map(item => `<div class="list-item"><div class="trip-date"><strong>${parseDate(item.date).getDate()}</strong><small>${fmtDate(item.date, { month: 'short' })}</small></div><div class="item-main"><strong>${esc(item.title)}</strong><small>${esc(item.type)} · ${esc(item.note)}</small></div><button class="delete" data-delete="trips:${item.id}">×</button></div>`).join('') || empty('Nog geen reisplannen')}</div></section><section class="card"><div class="card-head"><h2>Reisoverzicht</h2></div><p class="muted body-copy">Gebruik dit voor belangrijke reisdata, reserveringen, voorbereiding en paklijstitems.</p><button class="primary" data-open-add>＋ Reisitem</button></section></div>`;
+  const folders = [...data.tripFolders].sort((a, b) => (a.startDate || '9999').localeCompare(b.startDate || '9999'));
+  return `<div class="trips-toolbar"><div><p class="eyebrow">Jullie reizen</p><h2>Reismappen</h2></div><div class="button-row"><button class="secondary" data-add-trip-folder>＋ Nieuwe reismap</button>${folders.length ? '<button class="primary" data-open-add>＋ Onderdeel toevoegen</button>' : ''}</div></div>
+    <div class="trip-folder-grid">${folders.map(folder => {
+      const items = data.trips.filter(item => item.tripFolderId === folder.id).sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999'));
+      const period = folder.startDate ? `${fmtDate(folder.startDate, { day: 'numeric', month: 'short', year: 'numeric' })}${folder.endDate ? ` – ${fmtDate(folder.endDate, { day: 'numeric', month: 'short', year: 'numeric' })}` : ''}` : 'Datum nog niet bepaald';
+      return `<section class="card trip-folder"><div class="trip-folder-head"><div><p class="eyebrow">${esc(period)}</p><h2>📁 ${esc(folder.name)}</h2>${folder.note ? `<p>${esc(folder.note)}</p>` : ''}</div><button class="delete" data-delete-trip-folder="${folder.id}" aria-label="Reismap ${esc(folder.name)} verwijderen">×</button></div>
+        <div class="list">${items.map(tripItemRow).join('') || empty('Nog niets in deze reismap')}</div>
+        <button class="secondary trip-add-item" data-add-to-trip="${folder.id}">＋ Toevoegen aan ${esc(folder.name)}</button>
+      </section>`;
+    }).join('') || `<section class="card trip-empty">${empty('Maak eerst een reismap, bijvoorbeeld Vietnam')}<button class="primary" data-add-trip-folder>＋ Eerste reismap maken</button></section>`}</div>`;
+}
+
+function tripItemRow(item) {
+  const hasDate = Boolean(item.date);
+  return `<div class="list-item"><div class="trip-date">${hasDate ? `<strong>${parseDate(item.date).getDate()}</strong><small>${fmtDate(item.date, { month: 'short' })}</small>` : '<strong>–</strong><small>datum</small>'}</div><div class="item-main"><strong>${esc(item.title)}</strong><small>${esc(item.type)}${item.note ? ` · ${esc(item.note)}` : ''}</small></div><button class="delete" data-delete="trips:${item.id}" aria-label="${esc(item.title)} verwijderen">×</button></div>`;
 }
 
 function renderSettings() {
   const configured = syncConfigured();
-
-  const SUPABASE_URL = 'https://vwfuetxgapzfivydzhxc.supabase.co';
-  const SUPABASE_KEY = 'sb_publishable_Xa1oLeM64F-jog1vVjJbkQ_BE3UV6mR';
-
+  const sql = `create table public.household_data (\n  id text primary key,\n  payload jsonb not null,\n  updated_at timestamptz not null default now()\n);\n\nalter table public.household_data enable row level security;\n\ncreate policy "encrypted household read" on public.household_data\n  for select to anon using (true);\ncreate policy "encrypted household insert" on public.household_data\n  for insert to anon with check (true);\ncreate policy "encrypted household update" on public.household_data\n  for update to anon using (true) with check (true);`;
   return `<div class="settings-grid">
-
-    <section class="card settings-card">
-      <div class="card-head">
-        <div>
-          <p class="eyebrow">Apparaten</p>
-          <h2>Versleutelde synchronisatie</h2>
-        </div>
-
-        <span class="tag ${configured ? 'green' : ''}">
-          ${configured ? 'Verbonden' : 'Nog verbinden'}
-        </span>
-      </div>
-
-      <p>
-        Synchroniseer jullie gegevens tussen iPhone, iPad en laptop.
-        De gegevens worden vóór verzending versleuteld met jullie gedeelde huishoudcode.
-      </p>
-
-      <form id="syncForm" class="form-grid compact-form">
-
-        <!-- Supabase-instellingen staan al vast in de app -->
-        <input
-          type="hidden"
-          id="syncProjectUrl"
-          name="projectUrl"
-          value="${SUPABASE_URL}"
-        >
-
-        <input
-          type="hidden"
-          id="syncAnonKey"
-          name="anonKey"
-          value="${SUPABASE_KEY}"
-        >
-
-        <div class="field">
-          <label for="syncHouseholdCode">
-            Gedeelde huishoudcode
-          </label>
-
-          <input
-            id="syncHouseholdCode"
-            name="householdCode"
-            type="password"
-            value="${esc(syncConfig.householdCode)}"
-            minlength="12"
-            autocomplete="off"
-            placeholder="Vul jullie huishoudcode in"
-            required
-          >
-
-          <small>
-            Gebruik op ieder apparaat exact dezelfde code.
-          </small>
-        </div>
-
-        <div class="button-row">
-          <button class="primary" type="submit">
-            ${configured ? 'Bewaren' : 'Verbinden'}
-          </button>
-
-          ${
-            configured
-              ? '<button class="secondary" type="button" data-sync-now>Nu synchroniseren</button>'
-              : ''
-          }
-        </div>
-
-      </form>
+    <section class="card settings-card"><div class="card-head"><div><p class="eyebrow">Apparaten</p><h2>Versleutelde synchronisatie</h2></div><span class="tag ${configured ? 'green' : ''}">${configured ? 'Ingesteld' : 'Nog instellen'}</span></div><p>De app werkt zelfstandig. Met een gratis Supabase-project blijven iPhone, iPad en laptop gelijk. De inhoud wordt vóór verzending versleuteld met jullie huishoudcode.</p>
+      <form id="syncForm" class="form-grid compact-form"><div class="field"><label for="syncProjectUrl">Supabase-project-URL</label><input id="syncProjectUrl" name="projectUrl" type="url" value="${esc(syncConfig.projectUrl)}" placeholder="https://abc.supabase.co"></div><div class="field"><label for="syncAnonKey">Publishable / anon key</label><input id="syncAnonKey" name="anonKey" type="password" value="${esc(syncConfig.anonKey)}" autocomplete="off"></div><div class="field"><label for="syncHouseholdCode">Gedeelde huishoudcode (minimaal 12 tekens)</label><input id="syncHouseholdCode" name="householdCode" type="password" value="${esc(syncConfig.householdCode)}" minlength="12" autocomplete="off"></div><div class="button-row"><button class="primary" type="submit">Bewaren en verbinden</button>${configured ? '<button class="secondary" type="button" data-sync-now>Nu synchroniseren</button>' : ''}</div></form>
+      <details><summary>Eenmalige Supabase-instelling</summary><ol><li>Maak een project op Supabase.</li><li>Open de SQL Editor en voer onderstaande code één keer uit.</li><li>Kopieer bij Project Settings → API de Project URL en publishable/anon key hierboven.</li><li>Gebruik op elk apparaat exact dezelfde huishoudcode.</li></ol><pre><code>${esc(sql)}</code></pre></details>
     </section>
-
     ${renderCalendarSettings()}
-
-    <section class="card settings-card">
-      <div class="card-head">
-        <div>
-          <p class="eyebrow">Gegevens</p>
-          <h2>Back-up</h2>
-        </div>
-      </div>
-
-      <p>
-        Maak een los JSON-bestand of laad een eerdere back-up.
-        De synchronisatiecode en sleutel worden niet in de back-up gezet.
-      </p>
-
-      <div class="button-row">
-        <button class="secondary" data-action="backup">
-          Back-up maken
-        </button>
-
-        <button class="secondary" data-action="restore">
-          Back-up laden
-        </button>
-      </div>
-    </section>
-
-    <section class="card settings-card">
-      <div class="card-head">
-        <div>
-          <p class="eyebrow">Apple Opdracht</p>
-          <h2>Eenvoudig tekstformaat</h2>
-        </div>
-      </div>
-
-      <p>Laat de Opdracht per afspraak één regel maken:</p>
-
-      <pre><code>Agendanaam | 2026-09-04 | 09:00 | Titel</code></pre>
-
-      <p>
-        De persoon volgt uit de agenda. Een vijfde veld met Kees, Daphne
-        of Samen is optioneel en gaat voor de agendakeuze.
-        Een zesde veld mag de eindtijd bevatten.
-        Bij onbekende namen kies je de persoon één keer.
-      </p>
-
-      <p>
-        Dit is een import, geen tweerichtingskoppeling.
-        Verplaatsen of verwijderen in Apple Agenda wordt niet automatisch overgenomen.
-      </p>
-    </section>
-
+    <section class="card settings-card"><div class="card-head"><div><p class="eyebrow">Gegevens</p><h2>Back-up</h2></div></div><p>Maak een los JSON-bestand of laad een eerdere back-up. De synchronisatiecode en sleutel worden niet in de back-up gezet.</p><div class="button-row"><button class="secondary" data-action="backup">Back-up maken</button><button class="secondary" data-action="restore">Back-up laden</button></div></section>
+    <section class="card settings-card"><div class="card-head"><div><p class="eyebrow">Apple Opdracht</p><h2>Eenvoudig tekstformaat</h2></div></div><p>Laat de Opdracht per afspraak één regel maken:</p><pre><code>Agendanaam | 2026-09-04 | 09:00 | Titel</code></pre><p>De persoon volgt uit de agenda. Een vijfde veld met Kees, Daphne of Samen is optioneel en gaat voor de agendakeuze. Een zesde veld mag de eindtijd bevatten. Bij onbekende namen kies je de persoon één keer.</p><p>Dit is een import, geen tweerichtingskoppeling. Verplaatsen of verwijderen in Apple Agenda wordt niet automatisch overgenomen.</p></section>
   </div>`;
 }
 
@@ -628,12 +546,18 @@ function groceryRow(item) {
   return `<div class="list-item"><button class="check ${item.done ? 'done' : ''}" data-toggle="groceries:${item.id}" aria-label="Afvinken">${item.done ? '✓' : ''}</button><div class="item-main"><strong class="${item.done ? 'done-text' : ''}">${esc(item.title)}</strong></div><button class="delete" data-delete="groceries:${item.id}" aria-label="Verwijderen">×</button></div>`;
 }
 
-function openAdd() {
+function openAdd(preselectedTripFolderId = '') {
   if (current === 'planning' && !data.calendars.length) {
     navigate('settings');
     toast('Voeg eerst een agenda toe of herstel een uitgesloten agenda');
     return;
   }
+  if (current === 'trips' && !data.tripFolders.length) {
+    openTripFolderForm();
+    toast('Maak eerst een reismap');
+    return;
+  }
+  addMode = 'item';
   const config = formConfig(current);
   if (!config) return;
   document.querySelector('#dialogTitle').textContent = config.title;
@@ -643,11 +567,23 @@ function openAdd() {
       ? `<select id="f-${name}" name="${name}">${choices.map(([value, text]) => `<option value="${esc(value)}">${esc(text)}</option>`).join('')}</select>`
       : type === 'textarea'
         ? `<textarea id="f-${name}" name="${name}"></textarea>`
-        : `<input id="f-${name}" name="${name}" type="${type}" ${['title', 'date', 'due'].includes(name) ? 'required' : ''} ${['date', 'due'].includes(name) ? `value="${todayISO()}"` : ''}>`;
+        : `<input id="f-${name}" name="${name}" type="${type}" ${name === 'title' || name === 'due' || (name === 'date' && current !== 'trips') ? 'required' : ''} ${name === 'due' || (name === 'date' && current !== 'trips') ? `value="${todayISO()}"` : ''}>`;
     return `<div class="field ${conditionalClass || ''}"><label for="f-${name}">${label}</label>${control}</div>`;
   }).join('');
   document.querySelector('#itemDialog').showModal();
+  if (preselectedTripFolderId && document.querySelector('#f-tripFolderId')) document.querySelector('#f-tripFolderId').value = preselectedTripFolderId;
   toggleSecondWeekdayField();
+}
+
+function openTripFolderForm() {
+  addMode = 'trip-folder';
+  document.querySelector('#dialogTitle').textContent = 'Reismap toevoegen';
+  document.querySelector('#formFields').innerHTML = `
+    <div class="field"><label for="f-title">Naam van de reis</label><input id="f-title" name="title" type="text" required placeholder="Bijvoorbeeld Vietnam"></div>
+    <div class="field"><label for="f-startDate">Vertrekdatum (optioneel)</label><input id="f-startDate" name="startDate" type="date"></div>
+    <div class="field"><label for="f-endDate">Terugkomstdatum (optioneel)</label><input id="f-endDate" name="endDate" type="date"></div>
+    <div class="field"><label for="f-note">Algemene notitie (optioneel)</label><textarea id="f-note" name="note" placeholder="Bijvoorbeeld bruiloft, route of reisgezelschap"></textarea></div>`;
+  document.querySelector('#itemDialog').showModal();
 }
 
 function toggleSecondWeekdayField() {
@@ -665,6 +601,14 @@ function handleSubmit(event) {
   event.preventDefault();
   const formData = Object.fromEntries(new FormData(event.target));
   if (!formData.title) return;
+  if (addMode === 'trip-folder') {
+    data.tripFolders.push({ id: id(), name: formData.title.trim(), startDate: formData.startDate || '', endDate: formData.endDate || '', note: formData.note?.trim() || '' });
+    save();
+    document.querySelector('#itemDialog').close();
+    render();
+    toast('Reismap toegevoegd');
+    return;
+  }
   ['amount', 'min'].forEach(key => { if (key in formData) formData[key] = Number(formData[key]); });
   if (current === 'groceries') formData.done = false;
   if (current === 'chores') formData.completedDates = [];
@@ -677,6 +621,15 @@ function handleSubmit(event) {
 }
 
 function openQuestion(person) {
+  const answers = data.dailyAnswers[todayISO()] || {};
+  if (answers.Kees && answers.Daphne) {
+    toast('Beide antwoorden staan vast');
+    return;
+  }
+  if (answers[person]) {
+    toast(`${person} heeft vandaag al geantwoord`);
+    return;
+  }
   const answer = data.dailyAnswers[todayISO()]?.[person]?.answer || '';
   document.querySelector('#questionTitle').textContent = `${person}, jouw antwoord`;
   document.querySelector('#questionText').textContent = questionForDate(todayISO());
@@ -689,6 +642,13 @@ function openQuestion(person) {
 function handleQuestionSubmit(event) {
   event.preventDefault();
   const formData = Object.fromEntries(new FormData(event.target));
+  const existing = data.dailyAnswers[todayISO()] || {};
+  if ((existing.Kees && existing.Daphne) || existing[formData.person]) {
+    document.querySelector('#questionDialog').close();
+    render();
+    toast('Dit antwoord staat al vast');
+    return;
+  }
   const answer = formData.answer.trim();
   if (!answer) return;
   data.dailyAnswers[todayISO()] ||= {};
@@ -1229,6 +1189,9 @@ document.addEventListener('click', event => {
   const view = event.target.closest('[data-view]');
   if (view) { navigate(view.dataset.view); return; }
   if (event.target.closest('[data-open-add]')) { openAdd(); return; }
+  if (event.target.closest('[data-add-trip-folder]')) { openTripFolderForm(); return; }
+  const addToTrip = event.target.closest('[data-add-to-trip]');
+  if (addToTrip) { openAdd(addToTrip.dataset.addToTrip); return; }
   const answer = event.target.closest('[data-answer-person]');
   if (answer) { openQuestion(answer.dataset.answerPerson); return; }
   const removeCalendarButton = event.target.closest('[data-remove-calendar]');
@@ -1239,6 +1202,18 @@ document.addEventListener('click', event => {
       save(); render(); toast('Agenda hersteld; nieuwe imports zijn weer toegestaan');
     }
     return;
+  }
+  const deleteTripFolderButton = event.target.closest('[data-delete-trip-folder]');
+  if (deleteTripFolderButton) {
+    const folderId = deleteTripFolderButton.dataset.deleteTripFolder;
+    const folder = data.tripFolders.find(item => item.id === folderId);
+    if (!folder) return;
+    const childCount = data.trips.filter(item => item.tripFolderId === folderId).length;
+    const warning = childCount ? `Ook de ${childCount} onderdelen in deze map worden verwijderd.` : 'Deze map is leeg.';
+    if (!confirm(`Reismap “${folder.name}” verwijderen?\n\n${warning}`)) return;
+    data.tripFolders = data.tripFolders.filter(item => item.id !== folderId);
+    data.trips = data.trips.filter(item => item.tripFolderId !== folderId);
+    save(); render(); toast('Reismap verwijderd'); return;
   }
   const deleteButton = event.target.closest('[data-delete]');
   if (deleteButton) {
