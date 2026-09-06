@@ -4,6 +4,8 @@ const SYNC_KEY = 'samenThuisSyncV1';
 const QUOTE_KEY = 'samenThuisQuoteCacheV1';
 const DEFAULT_PROJECT_URL = 'https://vwfuetxgapzfivydzhxc.supabase.co';
 const DEFAULT_PUBLISHABLE_KEY = 'sb_publishable_Xa1oLeM64F-jog1vVjJbkQ_BE3UV6mR';
+const PDFJS_URL = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.min.mjs';
+const PDFJS_WORKER_URL = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.min.mjs';
 
 const pad = value => String(value).padStart(2, '0');
 const toLocalISO = date => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
@@ -101,8 +103,13 @@ const initialData = {
   tripFolders: [
     { id: 'trip-vietnam', name: 'Vietnam', startDate: '2027-01-08', endDate: '2027-01-31', note: 'Bruiloft in Nha Trang op 29 januari' }
   ],
+  tripSections: [
+    { id: 'trip-vietnam-voorbereiding', tripFolderId: 'trip-vietnam', name: 'Voor vertrek' },
+    { id: 'trip-vietnam-boekingen', tripFolderId: 'trip-vietnam', name: 'Boekingen' },
+    { id: 'trip-vietnam-paklijst', tripFolderId: 'trip-vietnam', name: 'Paklijst' }
+  ],
   trips: [
-    { id: 'r2', tripFolderId: 'trip-vietnam', title: 'Paspoorten controleren', date: addDays(todayISO(), 7), type: 'Voorbereiding', note: 'Controleer geldigheid' }
+    { id: 'r2', tripFolderId: 'trip-vietnam', tripSectionId: 'trip-vietnam-voorbereiding', title: 'Paspoorten controleren', date: addDays(todayISO(), 7), type: 'Voorbereiding', note: 'Controleer geldigheid', checkable: true, done: false }
   ],
   dailyAnswers: {}
 };
@@ -142,7 +149,21 @@ function migrateData(raw) {
     migrated.trips = oldTrips.filter(item => item.type !== 'Reis').map(item => ({ ...item, tripFolderId: item.tripFolderId || fallbackFolderId }));
   }
   const validFolderIds = new Set(migrated.tripFolders.map(folder => folder.id));
-  migrated.trips = migrated.trips.map(item => ({ ...item, tripFolderId: validFolderIds.has(item.tripFolderId) ? item.tripFolderId : (migrated.tripFolders[0]?.id || '') }));
+  if (Array.isArray(raw.tripSections)) {
+    migrated.tripSections = raw.tripSections.filter(section => section && section.id && section.name && validFolderIds.has(section.tripFolderId)).map(section => ({ ...section }));
+  } else {
+    migrated.tripSections = migrated.tripFolders.map(folder => ({ id: `section-${folder.id}-algemeen`, tripFolderId: folder.id, name: 'Algemeen' }));
+  }
+  const sectionById = new Map(migrated.tripSections.map(section => [section.id, section]));
+  migrated.trips = migrated.trips.map(item => {
+    const tripFolderId = validFolderIds.has(item.tripFolderId) ? item.tripFolderId : (migrated.tripFolders[0]?.id || '');
+    const selectedSection = sectionById.get(item.tripSectionId);
+    const tripSectionId = selectedSection?.tripFolderId === tripFolderId
+      ? selectedSection.id
+      : (migrated.tripSections.find(section => section.tripFolderId === tripFolderId)?.id || '');
+    const checkable = typeof item.checkable === 'boolean' ? item.checkable : ['Voorbereiding', 'Paklijst'].includes(item.type);
+    return { ...item, tripFolderId, tripSectionId, checkable, done: checkable ? Boolean(item.done) : false };
+  });
   migrated.excludedCalendars = Array.isArray(raw.excludedCalendars)
     ? raw.excludedCalendars.filter(item => item && typeof item.name === 'string').map(item => ({ ...item }))
     : [];
@@ -239,7 +260,7 @@ function formConfig(view) {
     stock: { title: 'Voorraad toevoegen', fields: [['title', 'Product', 'text'], ['category', 'Plek', 'select', ['Voorraadkast', 'Koelkast', 'Vriezer', 'Badkamer', 'Schoonmaak', 'Overig']], ['amount', 'Aantal', 'number'], ['min', 'Minimum', 'number'], ['unit', 'Eenheid', 'text']] },
     ideas: { title: 'Idee toevoegen', fields: [['title', 'Idee', 'text'], ['category', 'Categorie', 'select', ['Thuis', 'Uit', 'Actief', 'Gratis', 'Eten']], ['note', 'Notitie', 'textarea'], ['icon', 'Emoji', 'text']] },
     home: { title: 'Woningitem toevoegen', fields: [['title', 'Onderwerp', 'text'], ['category', 'Categorie', 'select', ['Onderhoud', 'Klus', 'Garantie', 'Woninginfo', 'Handleiding']], ['due', 'Datum (optioneel)', 'date'], ['note', 'Notitie', 'textarea']] },
-    trips: { title: 'Onderdeel aan reis toevoegen', fields: [['tripFolderId', 'Reismap', 'select', data.tripFolders.map(folder => [folder.id, folder.name])], ['title', 'Onderwerp', 'text'], ['date', 'Datum (optioneel)', 'date'], ['type', 'Soort', 'select', ['Voorbereiding', 'Reservering', 'Vervoer', 'Verblijf', 'Activiteit', 'Paklijst', 'Notitie']], ['note', 'Notitie', 'textarea']] }
+    trips: { title: 'Onderdeel aan reis toevoegen', fields: [['tripFolderId', 'Reis', 'select', data.tripFolders.map(folder => [folder.id, folder.name])], ['tripSectionId', 'Map binnen de reis', 'select', data.tripSections.map(section => [section.id, section.name])], ['title', 'Onderwerp', 'text'], ['date', 'Deadline / datum (optioneel)', 'date'], ['type', 'Soort', 'select', ['Voorbereiding', 'Reservering', 'Vervoer', 'Verblijf', 'Activiteit', 'Eten', 'Budget', 'Documenten', 'Paklijst', 'Notitie']], ['note', 'Notitie', 'textarea'], ['checkable', 'Dit moet afgevinkt worden', 'checkbox']] }
   };
   return configs[view];
 }
@@ -361,6 +382,32 @@ function renderQuote() {
   return `<section class="card quote-card"><div><p class="eyebrow">Quote of the day</p>${quote}</div><a href="https://www.brainyquote.com/link/quotebr.rss" target="_blank" rel="noopener">Bron: BrainyQuote RSS</a></section>`;
 }
 
+function tripFolderById(folderId) {
+  return data.tripFolders.find(folder => folder.id === folderId);
+}
+
+function tripSectionById(sectionId) {
+  return data.tripSections.find(section => section.id === sectionId);
+}
+
+function openTravelActions() {
+  return data.trips.filter(item => item.checkable && !item.done).sort((a, b) => {
+    const dateOrder = (a.date || '9999-12-31').localeCompare(b.date || '9999-12-31');
+    return dateOrder || a.title.localeCompare(b.title, 'nl');
+  });
+}
+
+function renderTravelActions() {
+  const actions = openTravelActions().slice(0, 10);
+  return `<section class="card travel-actions"><div class="card-head"><div><p class="eyebrow">Belangrijkste reisacties</p><h2>Nog te doen</h2></div><button class="text-btn" data-view="trips">Alle reizen</button></div><div class="list">${actions.length ? actions.map(item => {
+    const folder = tripFolderById(item.tripFolderId);
+    const section = tripSectionById(item.tripSectionId);
+    const overdue = item.date && item.date < todayISO();
+    const timing = item.date ? `${overdue ? 'Te laat · ' : ''}${fmtDate(item.date)}` : 'Geen deadline';
+    return `<div class="list-item travel-action ${overdue ? 'overdue' : ''}"><button class="check" data-toggle="trips:${item.id}" aria-label="${esc(item.title)} afronden"></button><div class="item-main"><strong>${esc(item.title)}</strong><small>${esc(folder?.name || 'Reis')}${section ? ` · ${esc(section.name)}` : ''} · ${esc(timing)}</small></div></div>`;
+  }).join('') : empty('Geen openstaande reisacties')}</div>${openTravelActions().length > 10 ? `<p class="muted travel-more">Nog ${openTravelActions().length - 10} acties staan onder Reizen.</p>` : ''}</section>`;
+}
+
 function renderToday() {
   const todayChores = occurrencesForDate(todayISO());
   const pending = todayChores.filter(({ chore }) => !isChoreDone(chore, todayISO()));
@@ -369,6 +416,7 @@ function renderToday() {
   const meal = data.meals.find(item => item.date === todayISO() && item.type === 'Avondeten');
   const todayPlanning = data.planning.filter(item => item.date === todayISO() && calendarById(item.calendarId).visible !== false);
   return `<section class="card welcome"><div><p class="eyebrow welcome-eyebrow">Jullie thuis, in één oogopslag</p><h2>Fijn dat jullie er zijn.</h2><p>${meal ? `Vanavond staat <strong>${esc(meal.title)}</strong> op het menu.` : 'Plan samen wat er vanavond op tafel komt.'}</p></div><div class="date-chip">${fmtDate(todayISO(), { weekday: 'long', day: 'numeric', month: 'long' })}</div></section>
+    ${renderTravelActions()}
     <div class="today-dailies">${renderDailyQuestion()}${renderQuote()}</div>
     <div class="stat-row"><div class="stat"><strong>${pending.length}</strong><span>huishoudtaken vandaag</span></div><div class="stat"><strong>${unbought.length}</strong><span>boodschappen open</span></div><div class="stat"><strong>${low.length}</strong><span>producten bijna op</span></div><div class="stat"><strong>${todayPlanning.length}</strong><span>agenda-items vandaag</span></div></div>
     <div class="grid two">
@@ -516,20 +564,24 @@ function renderHome() {
 
 function renderTrips() {
   const folders = [...data.tripFolders].sort((a, b) => (a.startDate || '9999').localeCompare(b.startDate || '9999'));
-  return `<div class="trips-toolbar"><div><p class="eyebrow">Jullie reizen</p><h2>Reismappen</h2></div><div class="button-row"><button class="secondary" data-add-trip-folder>＋ Nieuwe reismap</button>${folders.length ? '<button class="primary" data-open-add>＋ Onderdeel toevoegen</button>' : ''}</div></div>
+  return `<div class="trips-toolbar"><div><p class="eyebrow">Jullie reizen</p><h2>Reismappen</h2></div><div class="button-row"><button class="secondary" data-add-trip-folder>＋ Nieuwe reis</button>${folders.length ? '<button class="primary" data-open-add>＋ Onderdeel toevoegen</button>' : ''}</div></div>
+    ${folders.length ? `<section class="card import-card travel-import"><div><p class="eyebrow">Reisplan importeren</p><h2>PDF lezen of tekst plakken</h2><p>Kies de reis. De app verdeelt route, vervoer, verblijf, activiteiten, budget, documenten en acties automatisch over mappen. De PDF blijft op dit apparaat; alleen de herkende onderdelen worden opgeslagen.</p></div><div class="travel-import-fields"><label for="travelImportFolder">Toevoegen aan reis</label><select id="travelImportFolder">${folders.map(folder => `<option value="${folder.id}">${esc(folder.name)}</option>`).join('')}</select><label for="travelImportText">Tekst uit reisplan</label><textarea id="travelImportText" placeholder="Plak hier de tekst uit jullie reisplan…"></textarea></div><div class="button-row"><button class="primary" data-import-travel-text>Tekst verdelen</button><button class="secondary" data-pick-file="travelImportFile">PDF of tekstbestand kiezen</button></div></section>` : ''}
     <div class="trip-folder-grid">${folders.map(folder => {
-      const items = data.trips.filter(item => item.tripFolderId === folder.id).sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999'));
+      const sections = data.tripSections.filter(section => section.tripFolderId === folder.id);
       const period = folder.startDate ? `${fmtDate(folder.startDate, { day: 'numeric', month: 'short', year: 'numeric' })}${folder.endDate ? ` – ${fmtDate(folder.endDate, { day: 'numeric', month: 'short', year: 'numeric' })}` : ''}` : 'Datum nog niet bepaald';
       return `<section class="card trip-folder"><div class="trip-folder-head"><div><p class="eyebrow">${esc(period)}</p><h2>📁 ${esc(folder.name)}</h2>${folder.note ? `<p>${esc(folder.note)}</p>` : ''}</div><button class="delete" data-delete-trip-folder="${folder.id}" aria-label="Reismap ${esc(folder.name)} verwijderen">×</button></div>
-        <div class="list">${items.map(tripItemRow).join('') || empty('Nog niets in deze reismap')}</div>
-        <button class="secondary trip-add-item" data-add-to-trip="${folder.id}">＋ Toevoegen aan ${esc(folder.name)}</button>
+        <div class="trip-subfolder-grid">${sections.map(section => {
+          const items = data.trips.filter(item => item.tripSectionId === section.id).sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999'));
+          return `<section class="trip-subfolder"><div class="trip-subfolder-head"><h3>📂 ${esc(section.name)}</h3><button class="delete" data-delete-trip-section="${section.id}" aria-label="Map ${esc(section.name)} verwijderen">×</button></div><div class="list">${items.map(tripItemRow).join('') || '<p class="muted trip-section-empty">Deze map is leeg</p>'}</div><button class="text-btn trip-add-item" data-add-to-trip-section="${section.id}">＋ Onderdeel</button></section>`;
+        }).join('') || empty('Maak een map binnen deze reis')}</div>
+        <div class="button-row trip-folder-actions"><button class="secondary" data-add-trip-section="${folder.id}">＋ Map in ${esc(folder.name)}</button>${sections.length ? `<button class="secondary" data-add-to-trip="${folder.id}">＋ Onderdeel toevoegen</button>` : ''}</div>
       </section>`;
     }).join('') || `<section class="card trip-empty">${empty('Maak eerst een reismap, bijvoorbeeld Vietnam')}<button class="primary" data-add-trip-folder>＋ Eerste reismap maken</button></section>`}</div>`;
 }
 
 function tripItemRow(item) {
   const hasDate = Boolean(item.date);
-  return `<div class="list-item"><div class="trip-date">${hasDate ? `<strong>${parseDate(item.date).getDate()}</strong><small>${fmtDate(item.date, { month: 'short' })}</small>` : '<strong>–</strong><small>datum</small>'}</div><div class="item-main"><strong>${esc(item.title)}</strong><small>${esc(item.type)}${item.note ? ` · ${esc(item.note)}` : ''}</small></div><button class="delete" data-delete="trips:${item.id}" aria-label="${esc(item.title)} verwijderen">×</button></div>`;
+  return `<div class="list-item ${item.done ? 'is-done' : ''}">${item.checkable ? `<button class="check ${item.done ? 'done' : ''}" data-toggle="trips:${item.id}" aria-label="${item.done ? 'Opnieuw openen' : 'Afronden'}">${item.done ? '✓' : ''}</button>` : ''}<div class="trip-date">${hasDate ? `<strong>${parseDate(item.date).getDate()}</strong><small>${fmtDate(item.date, { month: 'short' })}</small>` : '<strong>–</strong><small>datum</small>'}</div><div class="item-main"><strong class="${item.done ? 'done-text' : ''}">${esc(item.title)}</strong><small>${esc(item.type)}${item.checkable ? ' · Afvinken' : ''}${item.note ? ` · ${esc(item.note)}` : ''}</small></div><button class="delete" data-delete="trips:${item.id}" aria-label="${esc(item.title)} verwijderen">×</button></div>`;
 }
 
 function renderSettings() {
@@ -552,7 +604,7 @@ function groceryRow(item) {
   return `<div class="list-item"><button class="check ${item.done ? 'done' : ''}" data-toggle="groceries:${item.id}" aria-label="Afvinken">${item.done ? '✓' : ''}</button><div class="item-main"><strong class="${item.done ? 'done-text' : ''}">${esc(item.title)}</strong></div><button class="delete" data-delete="groceries:${item.id}" aria-label="Verwijderen">×</button></div>`;
 }
 
-function openAdd(preselectedTripFolderId = '') {
+function openAdd(preselectedTripFolderId = '', preselectedTripSectionId = '') {
   if (current === 'planning' && !data.calendars.length) {
     navigate('settings');
     toast('Voeg eerst een agenda toe of herstel een uitgesloten agenda');
@@ -563,12 +615,22 @@ function openAdd(preselectedTripFolderId = '') {
     toast('Maak eerst een reismap');
     return;
   }
+  if (current === 'trips') {
+    const preferredFolder = preselectedTripFolderId || data.tripFolders.find(folder => data.tripSections.some(section => section.tripFolderId === folder.id))?.id || data.tripFolders[0].id;
+    if (!data.tripSections.some(section => section.tripFolderId === preferredFolder)) {
+      openTripSectionForm(preferredFolder);
+      toast('Maak eerst een map binnen deze reis');
+      return;
+    }
+    preselectedTripFolderId = preferredFolder;
+  }
   addMode = 'item';
   const config = formConfig(current);
   if (!config) return;
   document.querySelector('#dialogTitle').textContent = config.title;
   document.querySelector('#formFields').innerHTML = config.fields.map(([name, label, type, options, conditionalClass]) => {
     const choices = (options || []).map(option => Array.isArray(option) ? option : [option, option]);
+    if (type === 'checkbox') return `<label class="checkbox-field"><input id="f-${name}" name="${name}" type="checkbox"><span>${label}</span></label>`;
     const control = type === 'select'
       ? `<select id="f-${name}" name="${name}">${choices.map(([value, text]) => `<option value="${esc(value)}">${esc(text)}</option>`).join('')}</select>`
       : type === 'textarea'
@@ -578,7 +640,16 @@ function openAdd(preselectedTripFolderId = '') {
   }).join('');
   document.querySelector('#itemDialog').showModal();
   if (preselectedTripFolderId && document.querySelector('#f-tripFolderId')) document.querySelector('#f-tripFolderId').value = preselectedTripFolderId;
+  if (current === 'trips') refreshTripSectionSelect(preselectedTripFolderId, preselectedTripSectionId);
   toggleSecondWeekdayField();
+}
+
+function refreshTripSectionSelect(folderId, selectedSectionId = '') {
+  const select = document.querySelector('#f-tripSectionId');
+  if (!select) return;
+  const sections = data.tripSections.filter(section => section.tripFolderId === folderId);
+  select.innerHTML = sections.map(section => `<option value="${esc(section.id)}">${esc(section.name)}</option>`).join('');
+  if (selectedSectionId && sections.some(section => section.id === selectedSectionId)) select.value = selectedSectionId;
 }
 
 function openTripFolderForm() {
@@ -589,6 +660,17 @@ function openTripFolderForm() {
     <div class="field"><label for="f-startDate">Vertrekdatum (optioneel)</label><input id="f-startDate" name="startDate" type="date"></div>
     <div class="field"><label for="f-endDate">Terugkomstdatum (optioneel)</label><input id="f-endDate" name="endDate" type="date"></div>
     <div class="field"><label for="f-note">Algemene notitie (optioneel)</label><textarea id="f-note" name="note" placeholder="Bijvoorbeeld bruiloft, route of reisgezelschap"></textarea></div>`;
+  document.querySelector('#itemDialog').showModal();
+}
+
+function openTripSectionForm(tripFolderId) {
+  const folder = tripFolderById(tripFolderId);
+  if (!folder) return;
+  addMode = 'trip-section';
+  document.querySelector('#dialogTitle').textContent = `Map in ${folder.name}`;
+  document.querySelector('#formFields').innerHTML = `
+    <input name="tripFolderId" type="hidden" value="${esc(folder.id)}">
+    <div class="field"><label for="f-title">Naam van de map</label><input id="f-title" name="title" type="text" required placeholder="Bijvoorbeeld Hotels, Vluchten of Paklijst"></div>`;
   document.querySelector('#itemDialog').showModal();
 }
 
@@ -608,17 +690,35 @@ function handleSubmit(event) {
   const formData = Object.fromEntries(new FormData(event.target));
   if (!formData.title) return;
   if (addMode === 'trip-folder') {
-    data.tripFolders.push({ id: id(), name: formData.title.trim(), startDate: formData.startDate || '', endDate: formData.endDate || '', note: formData.note?.trim() || '' });
+    const folderId = id();
+    data.tripFolders.push({ id: folderId, name: formData.title.trim(), startDate: formData.startDate || '', endDate: formData.endDate || '', note: formData.note?.trim() || '' });
+    data.tripSections.push({ id: id(), tripFolderId: folderId, name: 'Algemeen' });
     save();
     document.querySelector('#itemDialog').close();
     render();
     toast('Reismap toegevoegd');
     return;
   }
+  if (addMode === 'trip-section') {
+    if (!tripFolderById(formData.tripFolderId)) return toast('Reis niet gevonden');
+    data.tripSections.push({ id: id(), tripFolderId: formData.tripFolderId, name: formData.title.trim() });
+    save();
+    document.querySelector('#itemDialog').close();
+    render();
+    toast('Map toegevoegd');
+    return;
+  }
   ['amount', 'min'].forEach(key => { if (key in formData) formData[key] = Number(formData[key]); });
   if (current === 'groceries') formData.done = false;
   if (current === 'chores') formData.completedDates = [];
   if (current === 'planning') formData.personSource = 'manual';
+  if (current === 'trips') {
+    const section = tripSectionById(formData.tripSectionId);
+    if (!section || section.tripFolderId !== formData.tripFolderId) return toast('Kies een geldige map binnen de reis');
+    formData.checkable = formData.checkable === 'on';
+    formData.done = false;
+    if (formData.checkable && !formData.date) return toast('Kies een deadline voor een onderdeel dat afgevinkt moet worden');
+  }
   data[current].push({ id: id(), ...formData });
   save();
   document.querySelector('#itemDialog').close();
@@ -1009,6 +1109,149 @@ function importOsta(text) {
   toast(`${mealCount} maaltijden en ${groceryResult.added} boodschappen toegevoegd`);
 }
 
+const TRAVEL_IMPORT_CATEGORIES = [
+  { name: 'Documenten & gezondheid', type: 'Documenten', match: /paspoort|visum|visa\b|verzekering|vaccin|medic|gezondheid|dokter|recept|astma/i },
+  { name: 'Paklijst', type: 'Paklijst', match: /paklijst|inpakken|meenemen|bagage|koffer|rugzak|handbagage/i },
+  { name: 'Vervoer', type: 'Vervoer', match: /vlucht|flight|vliegtuig|trein|bus\b|transfer|taxi|grab\b|veerboot|ferry|cruise|vervoer/i },
+  { name: 'Verblijf', type: 'Verblijf', match: /hotel|hostel|resort|homestay|appartement|verblijf|overnacht|accommodat|check-in|check-out/i },
+  { name: 'Eten & drinken', type: 'Eten', match: /restaurant|ontbijt|lunch|diner|avondeten|eten|drinken|vegetari|food/i },
+  { name: 'Budget', type: 'Budget', match: /budget|kosten|prijs|prijzen|totaal|betaalmiddel|contant|valuta|\bvnd\b|\busd\b|\beur\b|€/i },
+  { name: 'Activiteiten', type: 'Activiteit', match: /activiteit|excursie|tour\b|bezoek|museum|strand|hike|wandeling|massage|spa\b|skincare|kleermaker|tailor|ring|workshop/i },
+  { name: 'Boekingen & acties', type: 'Voorbereiding', match: /boeken|reserveren|regelen|controleren|aanvragen|bevestigen|betalen|kopen|bestellen|afspraak maken|to-do|todo|actiepunt|deadline/i },
+  { name: 'Route & planning', type: 'Notitie', match: /route|reisplan|planning|programma|reisschema|itinerary|dagindeling|dag\s+\d+/i }
+];
+
+const DUTCH_MONTHS = {
+  januari: 1, jan: 1, februari: 2, feb: 2, maart: 3, mrt: 3, april: 4, apr: 4, mei: 5, juni: 6, jun: 6,
+  juli: 7, jul: 7, augustus: 8, aug: 8, september: 9, sep: 9, oktober: 10, okt: 10, november: 11, nov: 11, december: 12, dec: 12
+};
+
+function travelImportCategory(line) {
+  return TRAVEL_IMPORT_CATEGORIES.find(category => category.match.test(line));
+}
+
+function travelImportHeading(line) {
+  const clean = line.replace(/^#{1,6}\s*/, '').replace(/[:：]\s*$/, '').trim();
+  if (clean.length < 3 || clean.length > 70) return '';
+  const knownCategory = travelImportCategory(clean);
+  if (knownCategory && (/^#{1,6}\s*/.test(line) || /[:：]\s*$/.test(line) || clean.toUpperCase() === clean)) return knownCategory.name;
+  const looksLikeHeading = /^#{1,6}\s*/.test(line) || /[:：]\s*$/.test(line) || /^[A-ZÀ-Ÿ0-9][A-ZÀ-Ÿ0-9 &/+-]{3,}$/.test(clean) || /^(deel|week|hoofdstuk)\s+\d+\b/i.test(clean);
+  return looksLikeHeading ? clean.replace(/^\d+[.)]\s*/, '').slice(0, 60) : '';
+}
+
+function validTravelDate(year, month, day) {
+  const date = new Date(Number(year), Number(month) - 1, Number(day), 12);
+  return date.getFullYear() === Number(year) && date.getMonth() === Number(month) - 1 && date.getDate() === Number(day) ? toLocalISO(date) : '';
+}
+
+function travelDateFromLine(line, folder) {
+  const iso = line.match(/\b(20\d{2})-(\d{1,2})-(\d{1,2})\b/);
+  if (iso) return validTravelDate(iso[1], iso[2], iso[3]);
+  const numeric = line.match(/\b(\d{1,2})[-/.](\d{1,2})(?:[-/.](20\d{2}))?\b/);
+  const fallbackYear = folder?.startDate ? parseDate(folder.startDate).getFullYear() : new Date().getFullYear();
+  if (numeric) return validTravelDate(numeric[3] || fallbackYear, numeric[2], numeric[1]);
+  const written = line.match(/\b(\d{1,2})\s+(januari|jan|februari|feb|maart|mrt|april|apr|mei|juni|jun|juli|jul|augustus|aug|september|sep|oktober|okt|november|nov|december|dec)(?:\s+(20\d{2}))?\b/i);
+  return written ? validTravelDate(written[3] || fallbackYear, DUTCH_MONTHS[written[2].toLowerCase()], written[1]) : '';
+}
+
+function ensureTripSection(folderId, name) {
+  const clean = String(name || 'Algemeen').trim().slice(0, 60) || 'Algemeen';
+  let section = data.tripSections.find(item => item.tripFolderId === folderId && item.name.toLowerCase() === clean.toLowerCase());
+  if (!section) {
+    section = { id: id(), tripFolderId: folderId, name: clean };
+    data.tripSections.push(section);
+  }
+  return section;
+}
+
+function importTravelPlan(text, folderId) {
+  const folder = data.tripFolders.find(item => item.id === folderId);
+  if (!folder) return toast('Kies eerst een reismap');
+  const seenLines = new Set();
+  let sectionName = 'Algemeen';
+  let added = 0;
+  let checkableCount = 0;
+  let skipped = 0;
+  const rawLines = String(text || '').replace(/\u00ad/g, '').split(/\r?\n/);
+  rawLines.forEach(rawLine => {
+    if (added >= 300) { skipped += 1; return; }
+    const source = rawLine.replace(/\s+/g, ' ').trim();
+    if (!source || /^pagina\s+\d+(?:\s+van\s+\d+)?$/i.test(source) || /^\d+$/.test(source)) return;
+    const heading = travelImportHeading(source);
+    if (heading) { sectionName = heading; return; }
+    const done = /^(?:✓|✔|☑|\[x\])\s*/i.test(source);
+    const explicitAction = /^(?:☐|□|\[\s?\]|todo:|to-do:|actie:)/i.test(source);
+    const clean = source.replace(/^(?:[-•▪◦‣–—]|✓|✔|☑|☐|□|\[x\]|\[\s?\])\s*/i, '').trim();
+    if (clean.length < 3) return;
+    const lineKey = clean.toLowerCase().replace(/[^a-z0-9à-ÿ]+/g, ' ').trim();
+    if (!lineKey || seenLines.has(lineKey)) return;
+    seenLines.add(lineKey);
+    const detected = travelImportCategory(clean);
+    const targetSection = ensureTripSection(folder.id, detected?.name || sectionName);
+    const type = detected?.type || travelImportCategory(targetSection.name)?.type || 'Notitie';
+    const checkable = done || explicitAction || /\b(boeken|reserveren|regelen|controleren|aanvragen|bevestigen|betalen|kopen|bestellen|inpakken|meenemen|afspreken|downloaden|printen)\b/i.test(clean);
+    const duplicate = data.trips.some(item => item.tripFolderId === folder.id && item.title.toLowerCase() === clean.toLowerCase());
+    if (duplicate) { skipped += 1; return; }
+    const title = clean.length <= 170 ? clean : `${clean.slice(0, 167).trim()}…`;
+    const note = clean.length > 170 ? clean.slice(167).trim() : '';
+    data.trips.push({ id: id(), tripFolderId: folder.id, tripSectionId: targetSection.id, title, date: travelDateFromLine(clean, folder), type, note, checkable, done: checkable ? done : false });
+    added += 1;
+    if (checkable) checkableCount += 1;
+  });
+  if (!added) return toast('Geen nieuwe reisonderdelen gevonden');
+  save();
+  render();
+  toast(`${added} onderdelen verdeeld · ${checkableCount} om af te vinken${skipped ? ` · ${skipped} overgeslagen` : ''}`);
+}
+
+async function extractPdfText(file) {
+  const pdfjs = await import(PDFJS_URL);
+  pdfjs.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
+  const loadingTask = pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) });
+  const pdf = await loadingTask.promise;
+  const pages = [];
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+    const page = await pdf.getPage(pageNumber);
+    const content = await page.getTextContent();
+    const lines = [];
+    let currentLine = [];
+    let previousY = null;
+    content.items.forEach(item => {
+      const value = String(item.str || '').trim();
+      if (!value) return;
+      const y = Math.round(item.transform?.[5] || 0);
+      if (previousY !== null && Math.abs(y - previousY) > 2 && currentLine.length) {
+        lines.push(currentLine.join(' '));
+        currentLine = [];
+      }
+      currentLine.push(value);
+      previousY = y;
+      if (item.hasEOL && currentLine.length) {
+        lines.push(currentLine.join(' '));
+        currentLine = [];
+        previousY = null;
+      }
+    });
+    if (currentLine.length) lines.push(currentLine.join(' '));
+    pages.push(lines.join('\n'));
+  }
+  return pages.join('\n\n');
+}
+
+async function readTravelImportFile(file) {
+  const folderId = document.querySelector('#travelImportFolder')?.value;
+  if (!folderId) return toast('Kies eerst een reismap');
+  try {
+    toast(file.type === 'application/pdf' || /\.pdf$/i.test(file.name) ? 'PDF wordt gelezen…' : 'Bestand wordt gelezen…');
+    const text = file.type === 'application/pdf' || /\.pdf$/i.test(file.name) ? await extractPdfText(file) : await file.text();
+    if (!text.trim()) return toast('In dit bestand is geen leesbare tekst gevonden');
+    importTravelPlan(text, folderId);
+  } catch (error) {
+    console.error('Reisbestand lezen mislukt', error);
+    toast('PDF lezen lukte niet. Kopieer de tekst en plak die hier.');
+  }
+}
+
 async function readImportFile(file, type) {
   try {
     const text = await file.text();
@@ -1194,6 +1437,14 @@ document.addEventListener('click', event => {
   if (view) { navigate(view.dataset.view); return; }
   if (event.target.closest('[data-open-add]')) { openAdd(); return; }
   if (event.target.closest('[data-add-trip-folder]')) { openTripFolderForm(); return; }
+  const addTripSection = event.target.closest('[data-add-trip-section]');
+  if (addTripSection) { openTripSectionForm(addTripSection.dataset.addTripSection); return; }
+  const addToTripSection = event.target.closest('[data-add-to-trip-section]');
+  if (addToTripSection) {
+    const section = tripSectionById(addToTripSection.dataset.addToTripSection);
+    if (section) openAdd(section.tripFolderId, section.id);
+    return;
+  }
   const addToTrip = event.target.closest('[data-add-to-trip]');
   if (addToTrip) { openAdd(addToTrip.dataset.addToTrip); return; }
   const answer = event.target.closest('[data-answer-person]');
@@ -1216,8 +1467,21 @@ document.addEventListener('click', event => {
     const warning = childCount ? `Ook de ${childCount} onderdelen in deze map worden verwijderd.` : 'Deze map is leeg.';
     if (!confirm(`Reismap “${folder.name}” verwijderen?\n\n${warning}`)) return;
     data.tripFolders = data.tripFolders.filter(item => item.id !== folderId);
+    data.tripSections = data.tripSections.filter(item => item.tripFolderId !== folderId);
     data.trips = data.trips.filter(item => item.tripFolderId !== folderId);
     save(); render(); toast('Reismap verwijderd'); return;
+  }
+  const deleteTripSectionButton = event.target.closest('[data-delete-trip-section]');
+  if (deleteTripSectionButton) {
+    const sectionId = deleteTripSectionButton.dataset.deleteTripSection;
+    const section = tripSectionById(sectionId);
+    if (!section) return;
+    const childCount = data.trips.filter(item => item.tripSectionId === sectionId).length;
+    const warning = childCount ? `Ook de ${childCount} onderdelen in deze map worden verwijderd.` : 'Deze map is leeg.';
+    if (!confirm(`Map “${section.name}” verwijderen?\n\n${warning}`)) return;
+    data.tripSections = data.tripSections.filter(item => item.id !== sectionId);
+    data.trips = data.trips.filter(item => item.tripSectionId !== sectionId);
+    save(); render(); toast('Map verwijderd'); return;
   }
   const deleteButton = event.target.closest('[data-delete]');
   if (deleteButton) {
@@ -1266,6 +1530,10 @@ document.addEventListener('click', event => {
   if (event.target.closest('[data-import-groceries]')) { importGroceries(document.querySelector('#groceryImportText').value); return; }
   if (event.target.closest('[data-import-osta]')) { importOsta(document.querySelector('#ostaImportText').value); return; }
   if (event.target.closest('[data-import-calendar]')) { importCalendar(document.querySelector('#calendarImportText').value); return; }
+  if (event.target.closest('[data-import-travel-text]')) {
+    importTravelPlan(document.querySelector('#travelImportText').value, document.querySelector('#travelImportFolder').value);
+    return;
+  }
   const picker = event.target.closest('[data-pick-file]');
   if (picker) { document.querySelector(`#${picker.dataset.pickFile}`).click(); return; }
   if (event.target.closest('[data-sync-now]')) { syncNow({ manual: true }); return; }
@@ -1276,6 +1544,7 @@ document.addEventListener('click', event => {
 
 document.addEventListener('change', event => {
   if (event.target.id === 'f-repeat' || event.target.id === 'f-due') toggleSecondWeekdayField();
+  if (event.target.id === 'f-tripFolderId') refreshTripSectionSelect(event.target.value);
   const calendarPerson = event.target.closest('[data-calendar-person]');
   if (calendarPerson) {
     if (setCalendarPerson(calendarPerson.dataset.calendarPerson, calendarPerson.value)) {
@@ -1320,6 +1589,10 @@ document.querySelector('#restoreInput').addEventListener('change', event => even
 document.querySelector('#groceryImportFile').addEventListener('change', event => event.target.files[0] && readImportFile(event.target.files[0], 'groceries'));
 document.querySelector('#ostaImportFile').addEventListener('change', event => event.target.files[0] && readImportFile(event.target.files[0], 'osta'));
 document.querySelector('#calendarImportFile').addEventListener('change', event => event.target.files[0] && readImportFile(event.target.files[0], 'calendar'));
+document.querySelector('#travelImportFile').addEventListener('change', event => {
+  if (event.target.files[0]) readTravelImportFile(event.target.files[0]);
+  event.target.value = '';
+});
 document.querySelector('#eyebrow').textContent = new Intl.DateTimeFormat('nl-NL', { weekday: 'long', day: 'numeric', month: 'long' }).format(new Date());
 window.addEventListener('online', () => { updateSyncBadge(); syncNow(); });
 window.addEventListener('offline', () => updateSyncBadge());
