@@ -1,0 +1,15 @@
+/* Samen Thuis v11 add-on */
+.trip-priority-field[hidden],.preview-priority[hidden]{display:none!important}
+.priority-badge{display:inline-flex;align-items:center;margin-left:8px;padding:3px 8px;border-radius:999px;font-size:.68rem;font-weight:850;letter-spacing:.02em;white-space:nowrap}
+.priority-badge.low{background:#eef1f4;color:#59636f}.priority-badge.medium{background:#fff0df;color:#9d5a23}.priority-badge.high{background:#fae7e9;color:#a63f49}
+.travel-title-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.travel-row-actions,.travel-edit-actions{display:flex;align-items:center;gap:3px}
+.travel-row-actions .text-btn,.travel-edit-actions .text-btn{padding:5px 7px}
+.sync-detail{margin-top:14px;padding:13px 14px;border:1px solid var(--line);border-radius:13px;background:#f7fafb;line-height:1.5}.sync-detail p{margin:6px 0 0}
+.travel-import-preview{margin:0 0 18px;border-top:5px solid var(--blue)}
+.travel-import-preview .card-head{align-items:flex-start;gap:14px}.travel-import-preview .card-head p{margin:5px 0 0}
+.travel-preview-list{display:grid;gap:12px}.travel-preview-card{border:1px solid var(--line);border-radius:14px;padding:14px;background:#fbfcfd}.preview-select{display:flex;align-items:center;gap:8px;font-weight:800;margin-bottom:12px}.preview-select input{width:20px;height:20px}
+.preview-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.preview-grid .preview-title,.preview-grid .preview-note{grid-column:span 2}.preview-grid input,.preview-grid select,.preview-grid textarea{width:100%;border:1px solid #ccd4dd;border-radius:10px;padding:9px 10px;background:white;color:var(--ink)}.preview-grid textarea{min-height:70px;resize:vertical}.checkbox-field.compact{padding:9px 10px}.preview-actions{justify-content:flex-end;margin-top:16px}
+#travelEditDialog form{padding:24px}#travelEditDialog .form-grid{max-height:min(70vh,680px);overflow:auto;padding-right:2px}
+@media(max-width:950px){.preview-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:650px){.preview-grid{grid-template-columns:1fr}.preview-grid .preview-title,.preview-grid .preview-note{grid-column:auto}.travel-import-preview{margin-left:-2px;margin-right:-2px}.priority-badge{font-size:.64rem}.sync-detail{font-size:.9rem}}

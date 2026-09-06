@@ -1,0 +1,32 @@
+SAMEN THUIS v11
+
+Upload/vervang in dezelfde GitHub-map:
+1. VERVANG index.html
+2. VERVANG sw.js
+3. VOEG TOE upgrade-v11.js
+4. VOEG TOE upgrade-v11.css
+
+app.js en styles.css hoef je NIET te vervangen.
+
+Verbeteringen Reizen:
+- Reismap bewerken: naam, vertrekdatum, terugkomstdatum en notitie.
+- Map binnen reis hernoemen.
+- Reisonderdeel volledig bewerken: titel, reis, map, datum, type, notitie en afvinken.
+- Prioriteit: eerst “Belangrijk / prioriteit” aanvinken; daarna verschijnt Laag / Gemiddeld / Hoog.
+- Zonder vinkje wordt geen prioriteit opgeslagen.
+- Top 10 op Vandaag sorteert belangrijke items eerst: Hoog → Gemiddeld → Laag, daarna overige deadlines.
+- PDF/tekst wordt niet meer direct opgeslagen. Eerst verschijnt een controlelijst waarin alles aangepast en geselecteerd kan worden.
+- PDF-regels worden eerst samengevoegd tot logischere tekstblokken om versnippering te verminderen.
+- createdAt/updatedAt wordt voor reisobjecten bijgehouden.
+
+Synchronisatie:
+- Bestaande auto-sync na wijzigingen blijft actief (ca. 1,2 sec debounce).
+- Elke 30 sec controle op nieuwere gegevens van andere apparaten als de app zichtbaar is.
+- Extra sync bij terugkeren naar de app/online komen.
+- Geen onnodige upload als lokale en cloudversie dezelfde updatedAt hebben.
+- Laatste succesvolle synchronisatietijd zichtbaar in de bovenbalk (waar ruimte is) en bij Instellingen.
+- Handmatige “Nu synchroniseren”-knop blijft als noodknop.
+
+Belangrijk:
+Gebruik op alle apparaten exact dezelfde geheime huishoudcode.
+De bestaande versleuteling en Supabase-opslag blijven behouden.
