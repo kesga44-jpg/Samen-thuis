@@ -1,0 +1,19 @@
+SAMEN THUIS — VERVANG DEZE 3 BESTANDEN IN GITHUB
+
+1. index.html
+2. sw.js
+3. samen-thuis-update-v4.js
+
+Laat app.js, styles.css, upgrade-v11.js en de rest staan.
+
+Daarna krijg je:
+- Een echte tab 'Importeren' in de gewone navigatie.
+- Eén uploadpagina voor Agenda, Weekmenu, Boodschappen, Huishouden, Voorraad, Samen doen, Woning en Reizen.
+- PDF, DOCX, Excel, CSV en tekst.
+- Eerst controlelijst; items zijn vóór import aanpasbaar.
+- Daarna worden het normale app-items.
+- Buiten Vandaag verschijnt naast × een ✎ bij gewone items, zodat je ze kunt wijzigen.
+- Geen punten/spelelement.
+
+De service-worker-cache is verhoogd naar v12 en de scripts hebben ?v=12.
+Daardoor hoort Safari/iPhone niet meer de oude versie vast te houden.
