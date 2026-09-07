@@ -1,32 +1,25 @@
-SAMEN THUIS v11
+SAMEN THUIS UPDATE V4
 
-Upload/vervang in dezelfde GitHub-map:
-1. VERVANG index.html
-2. VERVANG sw.js
-3. VOEG TOE upgrade-v11.js
-4. VOEG TOE upgrade-v11.css
+Nieuw:
+- Eén centrale Importeren-knop/pagina
+- Bestemming kiezen via dropdown:
+  Planning/Agenda, Weekmenu, Boodschappen, Huishouden, Voorraad,
+  Samen doen/Ideeën, Woning, Reizen
+- PDF, DOCX, Excel, CSV, TXT en MD lezen
+- Eerst analyseren en controleren
+- Importitems vóór opslaan aanpassen
+- Daarna pas in de gekozen tab zetten
+- Probeert naast bestaande verwijderknoppen automatisch ✎ Bewerken te plaatsen
+- Geen punten- of spelelement
 
-app.js en styles.css hoef je NIET te vervangen.
+INSTALLATIE
+1. Zet samen-thuis-update-v4.js naast je huidige app.js in GitHub.
+2. Voeg onderaan index.html DIRECT ONDER je bestaande app.js-script toe:
+   <script src="samen-thuis-update-v4.js?v=4.0.0"></script>
+3. Commit.
+4. Sluit de beginscherm-app volledig en open opnieuw / ververs Safari.
 
-Verbeteringen Reizen:
-- Reismap bewerken: naam, vertrekdatum, terugkomstdatum en notitie.
-- Map binnen reis hernoemen.
-- Reisonderdeel volledig bewerken: titel, reis, map, datum, type, notitie en afvinken.
-- Prioriteit: eerst “Belangrijk / prioriteit” aanvinken; daarna verschijnt Laag / Gemiddeld / Hoog.
-- Zonder vinkje wordt geen prioriteit opgeslagen.
-- Top 10 op Vandaag sorteert belangrijke items eerst: Hoog → Gemiddeld → Laag, daarna overige deadlines.
-- PDF/tekst wordt niet meer direct opgeslagen. Eerst verschijnt een controlelijst waarin alles aangepast en geselecteerd kan worden.
-- PDF-regels worden eerst samengevoegd tot logischere tekstblokken om versnippering te verminderen.
-- createdAt/updatedAt wordt voor reisobjecten bijgehouden.
-
-Synchronisatie:
-- Bestaande auto-sync na wijzigingen blijft actief (ca. 1,2 sec debounce).
-- Elke 30 sec controle op nieuwere gegevens van andere apparaten als de app zichtbaar is.
-- Extra sync bij terugkeren naar de app/online komen.
-- Geen onnodige upload als lokale en cloudversie dezelfde updatedAt hebben.
-- Laatste succesvolle synchronisatietijd zichtbaar in de bovenbalk (waar ruimte is) en bij Instellingen.
-- Handmatige “Nu synchroniseren”-knop blijft als noodknop.
-
-Belangrijk:
-Gebruik op alle apparaten exact dezelfde geheime huishoudcode.
-De bestaande versleuteling en Supabase-opslag blijven behouden.
+De module vervangt je huidige app.js NIET en wist je bestaande data of sync niet.
+Omdat ik de onderliggende actuele Samen Thuis-broncode niet kon uitlezen, is deze versie
+bewust als compatibele uitbreidingslaag gebouwd. Hij koppelt op runtime aan de bestaande
+localStorage-structuur.
