@@ -1,0 +1,44 @@
+SAMEN THUIS V13 – VERVANGEN / TOEVOEGEN
+
+Deze update bouwt voort op de huidige v12.
+
+TOEVOEGEN
+1. samen-thuis-update-v13.js
+2. samen-thuis-update-v13.css
+
+VERVANGEN
+3. index.html
+4. sw.js
+
+LATEN STAAN
+- app.js
+- styles.css
+- upgrade-v11.js
+- upgrade-v11.css
+- samen-thuis-update-v4.js
+- manifest.webmanifest
+- icon.svg
+
+BELANGRIJK
+Upload alle vier bestanden naar de hoofdmap van repository kesga44-jpg/Samen-thuis.
+Bij GitHub: Add file > Upload files. Overschrijf index.html en sw.js wanneer GitHub daarom vraagt.
+
+NA DE UPDATE
+- Open de website één keer in Safari.
+- Vernieuw de pagina.
+- Als de beginscherm-app nog de oude versie toont: sluit hem volledig en open opnieuw.
+- De serviceworker-cache heet nu samen-thuis-v13-smart-import.
+
+V13 VERBETERT
+- voorraad: Gewenst / Minimum / Huidig / Eenheid / Categorie
+- huishouden: frequenties correct herkennen
+- extra frequenties: om de dag, 3× per week, 2/4 weken, 2/3/6 maanden, jaarlijks, na elke was, wanneer nodig
+- woning: categorie + frequentie + datum + notitie
+- reizen: type/datum/afvinkbaarheid en submap via centrale import
+- preview: velden direct bewerken
+- bulk categorie/frequentie/persoon
+- vermoedelijke duplicaten automatisch markeren en standaard overslaan
+- bestaande voorraad krijgt automatisch een gewenste voorraad zonder huidige data te verwijderen
+
+LET OP
+De update verwijdert geen bestaande data. Maak voor de zekerheid vóór vervangen één JSON-back-up via Samen Thuis.

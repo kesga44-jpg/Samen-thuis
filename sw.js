@@ -1,7 +1,8 @@
-const CACHE='samen-thuis-v12-central-import-edit';
+const CACHE='samen-thuis-v13-smart-import';
 const ASSETS=[
   './','./index.html','./styles.css','./upgrade-v11.css','./app.js',
   './upgrade-v11.js','./samen-thuis-update-v4.js',
+  './samen-thuis-update-v13.js','./samen-thuis-update-v13.css',
   './manifest.webmanifest','./icon.svg'
 ];
 
@@ -20,12 +21,7 @@ self.addEventListener('activate',event=>{
 self.addEventListener('fetch',event=>{
   if(event.request.method!=='GET') return;
   const url=new URL(event.request.url);
-
-  if(url.origin!==location.origin){
-    event.respondWith(fetch(event.request));
-    return;
-  }
-
+  if(url.origin!==location.origin){ event.respondWith(fetch(event.request)); return; }
   event.respondWith(
     fetch(event.request,{cache:'no-store'})
       .then(response=>{

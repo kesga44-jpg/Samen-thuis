@@ -10,8 +10,9 @@
   <meta name="description" content="Het gezamenlijke thuisdashboard van Kees en Daphne.">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="apple-touch-icon" href="icon.svg">
-  <link rel="stylesheet" href="styles.css?v=12">
-  <link rel="stylesheet" href="upgrade-v11.css?v=12">
+  <link rel="stylesheet" href="styles.css?v=13">
+  <link rel="stylesheet" href="upgrade-v11.css?v=13">
+  <link rel="stylesheet" href="samen-thuis-update-v13.css?v=13">
   <title>Samen Thuis</title>
 </head>
 <body>
@@ -29,7 +30,6 @@
         <input id="travelImportFile" type="file" accept=".pdf,.txt,text/plain,application/pdf" hidden>
       </div>
     </aside>
-
     <main>
       <header class="topbar">
         <div><p id="eyebrow">Goedemorgen</p><h1 id="pageTitle">Vandaag</h1></div>
@@ -43,7 +43,6 @@
       <div id="view" class="view" aria-live="polite"></div>
     </main>
   </div>
-
   <dialog id="itemDialog">
     <form id="itemForm" method="dialog">
       <div class="dialog-head"><div><p class="eyebrow">Nieuw item</p><h2 id="dialogTitle">Toevoegen</h2></div><button type="button" data-close-dialog class="icon-btn" aria-label="Sluiten">×</button></div>
@@ -51,7 +50,6 @@
       <div class="dialog-actions"><button type="button" data-close-dialog class="secondary">Annuleren</button><button id="saveBtn" type="submit" class="primary">Opslaan</button></div>
     </form>
   </dialog>
-
   <dialog id="questionDialog">
     <form id="questionForm" method="dialog">
       <div class="dialog-head"><div><p class="eyebrow">Vraag van vandaag</p><h2 id="questionTitle">Jouw antwoord</h2></div><button type="button" data-close-question class="icon-btn" aria-label="Sluiten">×</button></div>
@@ -61,15 +59,14 @@
       <div class="dialog-actions"><button type="button" data-close-question class="secondary">Annuleren</button><button type="submit" class="primary">Bewaren</button></div>
     </form>
   </dialog>
-
   <div id="toast" class="toast" role="status"></div>
   <div id="brainyQuoteSource" class="brainy-source" aria-hidden="true">
     <script src="https://www.brainyquote.com/link/quotebr.js"></script>
     <a href="https://www.brainyquote.com/quote_of_the_day" target="_blank" rel="nofollow noopener">more Quotes</a>
   </div>
-
-  <script src="app.js?v=12"></script>
-  <script src="upgrade-v11.js?v=12"></script>
-  <script src="samen-thuis-update-v4.js?v=12"></script>
+  <script src="app.js?v=13"></script>
+  <script src="upgrade-v11.js?v=13"></script>
+  <script src="samen-thuis-update-v4.js?v=13"></script>
+  <script src="samen-thuis-update-v13.js?v=13"></script>
 </body>
 </html>
