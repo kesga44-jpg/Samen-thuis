@@ -1,9 +1,22 @@
+/* CLEAN MASTER BUILD 2026-09-08 16:xx */
 console.info('Samen Thuis update 13.0 geladen');
 
 (() => {
   'use strict';
   if (window.__SAMEN_THUIS_V13__) return;
   window.__SAMEN_THUIS_V13__ = true;
+
+  if (!document.querySelector('#v14CentralInputStyle')) {
+    const style=document.createElement('style');
+    style.id='v14CentralInputStyle';
+    style.textContent=`
+      .v14-methods{display:flex;gap:10px;flex-wrap:wrap;margin:18px 0 4px}
+      .v14-methods button{flex:1 1 180px}
+      .v14-manual-form{margin-top:16px}
+      @media(max-width:650px){.v14-methods{display:grid;grid-template-columns:1fr}.v14-methods button{width:100%}}
+    `;
+    document.head.appendChild(style);
+  }
 
   const TARGETS = {
     planning: 'Agenda',
@@ -30,11 +43,15 @@ console.info('Samen Thuis update 13.0 geladen');
   ];
 
   const state13 = {
-    target: 'chores',
-    subtype: 'Reguliere schoonmaak',
+    target: 'planning',
+    subtype: '',
+    method: 'manual',
     text: '',
     filename: '',
-    preview: []
+    preview: [],
+    tripFolderId: data.tripFolders?.[0]?.id || '',
+    tripSectionId: '',
+    calendarId: data.calendars?.[0]?.id || 'persoonlijk'
   };
 
   const baseRender13 = render;
@@ -183,19 +200,83 @@ console.info('Samen Thuis update 13.0 geladen');
     return 'Notitie';
   }
 
+
+  const TARGET_PATH_NAMES = {
+    agenda:'planning', planning:'planning',
+    weekmenu:'meals', maaltijden:'meals',
+    boodschappen:'groceries',
+    huishouden:'chores',
+    voorraad:'stock',
+    'samen doen':'ideas', ideeen:'ideas', ideeën:'ideas',
+    woning:'home',
+    reizen:'trips', reis:'trips'
+  };
+
+  function pathParts(line='') {
+    const raw = cleanBullet(line);
+    if (!raw.includes('/')) return null;
+    const parts = raw.split('/').map(x=>x.trim()).filter(Boolean);
+    if (parts.length < 2) return null;
+    const mapped = TARGET_PATH_NAMES[norm(parts[0])];
+    return mapped ? {target:mapped, parts} : null;
+  }
+
+  function findTripFolderByName(name='') {
+    return data.tripFolders?.find(f => norm(f.name) === norm(name));
+  }
+
+  function findTripSectionByName(folderId, name='') {
+    return data.tripSections?.find(s => s.tripFolderId === folderId && norm(s.name) === norm(name));
+  }
+
+  function selectedTripFolder() {
+    return data.tripFolders?.find(f=>f.id===state13.tripFolderId) || data.tripFolders?.[0] || null;
+  }
+
+  function selectedTripSection(folderId) {
+    const selected = data.tripSections?.find(s=>s.id===state13.tripSectionId && s.tripFolderId===folderId);
+    return selected || data.tripSections?.find(s=>s.tripFolderId===folderId) || null;
+  }
+
   function parseTrip(line) {
-    const folder = data.tripFolders?.[0];
-    if (!folder) return null;
-    const clean = cleanBullet(line);
-    if (!clean || /^[A-ZÀ-Ÿ &/-]{3,}:?$/.test(clean)) return null;
+    const p = pathParts(line);
+    let folder = selectedTripFolder();
+    let section = folder ? selectedTripSection(folder.id) : null;
+    let source = cleanBullet(line);
+    let pendingFolderName = '';
+    let pendingSectionName = '';
+
+    if (p && p.target === 'trips') {
+      pendingFolderName = p.parts[1] || '';
+      const matchedFolder = findTripFolderByName(pendingFolderName);
+      if (matchedFolder) folder = matchedFolder;
+
+      pendingSectionName = p.parts[2] || state13.subtype || 'Algemeen';
+      if (folder) section = findTripSectionByName(folder.id, pendingSectionName) || null;
+
+      source = p.parts.slice(3).join(' / ').trim();
+      if (!source && p.parts.length === 3) return null;
+    }
+
+    if (!source || /^[A-ZÀ-Ÿ &/-]{3,}:?$/.test(source)) return null;
+    const {title, meta} = keyValueParts(source);
+    const itemTitle = title || source;
     const checkable = /^(?:☐|□|\[\s?\])/.test(line) ||
-      /\b(boeken|vastleggen|reserveren|regelen|controleren|afspraak|downloaden|meenemen)\b/i.test(clean);
-    const section = ensureTripSection(folder.id, state13.subtype || 'Algemeen');
+      boolWord(meta.afvinkbaar || meta.checkable) ||
+      /\b(boeken|vastleggen|reserveren|regelen|controleren|afspraak|downloaden|meenemen|inpakken)\b/i.test(itemTitle);
+
     return {
-      id:id(), tripFolderId:folder.id, tripSectionId:section.id,
-      title: clean, date: isoDateFromText(clean),
-      type: travelType(clean, state13.subtype), note:'',
-      checkable, done:false
+      id:id(),
+      tripFolderId: folder?.id || '',
+      tripSectionId: section?.id || '',
+      title: itemTitle,
+      date: meta.datum || meta.deadline || isoDateFromText(source),
+      type: meta.type || meta.soort || travelType(itemTitle, pendingSectionName || state13.subtype),
+      note: meta.notitie || meta.notes || '',
+      checkable,
+      done:false,
+      _pendingFolderName: pendingFolderName && !folder?.id ? pendingFolderName : '',
+      _pendingSectionName: pendingSectionName && !section?.id ? pendingSectionName : ''
     };
   }
 
@@ -235,7 +316,9 @@ console.info('Samen Thuis update 13.0 geladen');
       return `${item.category}${item.repeat ? ' · '+item.repeat : ''}${item.due ? ' · '+item.due : ''}`;
     }
     if (target === 'trips') {
-      return `${item.type}${item.date ? ' · '+item.date : ''}${item.checkable ? ' · afvinken' : ''}`;
+      const folder = data.tripFolders?.find(f=>f.id===item.tripFolderId)?.name || item._pendingFolderName || 'Nieuwe/gekozen reis';
+      const section = data.tripSections?.find(s=>s.id===item.tripSectionId)?.name || item._pendingSectionName || state13.subtype || 'Algemeen';
+      return `${folder} › ${section} · ${item.type}${item.date ? ' · '+item.date : ''}${item.checkable ? ' · afvinken' : ''}`;
     }
     return item.category || TARGETS[target] || '';
   }
@@ -279,23 +362,120 @@ console.info('Samen Thuis update 13.0 geladen');
     return field('Titel',`<input data-v13-field="title" value="${esc(x.title||'')}">`,'full');
   }
 
-  function renderImports13() {
+  function manualForm13() {
+    const t = state13.target;
+    const calendars = data.calendars || [];
+    const tripFolders = data.tripFolders || [];
+    const folder = selectedTripFolder();
+    const sections = (data.tripSections || []).filter(s=>s.tripFolderId===folder?.id);
+
+    if (t === 'planning') return `
+      ${field('Wat?',`<input data-v14-manual="title" required>`,'full')}
+      ${field('Datum',`<input type="date" data-v14-manual="date" value="${todayISO()}">`)}
+      ${field('Begintijd',`<input type="time" data-v14-manual="time">`)}
+      ${field('Eindtijd',`<input type="time" data-v14-manual="endTime">`)}
+      ${field('Agenda',`<select data-v14-manual="calendarId">${calendars.map(c=>`<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('')}</select>`)}
+      ${field('Voor wie?',`<select data-v14-manual="person">${optionList(['Samen','Kees','Daphne'],'Samen')}</select>`)}`;
+
+    if (t === 'meals') return `
+      ${field('Gerecht',`<input data-v14-manual="title" required>`,'full')}
+      ${field('Datum',`<input type="date" data-v14-manual="date" value="${todayISO()}">`)}
+      ${field('Moment',`<select data-v14-manual="type">${optionList(['Ontbijt','Lunch','Avondeten','Snack'],'Avondeten')}</select>`)}`;
+
+    if (t === 'groceries') return `
+      ${field('Product',`<input data-v14-manual="title" required>`,'full')}
+      ${field('Categorie',`<select data-v14-manual="category">${optionList(GROCERY_CATEGORIES,'Overig')}</select>`)}`;
+
+    if (t === 'chores') return `
+      ${field('Taak',`<input data-v14-manual="title" required>`,'full')}
+      ${field('Voor wie?',`<select data-v14-manual="person">${optionList(['Samen','Kees','Daphne'],'Samen')}</select>`)}
+      ${field('Eerste keer',`<input type="date" data-v14-manual="due" value="${todayISO()}">`)}
+      ${field('Frequentie',`<select data-v14-manual="repeat">${optionList(REPEATS,'Wekelijks')}</select>`)}
+      ${field('Categorie',`<input data-v14-manual="category" value="${esc(state13.subtype || 'Reguliere schoonmaak')}">`)}
+      ${field('Notitie',`<textarea data-v14-manual="notes"></textarea>`,'full')}`;
+
+    if (t === 'stock') return `
+      ${field('Product',`<input data-v14-manual="title" required>`,'full')}
+      ${field('Categorie',`<input data-v14-manual="category" value="${esc(stockCategory('',state13.subtype))}">`)}
+      ${field('Huidig',`<input type="number" step="0.01" data-v14-manual="amount" value="0">`)}
+      ${field('Minimum',`<input type="number" step="0.01" data-v14-manual="min" value="0">`)}
+      ${field('Gewenst',`<input type="number" step="0.01" data-v14-manual="desired" value="0">`)}
+      ${field('Eenheid',`<input data-v14-manual="unit" value="stuks">`)}`;
+
+    if (t === 'ideas') return `
+      ${field('Idee',`<input data-v14-manual="title" required>`,'full')}
+      ${field('Categorie',`<select data-v14-manual="category">${optionList(['Thuis','Uit','Actief','Gratis','Eten'],'Thuis')}</select>`)}
+      ${field('Emoji',`<input data-v14-manual="icon" value="♡">`)}
+      ${field('Notitie',`<textarea data-v14-manual="note"></textarea>`,'full')}`;
+
+    if (t === 'home') return `
+      ${field('Onderwerp',`<input data-v14-manual="title" required>`,'full')}
+      ${field('Categorie',`<input data-v14-manual="category" value="${esc(state13.subtype || 'Onderhoud')}">`)}
+      ${field('Datum',`<input type="date" data-v14-manual="due">`)}
+      ${field('Herhaling',`<select data-v14-manual="repeat"><option value="">Geen herhaling</option>${optionList(REPEATS,'')}</select>`)}
+      ${field('Notitie',`<textarea data-v14-manual="note"></textarea>`,'full')}`;
+
+    if (t === 'trips') return `
+      ${field('Reis',`<select id="v14TripFolder" data-v14-manual="tripFolderId">${tripFolders.map(f=>`<option value="${esc(f.id)}" ${f.id===folder?.id?'selected':''}>${esc(f.name)}</option>`).join('')}</select>`)}
+      ${field('Map binnen de reis',`<select data-v14-manual="tripSectionId">${sections.map(s=>`<option value="${esc(s.id)}">${esc(s.name)}</option>`).join('')}</select>`)}
+      ${field('Onderwerp',`<input data-v14-manual="title" required>`,'full')}
+      ${field('Datum/deadline',`<input type="date" data-v14-manual="date">`)}
+      ${field('Soort',`<select data-v14-manual="type">${optionList(['Voorbereiding','Reservering','Vervoer','Verblijf','Activiteit','Eten','Budget','Documenten','Paklijst','Notitie'],'Notitie')}</select>`)}
+      ${field('Notitie',`<textarea data-v14-manual="note"></textarea>`,'full')}
+      <label class="checkbox-field"><input type="checkbox" data-v14-manual="checkable"><span>Dit moet afgevinkt worden</span></label>`;
+
+    return '';
+  }
+
+  function destinationFields13() {
+    if (state13.target === 'trips') {
+      const folder = selectedTripFolder();
+      const sections = (data.tripSections || []).filter(s=>s.tripFolderId===folder?.id);
+      return `
+        ${field('Standaard reis',`<select id="v14ImportTripFolder">${(data.tripFolders||[]).map(f=>`<option value="${esc(f.id)}" ${f.id===folder?.id?'selected':''}>${esc(f.name)}</option>`).join('')}</select>`)}
+        ${field('Standaard map',`<select id="v14ImportTripSection">${sections.map(s=>`<option value="${esc(s.id)}" ${s.id===state13.tripSectionId?'selected':''}>${esc(s.name)}</option>`).join('')}</select>`)}
+        <div class="field full"><small class="muted">Padherkenning heeft voorrang. Voorbeeld: <strong>Reizen/Vietnam/Paklijst/Tandenborstel</strong>.</small></div>`;
+    }
     const subtypes = SUBTYPES[state13.target] || [];
+    return subtypes.length ? field('Standaard categorie/map',`<select id="v13Subtype">${subtypes.map(v=>`<option ${v===state13.subtype?'selected':''}>${esc(v)}</option>`).join('')}</select>`) : '';
+  }
+
+  function renderImports13() {
+    const methodLabel = state13.method === 'manual' ? 'Handmatig invoeren' : state13.method === 'file' ? 'Bestand uploaden' : 'Tekst plakken';
     return `<div class="import-v13">
       <section class="card">
-        <div class="card-head"><div><p class="eyebrow">SAMEN THUIS V13</p><h2>Slimme centrale import</h2></div><span class="tag green">Import → controle → bewerken</span></div>
-        <p>De importer leest nu velden zoals <strong>Frequentie</strong>, <strong>Categorie</strong>, <strong>Gewenst</strong>, <strong>Minimum</strong> en <strong>Eenheid</strong>.</p>
+        <div class="card-head"><div><p class="eyebrow">SAMEN THUIS · CENTRALE INVOER</p><h2>Toevoegen & importeren</h2></div><span class="tag green">${esc(methodLabel)}</span></div>
+        <p>Kies waar het hoort en daarna hoe je het wilt toevoegen.</p>
+
         <div class="form-grid">
           ${field('Waar hoort dit bij?',`<select id="v13Target">${Object.entries(TARGETS).map(([k,v])=>`<option value="${k}" ${k===state13.target?'selected':''}>${esc(v)}</option>`).join('')}</select>`)}
-          ${subtypes.length ? field('Importtype',`<select id="v13Subtype">${subtypes.map(v=>`<option ${v===state13.subtype?'selected':''}>${esc(v)}</option>`).join('')}</select>`) : ''}
-          ${field('Bestand',`<input id="v13File" type="file" accept=".pdf,.docx,.xlsx,.xlsm,.xls,.csv,.txt,.md,application/pdf,text/plain">`,'full')}
-          ${field('Of tekst/lijst plakken',`<textarea id="v13Text" placeholder="Plak hier de inhoud…">${esc(state13.text)}</textarea>`,'full')}
+          ${state13.method !== 'manual' ? destinationFields13() : ''}
         </div>
-        ${state13.filename ? `<p class="muted">Bron: <strong>${esc(state13.filename)}</strong></p>` : ''}
-        <div class="button-row"><button class="primary" data-v13-analyse>Analyseren</button><button class="secondary" data-v13-clear>Leegmaken</button></div>
+
+        <div class="v14-methods">
+          <button class="${state13.method==='manual'?'primary':'secondary'}" data-v14-method="manual">✏️ Handmatig</button>
+          <button class="${state13.method==='file'?'primary':'secondary'}" data-v14-method="file">📄 Bestand uploaden</button>
+          <button class="${state13.method==='text'?'primary':'secondary'}" data-v14-method="text">📋 Tekst plakken</button>
+        </div>
+
+        ${state13.method === 'manual' ? `
+          <div class="form-grid v14-manual-form">${manualForm13()}</div>
+          <div class="button-row"><button class="primary" data-v14-manual-save>Opslaan</button></div>
+        ` : state13.method === 'file' ? `
+          <div class="form-grid">
+            ${field('Bestand',`<input id="v13File" type="file" accept=".pdf,.docx,.xlsx,.xlsm,.xls,.csv,.txt,.md,application/pdf,text/plain">`,'full')}
+          </div>
+          ${state13.filename ? `<p class="muted">Bron: <strong>${esc(state13.filename)}</strong></p>` : ''}
+          <p class="muted">Na kiezen wordt het bestand automatisch gelezen en geanalyseerd.</p>
+        ` : `
+          <div class="form-grid">
+            ${field('Tekst/lijst plakken',`<textarea id="v13Text" placeholder="Bijvoorbeeld: Reizen/Vietnam/Paklijst/Tandenborstel">${esc(state13.text)}</textarea>`,'full')}
+          </div>
+          <div class="button-row"><button class="primary" data-v13-analyse>Analyseren</button><button class="secondary" data-v13-clear>Leegmaken</button></div>
+        `}
       </section>
 
-      ${state13.preview.length ? `<section class="card v13-preview">
+      ${state13.method !== 'manual' ? (state13.preview.length ? `<section class="card v13-preview">
         <div class="card-head"><div><p class="eyebrow">CONTROLE</p><h2>${state13.preview.length} gevonden items</h2></div>
           <div class="button-row"><button class="secondary" data-v13-all>Alles selecteren</button><button class="secondary" data-v13-none>Niets</button><button class="primary" data-v13-commit>Geselecteerde toevoegen</button></div>
         </div>
@@ -315,7 +495,7 @@ console.info('Samen Thuis update 13.0 geladen');
             <div class="v13-fields">${previewEditor(entry,i)}</div>
             <small class="muted">${esc(previewMeta(entry.item,state13.target))}</small>
           </article>`).join('')}</div>
-      </section>` : `<section class="card"><p class="muted">Nog niets geanalyseerd.</p></section>`}
+      </section>` : `<section class="card"><p class="muted">Nog niets geanalyseerd.</p></section>`) : ''}
     </div>`;
   }
 
@@ -382,10 +562,36 @@ console.info('Samen Thuis update 13.0 geladen');
     toast(`${state13.preview.length} items gevonden`);
   }
 
+  function resolveTripDestination13(item) {
+    let folder = data.tripFolders?.find(f=>f.id===item.tripFolderId);
+    if (!folder && item._pendingFolderName) {
+      folder = findTripFolderByName(item._pendingFolderName);
+      if (!folder) {
+        folder = {id:id(), name:item._pendingFolderName, startDate:'', endDate:'', note:'Aangemaakt via centrale invoer'};
+        data.tripFolders.push(folder);
+      }
+    }
+    if (!folder) folder = selectedTripFolder();
+    if (!folder) return item;
+
+    let section = data.tripSections?.find(s=>s.id===item.tripSectionId && s.tripFolderId===folder.id);
+    const wantedSection = item._pendingSectionName || state13.subtype || 'Algemeen';
+    if (!section) section = findTripSectionByName(folder.id,wantedSection);
+    if (!section) {
+      section = {id:id(), tripFolderId:folder.id, name:wantedSection};
+      data.tripSections.push(section);
+    }
+    const clean = {...item, tripFolderId:folder.id, tripSectionId:section.id};
+    delete clean._pendingFolderName;
+    delete clean._pendingSectionName;
+    return clean;
+  }
+
   function commit13() {
     syncCardEdits();
-    const selected=state13.preview.filter(x=>x.selected).map(x=>x.item);
+    let selected=state13.preview.filter(x=>x.selected).map(x=>x.item);
     if(!selected.length) return toast('Selecteer minimaal één item');
+    if(state13.target==='trips') selected=selected.map(resolveTripDestination13);
     data[state13.target].push(...selected);
     save();
     const count=selected.length;
@@ -394,18 +600,69 @@ console.info('Samen Thuis update 13.0 geladen');
     toast(`${count} items toegevoegd aan ${TARGETS[state13.target]}`);
   }
 
+  function manualValue13(name) {
+    const el=document.querySelector(`[data-v14-manual="${name}"]`);
+    if(!el) return '';
+    return el.type==='checkbox' ? el.checked : el.value;
+  }
+
+  function saveManual13() {
+    const t=state13.target;
+    const title=String(manualValue13('title')||'').trim();
+    if(!title) return toast('Vul eerst een titel/onderwerp in');
+    let item;
+
+    if(t==='planning') item={id:id(),title,date:manualValue13('date')||todayISO(),time:manualValue13('time'),endTime:manualValue13('endTime'),calendarId:manualValue13('calendarId')||'persoonlijk',person:manualValue13('person')||'Samen',personSource:'manual'};
+    else if(t==='meals') item={id:id(),title,date:manualValue13('date')||todayISO(),type:manualValue13('type')||'Avondeten'};
+    else if(t==='groceries') item={id:id(),title,category:manualValue13('category')||'Overig',done:false};
+    else if(t==='chores') item={id:id(),title,person:manualValue13('person')||'Samen',due:manualValue13('due')||todayISO(),repeat:manualValue13('repeat')||'Wekelijks',secondWeekday:'',notes:manualValue13('notes')||'',category:manualValue13('category')||'',completedDates:[]};
+    else if(t==='stock') item={id:id(),title,category:manualValue13('category')||'Overig',amount:num(manualValue13('amount'),0),min:num(manualValue13('min'),0),desired:num(manualValue13('desired'),0),unit:manualValue13('unit')||'stuks'};
+    else if(t==='ideas') item={id:id(),title,category:manualValue13('category')||'Thuis',note:manualValue13('note')||'',icon:manualValue13('icon')||'♡'};
+    else if(t==='home') item={id:id(),title,category:manualValue13('category')||'Onderhoud',due:manualValue13('due')||'',repeat:manualValue13('repeat')||'',note:manualValue13('note')||''};
+    else if(t==='trips') {
+      item={id:id(),title,tripFolderId:manualValue13('tripFolderId'),tripSectionId:manualValue13('tripSectionId'),date:manualValue13('date')||'',type:manualValue13('type')||'Notitie',note:manualValue13('note')||'',checkable:Boolean(manualValue13('checkable')),done:false};
+      item=resolveTripDestination13(item);
+    }
+    if(!item) return;
+    data[t].push(item);
+    save(); render();
+    toast(`Toegevoegd aan ${TARGETS[t]}`);
+  }
+
   function bind13() {
     const target=document.querySelector('#v13Target');
     if(target) target.onchange=()=>{
       state13.target=target.value;
       state13.subtype=defaultSubtype(state13.target);
       state13.preview=[];
+      if(state13.target==='trips'){
+        state13.tripFolderId=data.tripFolders?.[0]?.id||'';
+        state13.tripSectionId=data.tripSections?.find(s=>s.tripFolderId===state13.tripFolderId)?.id||'';
+      }
       render();
     };
     const subtype=document.querySelector('#v13Subtype');
     if(subtype) subtype.onchange=()=>{ state13.subtype=subtype.value; };
+
     const text=document.querySelector('#v13Text');
     if(text) text.oninput=()=>{ state13.text=text.value; };
+
+    const importFolder=document.querySelector('#v14ImportTripFolder');
+    if(importFolder) importFolder.onchange=()=>{
+      state13.tripFolderId=importFolder.value;
+      state13.tripSectionId=data.tripSections?.find(s=>s.tripFolderId===state13.tripFolderId)?.id||'';
+      render();
+    };
+    const importSection=document.querySelector('#v14ImportTripSection');
+    if(importSection) importSection.onchange=()=>{state13.tripSectionId=importSection.value;};
+
+    const manualFolder=document.querySelector('#v14TripFolder');
+    if(manualFolder) manualFolder.onchange=()=>{
+      state13.tripFolderId=manualFolder.value;
+      state13.tripSectionId=data.tripSections?.find(s=>s.tripFolderId===state13.tripFolderId)?.id||'';
+      render();
+    };
+
     const file=document.querySelector('#v13File');
     if(file) file.onchange=async()=>{
       const f=file.files?.[0]; if(!f) return;
@@ -429,7 +686,19 @@ console.info('Samen Thuis update 13.0 geladen');
   };
 
   document.addEventListener('click',e=>{
-    if(!e.target.closest('[data-v13-')) return;
+    const method=e.target.closest('[data-v14-method]');
+    if(method){
+      state13.method=method.dataset.v14Method;
+      state13.preview=[];
+      render();
+      return;
+    }
+    if(e.target.closest('[data-v14-manual-save]')) { saveManual13(); return; }
+
+    const v13Control = e.target.closest(
+      '[data-v13-analyse],[data-v13-clear],[data-v13-all],[data-v13-none],[data-v13-commit],[data-v13-bulk]'
+    );
+    if(!v13Control) return;
     if(e.target.closest('[data-v13-analyse]')) { analyse13(); return; }
     if(e.target.closest('[data-v13-clear]')) { state13.text='';state13.filename='';state13.preview=[];render();return; }
     if(e.target.closest('[data-v13-all]')) { document.querySelectorAll('[data-v13-selected]').forEach(x=>x.checked=true);return; }
