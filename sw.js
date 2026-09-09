@@ -1,4 +1,4 @@
-const CACHE='samen-thuis-v14-universal-import';
+const CACHE='samen-thuis-v14-1-import-navigation-fix';
 const ASSETS=[
   './','./index.html','./styles.css','./upgrade-v11.css','./app.js',
   './upgrade-v11.js','./samen-thuis-update-v4.js',

@@ -3,7 +3,7 @@
    Ondersteunt | ; tab, " / " en " - " als scheidingsteken.
    Datums zoals 2027-01-08 blijven intact.
 */
-console.info('Samen Thuis update 14.0 geladen');
+console.info('Samen Thuis update 14.1 geladen');
 
 (() => {
   'use strict';
@@ -409,17 +409,56 @@ Reizen: [reizen] | [reis] | [map/onderdeel] | [titel] | [type] | [omschrijving] 
     });
   }
 
-  render = function renderV140() {
+  function openManualImport14() {
+    state14.legacy=true;
+    render();
+    // De v13-importer staat standaard op handmatig. Als de gebruiker eerder
+    // een andere methode koos, schakelen we expliciet terug naar Handmatig.
+    setTimeout(()=>document.querySelector('[data-v14-method="manual"]')?.click(),0);
+  }
+
+  function bindTopAdd14() {
+    const add=document.querySelector('#addBtn');
+    if(!add || add.dataset.v14Bound==='1') return;
+    add.dataset.v14Bound='1';
+    add.addEventListener('click',e=>{
+      if(current!=='imports') return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      openManualImport14();
+    },true);
+  }
+
+  render = function renderV141() {
     if(current==='imports' && !state14.legacy) {
       document.querySelector('#view').innerHTML=renderImport14();
       updateSyncBadge();
       bind14();
+      bindTopAdd14();
       return;
     }
+
     baseRender14();
+
+    if(current==='imports' && state14.legacy) {
+      const view=document.querySelector('#view');
+      if(view && !view.querySelector('[data-v14-new]')) {
+        view.insertAdjacentHTML('afterbegin',`
+          <div class="button-row" style="margin-bottom:16px">
+            <button class="secondary" data-v14-new>← Terug naar nieuwe import</button>
+          </div>`);
+      }
+      bindTopAdd14();
+    }
   };
 
   document.addEventListener('click',e=>{
+    if(e.target.closest('[data-v14-new]')) {
+      state14.legacy=false;
+      render();
+      return;
+    }
+
     if(e.target.closest('[data-v14-legacy]')) {
       state14.legacy=true;
       render();
@@ -469,5 +508,5 @@ Reizen: [reizen] | [reis] | [map/onderdeel] | [titel] | [type] | [omschrijving] 
   },true);
 
   save({touch:false});
-  toast('Samen Thuis v14 geladen');
+  toast('Samen Thuis v14.1 geladen');
 })();
