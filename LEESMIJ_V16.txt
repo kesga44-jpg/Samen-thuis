@@ -1,0 +1,53 @@
+SAMEN THUIS v16 – GECOMBINEERDE UPDATE
+
+Deze ZIP bevat de vorige v15-update PLUS de nieuwe slimme huishoudplanning en scroll-fix.
+
+IN DE REPOSITORY:
+VERVANG:
+- index.html
+- sw.js
+
+VOEG TOE / VERVANG INDIEN AL AANWEZIG:
+- samen-thuis-update-v15.js
+- samen-thuis-update-v16.js
+
+LAAT STAAN:
+- app.js
+- upgrade-v11.js
+- samen-thuis-update-v4.js
+- samen-thuis-update-v13.js
+- samen-thuis-update-v14.js
+- samen-thuis-update-v13.css
+- styles.css
+
+OPTIONEEL:
+- Samen_Thuis_Huishouden_v15_verdeeld.txt
+  Deze bevat de aanbevolen verdeling Kees / Daphne / Samen.
+
+V15 BLIJFT INBEGREPEN:
+- Bodemprijzen als aparte database.
+- Gierige Gerda bodemprijzen uit de lijst van 31-08-2026.
+- Nieuwe bodemprijzen-PDF via Importeren.
+- Prijsreferenties op Boodschappen en Voorraad.
+- Aanbevolen taakverdeling.
+
+NIEUW IN V16 – HUISHOUDEN:
+- Geen taak is nog gekoppeld aan een vaste weekdag.
+- completedDates blijft de historie.
+- lastDoneDate wordt automatisch uit de historie opgebouwd.
+- Volgende deadline wordt berekend vanaf de werkelijke laatste afronding.
+- Wekelijks = maximaal 7 dagen na laatste uitvoering.
+- 2× per week = flexibele tussenruimte van maximaal circa 4 dagen.
+- 3× per week = flexibele tussenruimte van maximaal circa 3 dagen.
+- Elke 2 weken = 14 dagen na laatste uitvoering.
+- Elke 4 weken = 28 dagen.
+- Maandelijks / 2 / 3 / 6 maanden / jaarlijks werken met kalendermaanden.
+- Taken verschijnen al vóór de deadline als 'binnen X dagen'.
+- 2× en 3× per week tonen 0/2, 1/2, 2/2 respectievelijk 0/3 etc.
+- Als een cyclus compleet is, laat de app zien wanneer de nieuwe cyclus weer begint.
+- De oude secondWeekday-logica wordt genegeerd.
+
+NIEUW IN V16 – SCROLL:
+- Bij afvinken, wijzigen, verwijderen en andere her-renderacties op dezelfde pagina
+  wordt de huidige scrollpositie hersteld.
+- Bij bewust navigeren naar een andere pagina wordt de oude scrollpositie niet meegenomen.
