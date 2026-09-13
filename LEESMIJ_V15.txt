@@ -1,0 +1,30 @@
+SAMEN THUIS v15 – INSTALLATIE
+
+VERVANG:
+- index.html
+- sw.js
+
+VOEG TOE:
+- samen-thuis-update-v15.js
+
+LAAT STAAN:
+- app.js
+- upgrade-v11.js
+- samen-thuis-update-v4.js
+- samen-thuis-update-v13.js
+- samen-thuis-update-v14.js
+- samen-thuis-update-v13.css
+- styles.css
+
+EXTRA:
+- Samen_Thuis_Huishouden_v15_verdeeld.txt is een optionele importlijst.
+
+NIEUW IN V15:
+- 107 bodemprijsreferenties uit de Gierige Gerda-lijst van 31-08-2026.
+- Op Importeren staat een apart blok 'Bodemprijzenlijst importeren'.
+- Een nieuwere Gierige Gerda PDF kan daar direct geüpload worden.
+- De bodemprijzen worden apart opgeslagen, niet als voorraad.
+- Op Boodschappen en Voorraad zie je passende bodemprijsreferenties.
+- Op Huishouden staat 'Aanbevolen verdeling toepassen'.
+- Die knop verdeelt bekende taken over Kees, Daphne en Samen.
+- Samen betekent gezamenlijke verantwoordelijkheid; één van jullie mag de taak afronden.

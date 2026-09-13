@@ -1,0 +1,32 @@
+SAMEN THUIS – HUISHOUDEN – v15 VERDEELD
+Vaste invoervolgorde:
+[huishouden] | [taak] | [ruimte/categorie] | [frequentie] | [toegewezen aan] | [startdatum] | [volgende datum] | [prioriteit] | [afgevinkt] | [omschrijving/subtaken]
+
+huishouden | Keuken en woonkamer dagelijkse reset | Keuken / woonkamer | Dagelijks | Samen |  |  | Normaal | Nee | Aanrecht, kookplaat en eettafel afnemen; vaatwasser bijhouden; losse spullen terugleggen; afval controleren.
+huishouden | WC schoonmaken | WC | 2× per week | Kees |  |  | Normaal | Nee | Toiletpot, bril, spoelknop, fonteintje, kraan en vloer reinigen.
+huishouden | Badkamer schoonmaken | Badkamer | Wekelijks | Daphne |  |  | Hoog | Nee | Douche reinigen; doucheputje reinigen en haren verwijderen; wastafel reinigen; kranen reinigen/ontkalken; spiegel reinigen; tegels en voegen waar nodig; badkamervloer reinigen.
+huishouden | Vloeren hele huis | Hele woning | Wekelijks | Kees |  |  | Hoog | Nee | Alle ruimtes stofzuigen; daarna alle geschikte vloeren dweilen.
+huishouden | Afstoffen hele huis | Hele woning | Wekelijks | Daphne |  |  | Normaal | Nee | Meubels, vensterbanken, lampen en bereikbare oppervlakken afstoffen.
+huishouden | Keuken grondig schoonmaken | Keuken | Wekelijks | Daphne |  |  | Normaal | Nee | Kastfronten, spatwand, kookplaat, aanrecht, spoelbak, kraan en zichtbare apparatuur reinigen.
+huishouden | Slaapkamer opruimen en schoonmaken | Slaapkamer | Wekelijks | Samen |  |  | Normaal | Nee | Losse spullen opruimen; oppervlakken afnemen; nachtkastjes en bereikbare randen schoonmaken.
+huishouden | Bureau- en wasruimte opruimen | Bureau-/kast-/wasruimte | Wekelijks | Kees |  |  | Normaal | Nee | Bureau vrijmaken; losse spullen opruimen; droogrek en waszone netjes maken; oppervlakken afnemen.
+huishouden | Hal opruimen en schoonmaken | Hal | Wekelijks | Kees |  |  | Laag | Nee | Schoenen, jassen en tassen ordenen; deur, mat en bereikbare oppervlakken schoonmaken.
+huishouden | Koelkast weekcontrole | Keuken | Wekelijks | Daphne |  |  | Normaal | Nee | Restjes en houdbaarheid controleren; producten die snel op moeten naar voren zetten.
+huishouden | Spiegels en glazen oppervlakken reinigen | Hele woning | Elke 2 weken | Daphne |  |  | Laag | Nee | Spiegels en glazen oppervlakken streeploos reinigen.
+huishouden | Deurklinken en lichtknoppen reinigen | Hele woning | Elke 2 weken | Samen |  |  | Laag | Nee | Deurklinken, lichtknoppen en veel aangeraakte oppervlakken reinigen.
+huishouden | Onder bed, bank en meubels stofzuigen | Hele woning | Elke 2 weken | Kees |  |  | Normaal | Nee | Onder bed, bank en andere bereikbare meubels extra stofzuigen.
+huishouden | Afvalbakken reinigen | Keuken / WC | Elke 2 weken | Kees |  |  | Laag | Nee | Afvalbakken leegmaken en binnen- en buitenzijde reinigen.
+huishouden | Beddengoed verschonen | Slaapkamer | Wekelijks | Samen |  |  | Normaal | Nee | Bed afhalen; beddengoed wassen; schoon beddengoed opmaken.
+huishouden | Handdoeken en keukentextiel vervangen | Badkamer / keuken | 2× per week | Samen |  |  | Normaal | Nee | Handdoeken, theedoeken, keukenhanddoeken en vaatdoekjes vervangen en wassen.
+huishouden | Kledingwas verwerken | Was | 2× per week | Samen |  |  | Normaal | Nee | Was sorteren en draaien; ophangen; na drogen afhalen, opvouwen en opruimen.
+huishouden | Badmat en schoonmaakdoeken wassen | Badkamer / schoonmaak | Elke 2 weken | Daphne |  |  | Laag | Nee | Badmat, schoonmaakdoeken en microvezeldoeken wassen en volledig laten drogen.
+huishouden | Koelkast volledig schoonmaken | Keuken | Maandelijks | Daphne |  |  | Normaal | Nee | Koelkast per zone leeghalen; plateaus, laden en rubbers reinigen; gecontroleerd terugzetten.
+huishouden | Oven en afzuigkap grondig reinigen | Keuken | Maandelijks | Kees |  |  | Normaal | Nee | Oven en bakplaten reinigen; afzuigkap afnemen; vetfilters reinigen.
+huishouden | Badkamer dieptereiniging | Badkamer | Maandelijks | Daphne |  |  | Normaal | Nee | Voegen en kitranden extra reinigen; hardnekkige kalkaanslag verwijderen; doucheputje extra grondig reinigen.
+huishouden | Plinten, deuren en kozijnen reinigen | Hele woning | Maandelijks | Samen |  |  | Laag | Nee | Plinten, deurvlakken, kozijnen en moeilijk bereikbare randen reinigen.
+huishouden | Radiatoren en ventilatieroosters reinigen | Hele woning | Maandelijks | Kees |  |  | Laag | Nee | Radiatoren stofvrij maken en ventilatieroosters reinigen.
+huishouden | Ramen binnenzijde en kozijnen schoonmaken | Hele woning | Maandelijks | Kees |  |  | Laag | Nee | Bereikbare ramen aan binnenzijde, vensterbanken en kozijnen reinigen.
+huishouden | Bank en hoge oppervlakken grondig reinigen | Woonkamer | Maandelijks | Daphne |  |  | Laag | Nee | Bank grondig stofzuigen; bovenkanten van kasten en hoge oppervlakken afstoffen.
+huishouden | Wasmachine onderhouden | Was | Maandelijks | Kees |  |  | Normaal | Nee | Rubber, deur en wasmiddellade reinigen; reinigingsprogramma draaien; wasruimte afnemen.
+huishouden | Voorraadkast en keukenkastjes nalopen | Keuken | Maandelijks | Daphne |  |  | Laag | Nee | Zones leeghalen; reinigen; houdbaarheid controleren; logisch terugplaatsen.
+huishouden | Kledingkast en opbergkast nalopen | Slaapkamer / bureaukamer | Maandelijks | Samen |  |  | Laag | Nee | Kasten per zone opruimen; oppervlakken reinigen; ongebruikte spullen apart zetten.
