@@ -1,3 +1,0 @@
-Voeg DIRECT ONDER de bestaande app.js-regel in index.html toe:
-
-<script src="samen-thuis-update-v4.js?v=4.0.0"></script>
