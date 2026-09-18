@@ -1,10 +1,19 @@
 {
-  "name":"Samen Thuis – Kees & Daphne",
-  "short_name":"Samen Thuis",
-  "start_url":"./",
-  "display":"standalone",
-  "background_color":"#f3f6f8",
-  "theme_color":"#17243a",
-  "lang":"nl",
-  "icons":[{"src":"icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]
+  "name": "Samen Thuis – Kees & Daphne",
+  "short_name": "Samen Thuis",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f3f6f8",
+  "theme_color": "#17243a",
+  "lang": "nl",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "version": "23.4",
+  "description": "Samen Thuis — opgeschoonde en gedocumenteerde stylesheet per pagina en onderdeel"
 }

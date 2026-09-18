@@ -1,3 +1,5 @@
+
+/* ===== GEÏNTEGREERD: app.js ===== */
 const STORAGE_KEY = 'samenThuisDataV2';
 const LEGACY_STORAGE_KEY = 'samenThuisDataV1';
 const SYNC_KEY = 'samenThuisSyncV1';
@@ -127,6 +129,14 @@ const groupBy = (items, keyFn) => items.reduce((groups, item) => {
 function migrateData(raw) {
   if (!raw || typeof raw !== 'object') return clone(initialData);
   const migrated = clone(initialData);
+  // v23.1 DATA-VEILIG: behoud ook velden die door latere/oude modules zijn toegevoegd.
+  // Bekende structuren worden hieronder nog genormaliseerd, onbekende structuren
+  // worden één-op-één meegenomen zodat een update ze niet stilzwijgend verwijdert.
+  Object.keys(raw).forEach(key => {
+    if (!(key in migrated)) {
+      try { migrated[key] = clone(raw[key]); } catch { migrated[key] = raw[key]; }
+    }
+  });
   ['planning', 'meals', 'groceries', 'chores', 'stock', 'ideas', 'home', 'trips'].forEach(key => {
     if (Array.isArray(raw[key])) migrated[key] = raw[key];
   });
@@ -172,6 +182,13 @@ function migrateData(raw) {
     .filter(item => item && typeof item.name === 'string' && !excludedNames.has(calendarNameKey(item.name)))
     .map(item => ({ ...item, person: validCalendarPerson(item.person) || inferCalendarPerson(item.name) }));
   migrated.dailyAnswers = raw.dailyAnswers && typeof raw.dailyAnswers === 'object' ? raw.dailyAnswers : {};
+  // v23: preserve backward-compatible financial data instead of dropping it during migration.
+  if (raw.budget && typeof raw.budget === 'object') migrated.budget = clone(raw.budget);
+  if (raw.budget19 && typeof raw.budget19 === 'object') migrated.budget19 = clone(raw.budget19);
+  if (raw.budgetV23 && typeof raw.budgetV23 === 'object') migrated.budgetV23 = clone(raw.budgetV23);
+  if (Array.isArray(raw.priceReferences)) migrated.priceReferences = raw.priceReferences;
+  if (raw.priceReferenceSource) migrated.priceReferenceSource = raw.priceReferenceSource;
+  if (raw.priceReferenceUpdatedAt) migrated.priceReferenceUpdatedAt = raw.priceReferenceUpdatedAt;
   migrated.planning = migrated.planning.map(item => ({
     endTime: '',
     calendarId: 'persoonlijk',
@@ -192,8 +209,26 @@ function migrateData(raw) {
 function loadData() {
   try {
     const stored = localStorage.getItem(STORAGE_KEY) || localStorage.getItem(LEGACY_STORAGE_KEY);
-    return stored ? migrateData(JSON.parse(stored)) : clone(initialData);
+    if (!stored) return clone(initialData);
+
+    // v23.1 DATA-VEILIG: maak vóór migratie automatisch een ongewijzigde snapshot.
+    // De normale opslagkey blijft samenThuisDataV2, dus bestaande Voorraad,
+    // Boodschappen, Huishouden, Reizen enz. blijven op dezelfde plek staan.
+    try {
+      if (!localStorage.getItem('samenThuisPreV23Backup')) {
+        localStorage.setItem('samenThuisPreV23Backup', stored);
+        localStorage.setItem('samenThuisPreV23BackupAt', new Date().toISOString());
+      }
+    } catch {}
+
+    return migrateData(JSON.parse(stored));
   } catch {
+    // Bij een parse/migratiefout proberen we de safety snapshot terug te lezen
+    // in plaats van direct met voorbeelddata te starten.
+    try {
+      const backup = localStorage.getItem('samenThuisPreV23Backup');
+      if (backup) return migrateData(JSON.parse(backup));
+    } catch {}
     return clone(initialData);
   }
 }
@@ -1604,3 +1639,3688 @@ handleInitialAgendaImport();
 setTimeout(captureBrainyQuote, 600);
 refreshBrainyQuoteRSS();
 if (syncConfigured()) syncNow();
+
+;
+
+
+/* ===== GEÏNTEGREERD: upgrade-v11.js ===== */
+/* Samen Thuis v11 – travel editing, import preview, priorities and automatic two-way sync */
+(() => {
+  if (window.__SAMEN_THUIS_V11_LOADED__) return;
+  window.__SAMEN_THUIS_V11_LOADED__ = true;
+
+  const AUTO_SYNC_INTERVAL_MS = 30000;
+  const PRIORITIES = ['low', 'medium', 'high'];
+  const PRIORITY_LABELS = { low: 'Laag', medium: 'Gemiddeld', high: 'Hoog' };
+  const PRIORITY_RANK = { high: 0, medium: 1, low: 2, '': 3 };
+  const TRAVEL_TYPES = ['Voorbereiding', 'Reservering', 'Vervoer', 'Verblijf', 'Activiteit', 'Eten', 'Budget', 'Documenten', 'Paklijst', 'Notitie'];
+
+  let autoSyncInterval = null;
+  let travelDraft = [];
+  let travelDraftFolderId = '';
+
+  const baseFormConfig = formConfig;
+  const baseOpenAdd = openAdd;
+  const baseRenderTrips = renderTrips;
+  const baseRenderSettings = renderSettings;
+  const baseUpdateSyncBadge = updateSyncBadge;
+
+  const nowIso = () => new Date().toISOString();
+
+  function isImportant(value) {
+    return value === true || value === 'true' || value === 'on' || value === 1;
+  }
+
+  function normalisePriority(item) {
+    item.important = isImportant(item.important);
+    item.priority = item.important && PRIORITIES.includes(item.priority) ? item.priority : (item.important ? 'medium' : '');
+    if (!item.updatedAt) item.updatedAt = data.meta?.updatedAt || nowIso();
+    return item;
+  }
+
+  function normaliseTravelData({ persist = false } = {}) {
+    (data.tripFolders || []).forEach(folder => {
+      folder.createdAt ||= data.meta?.updatedAt || nowIso();
+      folder.updatedAt ||= folder.createdAt;
+    });
+    (data.tripSections || []).forEach(section => {
+      section.createdAt ||= data.meta?.updatedAt || nowIso();
+      section.updatedAt ||= section.createdAt;
+    });
+    (data.trips || []).forEach(normalisePriority);
+    if (persist) localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  }
+
+  function syncTimeLabel(value) {
+    if (!value) return 'Nog niet gesynchroniseerd';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return 'Nog niet gesynchroniseerd';
+    const today = new Date();
+    const sameDay = date.toDateString() === today.toDateString();
+    return `${sameDay ? 'Vandaag' : date.toLocaleDateString('nl-NL', { day: 'numeric', month: 'short' })} om ${date.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })}`;
+  }
+
+  function priorityBadge(item) {
+    if (!item.important) return '';
+    const priority = PRIORITIES.includes(item.priority) ? item.priority : 'medium';
+    return `<span class="priority-badge ${priority}">${PRIORITY_LABELS[priority]}</span>`;
+  }
+
+  function markUpdated(item) {
+    item.updatedAt = nowIso();
+  }
+
+  formConfig = function formConfigV11(view) {
+    const config = baseFormConfig(view);
+    if (view !== 'trips' || !config) return config;
+    config.fields = config.fields.map(field => [...field]);
+    if (!config.fields.some(([name]) => name === 'important')) {
+      config.fields.push(['important', 'Belangrijk / prioriteit', 'checkbox']);
+      config.fields.push(['priority', 'Prioriteit', 'select', [['low', 'Laag'], ['medium', 'Gemiddeld'], ['high', 'Hoog']], 'trip-priority-field']);
+    }
+    return config;
+  };
+
+  function updateAddPriorityVisibility() {
+    const important = document.querySelector('#f-important');
+    const priority = document.querySelector('#f-priority');
+    const field = priority?.closest('.trip-priority-field');
+    if (!important || !priority || !field) return;
+    if (!priority.dataset.initialised) {
+      priority.value = 'medium';
+      priority.dataset.initialised = '1';
+    }
+    field.hidden = !important.checked;
+    priority.disabled = !important.checked;
+  }
+
+  openAdd = function openAddV11(...args) {
+    baseOpenAdd(...args);
+    if (current === 'trips') setTimeout(updateAddPriorityVisibility, 0);
+  };
+
+  openTravelActions = function openTravelActionsV11() {
+    normaliseTravelData();
+    return data.trips.filter(item => item.checkable && !item.done).sort((a, b) => {
+      const importantOrder = Number(Boolean(b.important)) - Number(Boolean(a.important));
+      if (importantOrder) return importantOrder;
+      const priorityOrder = PRIORITY_RANK[a.priority || ''] - PRIORITY_RANK[b.priority || ''];
+      if (priorityOrder) return priorityOrder;
+      const dateOrder = (a.date || '9999-12-31').localeCompare(b.date || '9999-12-31');
+      return dateOrder || a.title.localeCompare(b.title, 'nl');
+    });
+  };
+
+  renderTravelActions = function renderTravelActionsV11() {
+    const actions = openTravelActions().slice(0, 10);
+    return `<section class="card travel-actions"><div class="card-head"><div><p class="eyebrow">Belangrijkste reisacties</p><h2>Prioriteiten & deadlines</h2></div><button class="text-btn" data-view="trips">Alle reizen</button></div><div class="list">${actions.length ? actions.map(item => {
+      const folder = tripFolderById(item.tripFolderId);
+      const section = tripSectionById(item.tripSectionId);
+      const overdue = item.date && item.date < todayISO();
+      const timing = item.date ? `${overdue ? 'Te laat · ' : ''}${fmtDate(item.date)}` : 'Geen deadline';
+      return `<div class="list-item travel-action ${overdue ? 'overdue' : ''}"><button class="check" data-toggle="trips:${item.id}" aria-label="${esc(item.title)} afronden"></button><div class="item-main"><div class="travel-title-row"><strong>${esc(item.title)}</strong>${priorityBadge(item)}</div><small>${esc(folder?.name || 'Reis')}${section ? ` · ${esc(section.name)}` : ''} · ${esc(timing)}</small></div></div>`;
+    }).join('') : '<p class="muted">Geen open reisacties.</p>'}</div>${openTravelActions().length > 10 ? `<p class="muted travel-more">Nog ${openTravelActions().length - 10} acties staan bij Reizen.</p>` : ''}</section>`;
+  };
+
+  tripItemRow = function tripItemRowV11(item) {
+    normalisePriority(item);
+    const hasDate = Boolean(item.date);
+    return `<div class="list-item ${item.done ? 'is-done' : ''}">${item.checkable ? `<button class="check ${item.done ? 'done' : ''}" data-toggle="trips:${item.id}" aria-label="${item.done ? 'Opnieuw openen' : 'Afronden'}">${item.done ? '✓' : ''}</button>` : ''}<div class="trip-date">${hasDate ? `<strong>${parseDate(item.date).getDate()}</strong><small>${fmtDate(item.date, { month: 'short' })}</small>` : '<strong>–</strong><small>datum</small>'}</div><div class="item-main"><div class="travel-title-row"><strong class="${item.done ? 'done-text' : ''}">${esc(item.title)}</strong>${priorityBadge(item)}</div><small>${esc(item.type)}${item.checkable ? ' · Afvinken' : ''}${item.note ? ` · ${esc(item.note)}` : ''}</small></div><div class="travel-row-actions"><button class="text-btn" data-edit-trip-item="${item.id}" aria-label="${esc(item.title)} bewerken">✎</button><button class="delete" data-delete="trips:${item.id}" aria-label="${esc(item.title)} verwijderen">×</button></div></div>`;
+  };
+
+  renderTrips = function renderTripsV11() {
+    let html = baseRenderTrips();
+    html = html.replace(/(<button class="delete" data-delete-trip-folder="([^"]+)"[^>]*>×<\/button>)/g, '<div class="travel-edit-actions"><button class="text-btn" data-edit-trip-folder="$2" aria-label="Reismap bewerken">✎</button>$1</div>');
+    html = html.replace(/(<button class="delete" data-delete-trip-section="([^"]+)"[^>]*>×<\/button>)/g, '<div class="travel-edit-actions"><button class="text-btn" data-edit-trip-section="$2" aria-label="Map bewerken">✎</button>$1</div>');
+    return html;
+  };
+
+  renderSettings = function renderSettingsV11() {
+    let html = baseRenderSettings();
+    const detail = `<div class="sync-detail"><strong>Automatische synchronisatie</strong><p>Wijzigingen worden na ongeveer 1,2 seconde verzonden. Als de app open is, controleert hij daarnaast elke 30 seconden op nieuwere gegevens van je andere apparaten.</p><p><strong>Laatst gesynchroniseerd:</strong> ${esc(syncTimeLabel(syncConfig.lastSyncedAt))}</p><p class="muted small">De knop “Nu synchroniseren” blijft alleen als noodknop; normaal hoef je die niet te gebruiken.</p></div>`;
+    html = html.replace('</form>\n    </section>', `</form>${detail}\n    </section>`);
+    return html;
+  };
+
+  updateSyncBadge = function updateSyncBadgeV11(message) {
+    baseUpdateSyncBadge(message);
+    const badge = document.querySelector('#syncState');
+    if (!badge || message) return;
+    if (syncConfigured() && navigator.onLine && !syncing && !syncError && syncConfig.lastSyncedAt) {
+      const date = new Date(syncConfig.lastSyncedAt);
+      badge.textContent = `✓ ${date.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })}`;
+      badge.title = `Laatst gesynchroniseerd: ${syncTimeLabel(syncConfig.lastSyncedAt)}`;
+    }
+  };
+
+  function ensureTravelEditDialog() {
+    if (document.querySelector('#travelEditDialog')) return;
+    const dialog = document.createElement('dialog');
+    dialog.id = 'travelEditDialog';
+    dialog.innerHTML = `<form id="travelEditForm" method="dialog"><div class="dialog-head"><div><p class="eyebrow">Reizen</p><h2 id="travelEditTitle">Bewerken</h2></div><button type="button" class="icon-btn" data-close-travel-edit aria-label="Sluiten">×</button></div><div id="travelEditFields" class="form-grid"></div><div class="dialog-actions"><button type="button" class="secondary" data-close-travel-edit>Annuleren</button><button type="submit" class="primary">Wijzigingen opslaan</button></div></form>`;
+    document.body.appendChild(dialog);
+  }
+
+  function folderOptions(selected) {
+    return data.tripFolders.map(folder => `<option value="${esc(folder.id)}" ${folder.id === selected ? 'selected' : ''}>${esc(folder.name)}</option>`).join('');
+  }
+
+  function sectionOptions(folderId, selected) {
+    return data.tripSections.filter(section => section.tripFolderId === folderId).map(section => `<option value="${esc(section.id)}" ${section.id === selected ? 'selected' : ''}>${esc(section.name)}</option>`).join('');
+  }
+
+  function typeOptions(selected) {
+    return TRAVEL_TYPES.map(type => `<option ${type === selected ? 'selected' : ''}>${esc(type)}</option>`).join('');
+  }
+
+  function priorityOptions(selected = 'medium') {
+    return PRIORITIES.map(value => `<option value="${value}" ${value === selected ? 'selected' : ''}>${PRIORITY_LABELS[value]}</option>`).join('');
+  }
+
+  function openTravelItemEdit(itemId) {
+    ensureTravelEditDialog();
+    const item = data.trips.find(candidate => candidate.id === itemId);
+    if (!item) return;
+    normalisePriority(item);
+    const dialog = document.querySelector('#travelEditDialog');
+    dialog.dataset.mode = 'item';
+    dialog.dataset.id = item.id;
+    document.querySelector('#travelEditTitle').textContent = 'Reisonderdeel bewerken';
+    document.querySelector('#travelEditFields').innerHTML = `
+      <div class="field"><label>Titel</label><input name="title" required value="${esc(item.title)}"></div>
+      <div class="field"><label>Reis</label><select name="tripFolderId" id="editTripFolder">${folderOptions(item.tripFolderId)}</select></div>
+      <div class="field"><label>Map binnen de reis</label><select name="tripSectionId" id="editTripSection">${sectionOptions(item.tripFolderId, item.tripSectionId)}</select></div>
+      <div class="field"><label>Deadline / datum</label><input name="date" type="date" value="${esc(item.date || '')}"></div>
+      <div class="field"><label>Soort</label><select name="type">${typeOptions(item.type)}</select></div>
+      <div class="field"><label>Notitie</label><textarea name="note">${esc(item.note || '')}</textarea></div>
+      <label class="checkbox-field"><input name="checkable" type="checkbox" ${item.checkable ? 'checked' : ''}><span>Dit moet afgevinkt worden</span></label>
+      <label class="checkbox-field"><input name="important" id="editTripImportant" type="checkbox" ${item.important ? 'checked' : ''}><span>Belangrijk / prioriteit</span></label>
+      <div class="field trip-priority-field" id="editTripPriorityField" ${item.important ? '' : 'hidden'}><label>Prioriteit</label><select name="priority" id="editTripPriority" ${item.important ? '' : 'disabled'}>${priorityOptions(item.priority || 'medium')}</select></div>`;
+    dialog.showModal();
+  }
+
+  function openTravelFolderEdit(folderId) {
+    ensureTravelEditDialog();
+    const folder = tripFolderById(folderId);
+    if (!folder) return;
+    const dialog = document.querySelector('#travelEditDialog');
+    dialog.dataset.mode = 'folder';
+    dialog.dataset.id = folder.id;
+    document.querySelector('#travelEditTitle').textContent = 'Reismap bewerken';
+    document.querySelector('#travelEditFields').innerHTML = `
+      <div class="field"><label>Naam van de reis</label><input name="name" required value="${esc(folder.name)}"></div>
+      <div class="field"><label>Vertrekdatum</label><input name="startDate" type="date" value="${esc(folder.startDate || '')}"></div>
+      <div class="field"><label>Terugkomstdatum</label><input name="endDate" type="date" value="${esc(folder.endDate || '')}"></div>
+      <div class="field"><label>Notitie</label><textarea name="note">${esc(folder.note || '')}</textarea></div>`;
+    dialog.showModal();
+  }
+
+  function openTravelSectionEdit(sectionId) {
+    ensureTravelEditDialog();
+    const section = tripSectionById(sectionId);
+    if (!section) return;
+    const dialog = document.querySelector('#travelEditDialog');
+    dialog.dataset.mode = 'section';
+    dialog.dataset.id = section.id;
+    document.querySelector('#travelEditTitle').textContent = 'Map bewerken';
+    document.querySelector('#travelEditFields').innerHTML = `<div class="field"><label>Naam van de map</label><input name="name" required value="${esc(section.name)}"></div>`;
+    dialog.showModal();
+  }
+
+  function updateEditPriorityVisibility() {
+    const important = document.querySelector('#editTripImportant');
+    const priority = document.querySelector('#editTripPriority');
+    const field = document.querySelector('#editTripPriorityField');
+    if (!important || !priority || !field) return;
+    field.hidden = !important.checked;
+    priority.disabled = !important.checked;
+  }
+
+  function updateEditSectionOptions() {
+    const folder = document.querySelector('#editTripFolder');
+    const section = document.querySelector('#editTripSection');
+    if (!folder || !section) return;
+    section.innerHTML = sectionOptions(folder.value, '');
+  }
+
+  function handleTravelEditSubmit(event) {
+    event.preventDefault();
+    const dialog = document.querySelector('#travelEditDialog');
+    const values = Object.fromEntries(new FormData(event.target));
+    const mode = dialog.dataset.mode;
+    const targetId = dialog.dataset.id;
+
+    if (mode === 'item') {
+      const item = data.trips.find(candidate => candidate.id === targetId);
+      if (!item) return;
+      const targetSection = tripSectionById(values.tripSectionId);
+      if (!targetSection || targetSection.tripFolderId !== values.tripFolderId) return toast('Kies een geldige map binnen de reis');
+      const checkable = values.checkable === 'on';
+      if (checkable && !values.date) return toast('Kies een deadline voor een onderdeel dat afgevinkt moet worden');
+      const important = values.important === 'on';
+      Object.assign(item, {
+        title: String(values.title || '').trim(),
+        tripFolderId: values.tripFolderId,
+        tripSectionId: values.tripSectionId,
+        date: values.date || '',
+        type: values.type || 'Notitie',
+        note: String(values.note || '').trim(),
+        checkable,
+        done: checkable ? Boolean(item.done) : false,
+        important,
+        priority: important && PRIORITIES.includes(values.priority) ? values.priority : (important ? 'medium' : '')
+      });
+      markUpdated(item);
+    } else if (mode === 'folder') {
+      const folder = tripFolderById(targetId);
+      if (!folder) return;
+      Object.assign(folder, { name: String(values.name || '').trim(), startDate: values.startDate || '', endDate: values.endDate || '', note: String(values.note || '').trim() });
+      markUpdated(folder);
+    } else if (mode === 'section') {
+      const section = tripSectionById(targetId);
+      if (!section) return;
+      section.name = String(values.name || '').trim();
+      markUpdated(section);
+    }
+
+    save();
+    dialog.close();
+    render();
+    toast('Wijzigingen opgeslagen');
+  }
+
+  function hasDateLead(line) {
+    return /^(?:dag\s+\d+\b|\d{1,2}\s+(?:januari|jan|februari|feb|maart|mrt|april|apr|mei|juni|jun|juli|jul|augustus|aug|september|sep|oktober|okt|november|nov|december|dec)\b|20\d{2}-\d{1,2}-\d{1,2}\b|\d{1,2}[-/.]\d{1,2}(?:[-/.]20\d{2})?\b)/i.test(line);
+  }
+
+  function candidateTitleAndNote(text) {
+    const clean = text.trim();
+    if (clean.length <= 170) return { title: clean, note: '' };
+    const boundary = clean.slice(70, 175).search(/[.!?;](?:\s|$)/);
+    const cut = boundary >= 0 ? 70 + boundary + 1 : 167;
+    return { title: `${clean.slice(0, cut).trim()}${cut < clean.length ? '…' : ''}`, note: clean.slice(cut).trim() };
+  }
+
+  function parseTravelCandidates(text, folderId) {
+    const folder = tripFolderById(folderId);
+    if (!folder) return [];
+    const blocks = [];
+    let sectionName = 'Algemeen';
+    let currentBlock = null;
+
+    const pushBlock = () => {
+      if (currentBlock?.text?.trim()) blocks.push(currentBlock);
+      currentBlock = null;
+    };
+
+    String(text || '').replace(/\u00ad/g, '').split(/\r?\n/).forEach(rawLine => {
+      const source = rawLine.replace(/\s+/g, ' ').trim();
+      if (!source || /^pagina\s+\d+(?:\s+van\s+\d+)?$/i.test(source) || /^\d+$/.test(source)) return;
+      const heading = travelImportHeading(source);
+      if (heading) {
+        pushBlock();
+        sectionName = heading;
+        return;
+      }
+      const bullet = /^(?:[-•▪◦‣–—]|✓|✔|☑|☐|□|\[x\]|\[\s?\])\s*/i.test(source);
+      const startsNew = bullet || hasDateLead(source) || !currentBlock;
+      if (startsNew) {
+        pushBlock();
+        currentBlock = { sectionName, text: source };
+      } else if ((currentBlock.text.length + source.length) < 900) {
+        currentBlock.text += ` ${source}`;
+      } else {
+        pushBlock();
+        currentBlock = { sectionName, text: source };
+      }
+    });
+    pushBlock();
+
+    const seen = new Set();
+    return blocks.slice(0, 180).map(block => {
+      const source = block.text;
+      const done = /^(?:✓|✔|☑|\[x\])\s*/i.test(source);
+      const explicitAction = /^(?:☐|□|\[\s?\]|todo:|to-do:|actie:)/i.test(source);
+      const clean = source.replace(/^(?:[-•▪◦‣–—]|✓|✔|☑|☐|□|\[x\]|\[\s?\])\s*/i, '').trim();
+      if (clean.length < 3) return null;
+      const key = clean.toLowerCase().replace(/[^a-z0-9à-ÿ]+/g, ' ').trim();
+      if (!key || seen.has(key)) return null;
+      seen.add(key);
+      const detected = travelImportCategory(clean);
+      const section = detected?.name || block.sectionName || 'Algemeen';
+      const type = detected?.type || travelImportCategory(section)?.type || 'Notitie';
+      const checkable = done || explicitAction || /\b(boeken|reserveren|regelen|controleren|aanvragen|bevestigen|betalen|kopen|bestellen|inpakken|meenemen|afspreken|downloaden|printen)\b/i.test(clean);
+      const split = candidateTitleAndNote(clean);
+      return {
+        selected: true,
+        title: split.title,
+        note: split.note,
+        section,
+        type,
+        date: travelDateFromLine(clean, folder),
+        checkable,
+        done: checkable ? done : false,
+        important: false,
+        priority: ''
+      };
+    }).filter(Boolean).filter(candidate => !data.trips.some(item => item.tripFolderId === folderId && item.title.toLowerCase() === candidate.title.toLowerCase()));
+  }
+
+  function renderTravelDraft() {
+    document.querySelector('#travelImportPreview')?.remove();
+    const importCard = document.querySelector('.travel-import');
+    if (!importCard || !travelDraft.length) return;
+    const section = document.createElement('section');
+    section.id = 'travelImportPreview';
+    section.className = 'card travel-import-preview';
+    section.innerHTML = `<div class="card-head"><div><p class="eyebrow">Controle vóór import</p><h2>${travelDraft.length} mogelijke onderdelen gevonden</h2><p class="muted small">Pas tekst, map, type, datum, afvinken en prioriteit eerst aan. Pas na “Geselecteerde importeren” worden ze opgeslagen.</p></div><div class="button-row"><button class="secondary" data-preview-select-all>Alles selecteren</button><button class="secondary" data-preview-select-none>Niets selecteren</button></div></div><div class="travel-preview-list">${travelDraft.map((candidate, index) => `<article class="travel-preview-card" data-preview-index="${index}"><label class="preview-select"><input type="checkbox" data-preview-selected ${candidate.selected ? 'checked' : ''}> Importeren</label><div class="preview-grid"><div class="field preview-title"><label>Titel</label><input data-preview-title value="${esc(candidate.title)}"></div><div class="field"><label>Map</label><input data-preview-section value="${esc(candidate.section)}"></div><div class="field"><label>Soort</label><select data-preview-type>${typeOptions(candidate.type)}</select></div><div class="field"><label>Datum / deadline</label><input type="date" data-preview-date value="${esc(candidate.date || '')}"></div><label class="checkbox-field compact"><input type="checkbox" data-preview-checkable ${candidate.checkable ? 'checked' : ''}><span>Afvinken</span></label><label class="checkbox-field compact"><input type="checkbox" data-preview-important><span>Belangrijk</span></label><div class="field preview-priority" hidden><label>Prioriteit</label><select data-preview-priority disabled>${priorityOptions('medium')}</select></div><div class="field preview-note"><label>Notitie</label><textarea data-preview-note>${esc(candidate.note || '')}</textarea></div></div></article>`).join('')}</div><div class="button-row preview-actions"><button class="secondary" data-preview-cancel>Annuleren</button><button class="primary" data-preview-import>Geselecteerde importeren</button></div>`;
+    importCard.insertAdjacentElement('afterend', section);
+    section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function beginTravelPreview(text, folderId) {
+    const candidates = parseTravelCandidates(text, folderId);
+    if (!candidates.length) return toast('Geen nieuwe reisonderdelen gevonden');
+    travelDraft = candidates;
+    travelDraftFolderId = folderId;
+    renderTravelDraft();
+    toast(`${candidates.length} onderdelen gevonden · controleer ze eerst`);
+  }
+
+  async function readTravelFileToPreview(file) {
+    const folderId = document.querySelector('#travelImportFolder')?.value;
+    if (!folderId) return toast('Kies eerst een reismap');
+    try {
+      toast(file.type === 'application/pdf' || /\.pdf$/i.test(file.name) ? 'PDF wordt gelezen…' : 'Bestand wordt gelezen…');
+      const text = file.type === 'application/pdf' || /\.pdf$/i.test(file.name) ? await extractPdfText(file) : await file.text();
+      if (!text.trim()) return toast('In dit bestand is geen leesbare tekst gevonden');
+      const textarea = document.querySelector('#travelImportText');
+      if (textarea) textarea.value = text;
+      beginTravelPreview(text, folderId);
+    } catch (error) {
+      console.error('Reisbestand lezen mislukt', error);
+      toast('PDF lezen lukte niet. Kopieer de tekst en plak die hier.');
+    }
+  }
+
+  function importPreviewCandidates() {
+    const cards = [...document.querySelectorAll('.travel-preview-card')];
+    let added = 0;
+    let skipped = 0;
+    cards.forEach(card => {
+      if (!card.querySelector('[data-preview-selected]')?.checked) return;
+      const title = card.querySelector('[data-preview-title]')?.value.trim();
+      if (!title) { skipped += 1; return; }
+      const sectionName = card.querySelector('[data-preview-section]')?.value.trim() || 'Algemeen';
+      const duplicate = data.trips.some(item => item.tripFolderId === travelDraftFolderId && item.title.toLowerCase() === title.toLowerCase());
+      if (duplicate) { skipped += 1; return; }
+      const targetSection = ensureTripSection(travelDraftFolderId, sectionName);
+      const important = Boolean(card.querySelector('[data-preview-important]')?.checked);
+      const priority = important ? (card.querySelector('[data-preview-priority]')?.value || 'medium') : '';
+      const checkable = Boolean(card.querySelector('[data-preview-checkable]')?.checked);
+      data.trips.push({
+        id: id(),
+        tripFolderId: travelDraftFolderId,
+        tripSectionId: targetSection.id,
+        title,
+        date: card.querySelector('[data-preview-date]')?.value || '',
+        type: card.querySelector('[data-preview-type]')?.value || 'Notitie',
+        note: card.querySelector('[data-preview-note]')?.value.trim() || '',
+        checkable,
+        done: false,
+        important,
+        priority,
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      });
+      added += 1;
+    });
+    if (!added) return toast('Selecteer minimaal één geldig onderdeel');
+    save();
+    travelDraft = [];
+    travelDraftFolderId = '';
+    render();
+    toast(`${added} onderdelen geïmporteerd${skipped ? ` · ${skipped} overgeslagen` : ''}`);
+  }
+
+  function replaceTravelFileInput() {
+    const oldInput = document.querySelector('#travelImportFile');
+    if (!oldInput || oldInput.dataset.v11 === '1') return;
+    const fresh = oldInput.cloneNode(true);
+    fresh.dataset.v11 = '1';
+    oldInput.replaceWith(fresh);
+    fresh.addEventListener('change', event => {
+      if (event.target.files[0]) readTravelFileToPreview(event.target.files[0]);
+      event.target.value = '';
+    });
+  }
+
+  syncNow = async function syncNowV11({ manual = false } = {}) {
+    if (!syncConfigured() || syncing || !navigator.onLine) {
+      if (manual && !navigator.onLine) toast('Geen internetverbinding');
+      return;
+    }
+    syncing = true;
+    syncError = '';
+    updateSyncBadge();
+    try {
+      if (!window.crypto?.subtle) throw new Error('Versleuteling vereist HTTPS');
+      const householdId = await sha256(syncConfig.householdCode.trim());
+      const baseUrl = syncConfig.projectUrl.replace(/\/+$/, '');
+      const response = await fetch(`${baseUrl}/rest/v1/household_data?id=eq.${householdId}&select=payload,updated_at`, { headers: supabaseHeaders() });
+      if (!response.ok) throw new Error(`Supabase gaf ${response.status}`);
+      const rows = await response.json();
+      let remoteData = null;
+      if (rows[0]?.payload) remoteData = migrateData(await decryptData(rows[0].payload, syncConfig.householdCode));
+
+      const localTime = new Date(data.meta?.updatedAt || 0).getTime();
+      const remoteTime = new Date(remoteData?.meta?.updatedAt || 0).getTime();
+      let remoteLoaded = false;
+
+      if (!remoteData) {
+        const payload = await encryptData(data, syncConfig.householdCode);
+        const upload = await fetch(`${baseUrl}/rest/v1/household_data?on_conflict=id`, {
+          method: 'POST', headers: { ...supabaseHeaders(), Prefer: 'resolution=merge-duplicates,return=minimal' },
+          body: JSON.stringify({ id: householdId, payload, updated_at: data.meta.updatedAt })
+        });
+        if (!upload.ok) throw new Error(`Opslaan gaf ${upload.status}`);
+      } else if (remoteTime > localTime) {
+        data = remoteData;
+        normaliseTravelData();
+        save({ touch: false, sync: false });
+        remoteLoaded = true;
+      } else if (localTime > remoteTime) {
+        const payload = await encryptData(data, syncConfig.householdCode);
+        const upload = await fetch(`${baseUrl}/rest/v1/household_data?on_conflict=id`, {
+          method: 'POST', headers: { ...supabaseHeaders(), Prefer: 'resolution=merge-duplicates,return=minimal' },
+          body: JSON.stringify({ id: householdId, payload, updated_at: data.meta.updatedAt })
+        });
+        if (!upload.ok) throw new Error(`Opslaan gaf ${upload.status}`);
+      }
+
+      syncConfig.lastSyncedAt = nowIso();
+      localStorage.setItem(SYNC_KEY, JSON.stringify(syncConfig));
+      syncError = '';
+      if (current === 'settings' || remoteLoaded) render();
+      if (manual) toast('Apparaten zijn bijgewerkt');
+    } catch (error) {
+      console.error('Synchronisatie mislukt', error);
+      syncError = error.message || 'Synchronisatie mislukt';
+      if (manual) toast('Synchronisatie lukt nog niet. Controleer de instellingen.');
+    } finally {
+      syncing = false;
+      updateSyncBadge();
+    }
+  };
+
+  function startAutomaticSync() {
+    if (autoSyncInterval) clearInterval(autoSyncInterval);
+    autoSyncInterval = setInterval(() => {
+      if (document.visibilityState === 'visible') syncNow();
+    }, AUTO_SYNC_INTERVAL_MS);
+  }
+
+  document.addEventListener('click', event => {
+    const importText = event.target.closest('[data-import-travel-text]');
+    if (importText) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const folderId = document.querySelector('#travelImportFolder')?.value;
+      const text = document.querySelector('#travelImportText')?.value || '';
+      if (!folderId) return toast('Kies eerst een reismap');
+      if (!text.trim()) return toast('Plak eerst de tekst uit het reisplan');
+      beginTravelPreview(text, folderId);
+      return;
+    }
+
+    const editItem = event.target.closest('[data-edit-trip-item]');
+    if (editItem) { event.preventDefault(); openTravelItemEdit(editItem.dataset.editTripItem); return; }
+    const editFolder = event.target.closest('[data-edit-trip-folder]');
+    if (editFolder) { event.preventDefault(); openTravelFolderEdit(editFolder.dataset.editTripFolder); return; }
+    const editSection = event.target.closest('[data-edit-trip-section]');
+    if (editSection) { event.preventDefault(); openTravelSectionEdit(editSection.dataset.editTripSection); return; }
+    if (event.target.closest('[data-close-travel-edit]')) { document.querySelector('#travelEditDialog')?.close(); return; }
+    if (event.target.closest('[data-preview-select-all]')) { document.querySelectorAll('[data-preview-selected]').forEach(input => { input.checked = true; }); return; }
+    if (event.target.closest('[data-preview-select-none]')) { document.querySelectorAll('[data-preview-selected]').forEach(input => { input.checked = false; }); return; }
+    if (event.target.closest('[data-preview-cancel]')) { travelDraft = []; travelDraftFolderId = ''; document.querySelector('#travelImportPreview')?.remove(); return; }
+    if (event.target.closest('[data-preview-import]')) { importPreviewCandidates(); return; }
+  }, true);
+
+  document.addEventListener('change', event => {
+    if (event.target.matches('#f-important')) updateAddPriorityVisibility();
+    if (event.target.matches('#editTripImportant')) updateEditPriorityVisibility();
+    if (event.target.matches('#editTripFolder')) updateEditSectionOptions();
+    if (event.target.matches('[data-preview-important]')) {
+      const card = event.target.closest('.travel-preview-card');
+      const field = card?.querySelector('.preview-priority');
+      const select = card?.querySelector('[data-preview-priority]');
+      if (field && select) {
+        field.hidden = !event.target.checked;
+        select.disabled = !event.target.checked;
+      }
+    }
+  });
+
+  document.querySelector('#itemForm')?.addEventListener('submit', () => {
+    if (current !== 'trips') return;
+    setTimeout(() => {
+      normaliseTravelData();
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+      if (syncConfigured()) scheduleSync();
+    }, 0);
+  });
+
+  ensureTravelEditDialog();
+  document.querySelector('#travelEditForm')?.addEventListener('submit', handleTravelEditSubmit);
+  replaceTravelFileInput();
+
+  window.addEventListener('focus', () => syncNow());
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') syncNow();
+  });
+
+  normaliseTravelData({ persist: true });
+  startAutomaticSync();
+  render();
+  updateSyncBadge();
+  syncNow();
+})();
+
+;
+
+
+/* ===== GEÏNTEGREERD: samen-thuis-update-v4.js ===== */
+console.info('Samen Thuis update 12.0 geladen');
+
+(() => {
+  'use strict';
+
+  // Deze file wordt na app.js en upgrade-v11.js geladen en gebruikt bewust
+  // de bestaande Samen Thuis data/functions in plaats van een tweede opslaglaag.
+
+  const IMPORT_TARGETS = {
+    planning: 'Agenda',
+    meals: 'Weekmenu',
+    groceries: 'Boodschappen',
+    chores: 'Huishouden',
+    stock: 'Voorraad',
+    ideas: 'Samen doen',
+    home: 'Woning',
+    trips: 'Reizen'
+  };
+
+  const importState = { target: 'planning', text: '', filename: '', preview: [] };
+  const oldRender = render;
+
+  sections.imports = { label: 'Importeren', icon: '↥' };
+
+  function importEsc(value='') { return esc(value); }
+
+  function ensureImportDialog() {
+    if (document.querySelector('#editItemDialogV12')) return;
+    const dialog = document.createElement('dialog');
+    dialog.id = 'editItemDialogV12';
+    dialog.innerHTML = `
+      <form id="editItemFormV12">
+        <div class="dialog-head">
+          <div><p class="eyebrow">Bewerken</p><h2 id="editItemTitleV12">Item bewerken</h2></div>
+          <button type="button" class="icon-btn" data-edit-close>×</button>
+        </div>
+        <div id="editItemFieldsV12" class="form-grid"></div>
+        <div class="dialog-actions">
+          <button type="button" class="secondary" data-edit-close>Annuleren</button>
+          <button type="submit" class="primary">Wijzigingen opslaan</button>
+        </div>
+      </form>`;
+    document.body.appendChild(dialog);
+    dialog.querySelectorAll('[data-edit-close]').forEach(b => b.addEventListener('click', () => dialog.close()));
+  }
+
+  function renderImportsV12() {
+    return `<div class="settings-grid import-center-v12">
+      <section class="card settings-card">
+        <div class="card-head">
+          <div><p class="eyebrow">Één centrale ingang</p><h2>Bestand of lijst importeren</h2></div>
+          <span class="tag green">Eerst controleren</span>
+        </div>
+        <p>Kies waar de informatie hoort. Daarna leest de app het bestand of de geplakte tekst en toont eerst een controlelijst. Pas na bevestigen worden de items toegevoegd.</p>
+        <div class="form-grid">
+          <div class="field">
+            <label for="centralImportTarget">Waar hoort dit bij?</label>
+            <select id="centralImportTarget">
+              ${Object.entries(IMPORT_TARGETS).map(([key,label]) => `<option value="${key}" ${key===importState.target?'selected':''}>${label}</option>`).join('')}
+            </select>
+          </div>
+          <div class="field">
+            <label for="centralImportFile">Bestand</label>
+            <input id="centralImportFile" type="file" accept=".pdf,.docx,.xlsx,.xlsm,.xls,.csv,.txt,.md,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/plain,text/csv">
+          </div>
+          <div class="field" style="grid-column:1/-1">
+            <label for="centralImportText">Of tekst/lijst plakken</label>
+            <textarea id="centralImportText" placeholder="Plak hier de inhoud…">${importEsc(importState.text)}</textarea>
+          </div>
+        </div>
+        ${importState.filename ? `<p class="muted">Gelezen bestand: <strong>${importEsc(importState.filename)}</strong></p>` : ''}
+        <div class="button-row">
+          <button class="primary" type="button" data-central-analyse>Analyseren</button>
+          <button class="secondary" type="button" data-central-clear>Leegmaken</button>
+        </div>
+      </section>
+
+      <section class="card settings-card">
+        <div class="card-head">
+          <div><p class="eyebrow">Controle</p><h2>${importState.preview.length} gevonden items</h2></div>
+          ${importState.preview.length ? '<button class="primary" type="button" data-central-commit>Geselecteerde toevoegen</button>' : ''}
+        </div>
+        <div class="list">
+          ${importState.preview.length ? importState.preview.map((entry,index) => `
+            <div class="list-item">
+              <input type="checkbox" data-preview-check="${index}" ${entry.selected?'checked':''}>
+              <div class="item-main">
+                <strong>${importEsc(previewTitle(entry.item))}</strong>
+                <small>${importEsc(previewSubtitle(entry.item))}</small>
+              </div>
+              <button class="secondary" type="button" data-preview-edit="${index}">✎</button>
+            </div>`).join('') : empty('Nog niets geanalyseerd')}
+        </div>
+      </section>
+    </div>`;
+  }
+
+  render = function() {
+    if (current === 'imports') {
+      document.querySelector('#view').innerHTML = renderImportsV12();
+      updateSyncBadge();
+      bindImportPageV12();
+      return;
+    }
+    oldRender();
+    requestAnimationFrame(addEditButtonsV12);
+  };
+
+  function previewTitle(item) {
+    return item.title || item.name || item.task || item.text || 'Item';
+  }
+
+  function previewSubtitle(item) {
+    const bits = [item.date || item.due || '', item.type || item.category || item.repeat || '', item.person || ''].filter(Boolean);
+    return bits.join(' · ') || IMPORT_TARGETS[importState.target];
+  }
+
+  function bindImportPageV12() {
+    const target = document.querySelector('#centralImportTarget');
+    if (target) target.onchange = () => {
+      importState.target = target.value;
+      importState.preview = importState.text ? parseCentralTextV12(importState.text, importState.target) : [];
+      render();
+    };
+    const text = document.querySelector('#centralImportText');
+    if (text) text.oninput = () => { importState.text = text.value; };
+    const file = document.querySelector('#centralImportFile');
+    if (file) file.onchange = async () => {
+      const selected = file.files?.[0];
+      if (!selected) return;
+      try {
+        toast('Bestand wordt gelezen…');
+        importState.filename = selected.name;
+        importState.text = await readCentralFileV12(selected);
+        importState.preview = parseCentralTextV12(importState.text, importState.target);
+        render();
+        toast(`${importState.preview.length} items gevonden`);
+      } catch (error) {
+        console.error(error);
+        toast('Bestand lezen is mislukt');
+      }
+    };
+  }
+
+  async function loadExternalV12(src, test) {
+    if (test()) return;
+    await new Promise((resolve,reject) => {
+      const script = document.createElement('script');
+      script.src = src;
+      script.onload = resolve;
+      script.onerror = reject;
+      document.head.appendChild(script);
+    });
+  }
+
+  async function readCentralFileV12(file) {
+    const ext = file.name.toLowerCase().split('.').pop();
+    if (['txt','md','csv'].includes(ext)) return file.text();
+
+    if (ext === 'docx') {
+      await loadExternalV12('https://cdn.jsdelivr.net/npm/mammoth@1.12.2/mammoth.browser.min.js', () => Boolean(window.mammoth));
+      return (await window.mammoth.extractRawText({ arrayBuffer: await file.arrayBuffer() })).value || '';
+    }
+
+    if (['xlsx','xlsm','xls'].includes(ext)) {
+      await loadExternalV12('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js', () => Boolean(window.XLSX));
+      const workbook = window.XLSX.read(await file.arrayBuffer(), { type:'array', cellDates:true });
+      return workbook.SheetNames.map(name => `# Werkblad: ${name}\n${window.XLSX.utils.sheet_to_csv(workbook.Sheets[name])}`).join('\n\n');
+    }
+
+    if (ext === 'pdf') {
+      // Gebruik de PDF-functie die de app al voor Reizen heeft.
+      return await extractPdfText(file);
+    }
+    throw new Error('Niet ondersteund bestandstype');
+  }
+
+  function linesV12(text) {
+    return String(text || '').replace(/\r/g,'').split(/\n+/).map(x => x.trim()).filter(Boolean)
+      .filter(x => !/^#\s*(pagina|werkblad)\b/i.test(x));
+  }
+
+  function dateInLineV12(line) {
+    const iso = line.match(/\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\b/);
+    if (iso) return `${iso[1]}-${pad(iso[2])}-${pad(iso[3])}`;
+    const eu = line.match(/\b(\d{1,2})[-/.](\d{1,2})[-/.](20\d{2})\b/);
+    if (eu) return `${eu[3]}-${pad(eu[2])}-${pad(eu[1])}`;
+    return '';
+  }
+
+  function stripDateV12(line) {
+    return line.replace(/\b20\d{2}[-/]\d{1,2}[-/]\d{1,2}\b|\b\d{1,2}[-/.]\d{1,2}[-/.]20\d{2}\b/,'')
+      .replace(/^[\s|;,:–—-]+/,'').trim();
+  }
+
+  function parseCentralTextV12(text, target) {
+    const lines = linesV12(text);
+    const wrap = item => ({ selected:true, item });
+
+    if (target === 'planning') {
+      return lines.filter(line => dateInLineV12(line)).slice(0,200).map(line => wrap({
+        id:id(), title:stripDateV12(line) || 'Afspraak', date:dateInLineV12(line), time:'', endTime:'',
+        person:'Samen', personSource:'manual', calendarId:data.calendars[0]?.id || 'persoonlijk'
+      }));
+    }
+
+    if (target === 'meals') {
+      const dayMap = new Map(WEEKDAY_NAMES.map((name,index)=>[name.toLowerCase(), index]));
+      const start = startOfWeek(todayISO());
+      return lines.slice(0,100).map((line,index) => {
+        const match = line.match(/^(maandag|dinsdag|woensdag|donderdag|vrijdag|zaterdag|zondag)\s*[:|;-]\s*(.+)$/i);
+        return wrap({
+          id:id(),
+          date: match ? addDays(start, dayMap.get(match[1].toLowerCase())) : addDays(start, index % 7),
+          type:'Avondeten',
+          title: match ? match[2].trim() : line.replace(/^[-•]\s*/,'')
+        });
+      });
+    }
+
+    if (target === 'groceries') {
+      return parseGroceryText(text).slice(0,300).map(item => wrap({ id:id(), ...item }));
+    }
+
+    if (target === 'chores') {
+      return lines.slice(0,250).map(line => {
+        const parts = line.split(/\s+[–—-]\s+|[;|]/).map(x=>x.trim());
+        return wrap({
+          id:id(), title:parts[0], person:'Samen', due:todayISO(),
+          repeat:parts[1] || 'Wekelijks', secondWeekday:'', notes:'', completedDates:[]
+        });
+      });
+    }
+
+    if (target === 'stock') {
+      return lines.slice(0,300).map(line => {
+        const match = line.match(/^(.+?)(?:\s+(\d+(?:[.,]\d+)?)\s*([A-Za-zÀ-ÿ]+)?)?$/);
+        return wrap({
+          id:id(), title:(match?.[1] || line).trim(), category:'Overig',
+          amount:match?.[2] ? Number(match[2].replace(',','.')) : 1,
+          min:1, unit:match?.[3] || 'stuks'
+        });
+      });
+    }
+
+    if (target === 'ideas') {
+      return lines.slice(0,200).map(line => wrap({
+        id:id(), title:line.replace(/^[-•]\s*/,''), category:'Thuis', note:'', icon:'♡'
+      }));
+    }
+
+    if (target === 'home') {
+      return lines.slice(0,200).map(line => wrap({
+        id:id(), title:line.replace(/^[-•]\s*/,''), category:'Onderhoud', due:'', note:''
+      }));
+    }
+
+    if (target === 'trips') {
+      const folder = data.tripFolders[0];
+      if (!folder) return [];
+      const section = data.tripSections.find(s => s.tripFolderId === folder.id);
+      return lines.slice(0,300).map(line => wrap({
+        id:id(), tripFolderId:folder.id, tripSectionId:section?.id || '',
+        title:line.replace(/^[-•]\s*/,''), date:dateInLineV12(line), type:'Notitie',
+        note:'', checkable:false, done:false
+      }));
+    }
+    return [];
+  }
+
+  function editPreviewV12(index) {
+    const entry = importState.preview[index];
+    if (!entry) return;
+    openGenericEditorV12(importState.target, entry.item, false, () => render());
+  }
+
+  function commitPreviewV12() {
+    const selected = importState.preview.filter(x => x.selected).map(x => x.item);
+    if (!selected.length) return toast('Selecteer minimaal één item');
+    data[importState.target].push(...selected);
+    save();
+    importState.preview = [];
+    importState.text = '';
+    importState.filename = '';
+    render();
+    toast(`${selected.length} items toegevoegd aan ${IMPORT_TARGETS[importState.target]}`);
+  }
+
+  function editableSpecV12(type, item) {
+    const base = {
+      planning: [['title','Titel','text'],['date','Datum','date'],['time','Tijd','time'],['endTime','Eindtijd','time'],['person','Voor wie','select',['Samen','Kees','Daphne']]],
+      meals: [['title','Gerecht','text'],['date','Datum','date'],['type','Moment','select',['Ontbijt','Lunch','Avondeten','Snack']]],
+      groceries: [['title','Product','text'],['category','Categorie','select',GROCERY_CATEGORIES],['done','Gekocht','checkbox']],
+      chores: [['title','Taak','text'],['person','Voor wie','select',['Samen','Kees','Daphne']],['due','Eerste keer','date'],['repeat','Herhaling','select',['Eenmalig','Dagelijks','Wekelijks','2× per week','Elke 2 weken','Maandelijks']],['notes','Notitie','textarea']],
+      stock: [['title','Product','text'],['category','Plek','text'],['amount','Aantal','number'],['min','Minimum','number'],['unit','Eenheid','text']],
+      ideas: [['title','Idee','text'],['category','Categorie','text'],['note','Notitie','textarea'],['icon','Emoji','text']],
+      home: [['title','Onderwerp','text'],['category','Categorie','text'],['due','Datum','date'],['note','Notitie','textarea']],
+      trips: [['title','Onderwerp','text'],['date','Datum/deadline','date'],['type','Soort','text'],['note','Notitie','textarea'],['checkable','Afvinkbaar','checkbox'],['done','Afgerond','checkbox']]
+    };
+    return base[type] || [];
+  }
+
+  function openGenericEditorV12(type, item, persist=true, afterSave=null) {
+    ensureImportDialog();
+    const dialog = document.querySelector('#editItemDialogV12');
+    const fields = editableSpecV12(type, item);
+    document.querySelector('#editItemTitleV12').textContent = `${IMPORT_TARGETS[type] || 'Item'} bewerken`;
+    document.querySelector('#editItemFieldsV12').innerHTML = fields.map(([key,label,kind,options]) => {
+      const value = item[key] ?? '';
+      if (kind === 'checkbox') return `<label class="checkbox-field"><input type="checkbox" data-edit-field="${key}" ${value?'checked':''}><span>${label}</span></label>`;
+      if (kind === 'textarea') return `<div class="field"><label>${label}</label><textarea data-edit-field="${key}">${importEsc(value)}</textarea></div>`;
+      if (kind === 'select') return `<div class="field"><label>${label}</label><select data-edit-field="${key}">${options.map(opt=>`<option value="${importEsc(opt)}" ${String(opt)===String(value)?'selected':''}>${importEsc(opt)}</option>`).join('')}</select></div>`;
+      return `<div class="field"><label>${label}</label><input type="${kind}" data-edit-field="${key}" value="${importEsc(value)}"></div>`;
+    }).join('');
+
+    const form = document.querySelector('#editItemFormV12');
+    form.onsubmit = event => {
+      event.preventDefault();
+      fields.forEach(([key,,kind]) => {
+        const input = dialog.querySelector(`[data-edit-field="${key}"]`);
+        if (!input) return;
+        if (kind === 'checkbox') item[key] = input.checked;
+        else if (kind === 'number') item[key] = Number(input.value) || 0;
+        else item[key] = input.value;
+      });
+      if (persist) save();
+      dialog.close();
+      if (persist) render();
+      afterSave?.();
+      if (persist) toast('Wijzigingen opgeslagen');
+    };
+    dialog.showModal();
+  }
+
+  function addEditButtonsV12() {
+    if (current === 'today' || current === 'settings' || current === 'imports') return;
+    document.querySelectorAll('[data-delete]').forEach(deleteButton => {
+      if (deleteButton.parentElement?.querySelector('[data-edit-existing]')) return;
+      const raw = deleteButton.dataset.delete || '';
+      const [type,itemId] = raw.split(':');
+      if (!IMPORT_TARGETS[type] || !itemId) return;
+      const edit = document.createElement('button');
+      edit.type = 'button';
+      edit.className = 'delete edit-pencil-v12';
+      edit.dataset.editExisting = `${type}:${itemId}`;
+      edit.setAttribute('aria-label','Bewerken');
+      edit.textContent = '✎';
+      deleteButton.before(edit);
+    });
+  }
+
+  document.addEventListener('click', event => {
+    const analyse = event.target.closest('[data-central-analyse]');
+    if (analyse) {
+      importState.text = document.querySelector('#centralImportText')?.value || '';
+      importState.preview = parseCentralTextV12(importState.text, importState.target);
+      render();
+      toast(`${importState.preview.length} items gevonden`);
+      return;
+    }
+
+    if (event.target.closest('[data-central-clear]')) {
+      importState.text=''; importState.filename=''; importState.preview=[];
+      render(); return;
+    }
+
+    if (event.target.closest('[data-central-commit]')) {
+      commitPreviewV12(); return;
+    }
+
+    const previewEdit = event.target.closest('[data-preview-edit]');
+    if (previewEdit) {
+      editPreviewV12(Number(previewEdit.dataset.previewEdit)); return;
+    }
+
+    const existingEdit = event.target.closest('[data-edit-existing]');
+    if (existingEdit) {
+      const [type,itemId] = existingEdit.dataset.editExisting.split(':');
+      const item = data[type]?.find(x => x.id === itemId);
+      if (item) openGenericEditorV12(type,item,true);
+      return;
+    }
+  });
+
+  document.addEventListener('change', event => {
+    const check = event.target.closest('[data-preview-check]');
+    if (check) {
+      const entry = importState.preview[Number(check.dataset.previewCheck)];
+      if (entry) entry.selected = check.checked;
+    }
+  });
+
+  ensureImportDialog();
+  setupNav();
+  render();
+})();
+
+;
+
+
+/* ===== GEÏNTEGREERD: samen-thuis-update-v13(1).js ===== */
+/* CLEAN MASTER BUILD 2026-09-08 20:xx
+   Samen Thuis v13.1
+   Fix: gestructureerde reisdocumenten worden als blokken gelezen.
+*/
+console.info('Samen Thuis update 13.1 geladen');
+
+(() => {
+  'use strict';
+  if (window.__SAMEN_THUIS_V131__) return;
+  window.__SAMEN_THUIS_V131__ = true;
+
+  const TARGETS = {
+    planning:'Agenda', meals:'Weekmenu', groceries:'Boodschappen',
+    chores:'Huishouden', stock:'Voorraad', ideas:'Samen doen',
+    home:'Woning', trips:'Reizen'
+  };
+
+  const SUBTYPES = {
+    chores:['Reguliere schoonmaak','Periodieke schoonmaak','Was & textiel','Overig'],
+    stock:['Huishoudvoorraad','Persoonlijke verzorging','Keuken basisvoorraad','Koelkast & vriezer','Overig'],
+    home:['Onderhoud','Veiligheid','Organisatie','Seizoen','Garantie','Woninginfo'],
+    trips:['Route & planning','Vervoer','Verblijf','Activiteiten','Boekingen & acties','Budget','Documenten','Paklijst','Overig']
+  };
+
+  const REPEATS = [
+    'Eenmalig','Dagelijks','Om de dag','2× per week','3× per week','Wekelijks',
+    'Elke 2 weken','Elke 4 weken','Maandelijks','Elke 2 maanden','Elke 3 maanden',
+    'Elke 6 maanden','Jaarlijks','Na elke was','Wanneer nodig'
+  ];
+
+  const state13 = {
+    target:'planning',
+    subtype:'',
+    method:'manual',
+    text:'',
+    filename:'',
+    preview:[],
+    tripFolderId:data.tripFolders?.[0]?.id || '',
+    tripSectionId:'',
+    detectedTripName:'',
+    detectedTripStart:'',
+    detectedTripEnd:''
+  };
+
+  const baseRender13 = render;
+  const baseFormConfig13 = formConfig;
+
+  function norm(s='') {
+    return String(s).toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+      .replace(/&/g,' en ')
+      .replace(/[^a-z0-9]+/g,' ')
+      .trim();
+  }
+
+  function cleanBullet(s='') {
+    return String(s)
+      .replace(/^\s*(?:[-•▪◦‣–—]|☐|□|☑|✓|✔|\[[ xX]?\])\s*/,'')
+      .trim();
+  }
+
+  function num(v, fallback=0) {
+    const m=String(v??'').replace(',','.').match(/-?\d+(?:\.\d+)?/);
+    return m?Number(m[0]):fallback;
+  }
+
+  function boolWord(v) {
+    return /^(1|ja|yes|true|aan|x|✓)$/i.test(String(v||'').trim());
+  }
+
+  function falseWord(v) {
+    return /^(0|nee|no|false|uit)$/i.test(String(v||'').trim());
+  }
+
+  function isoDateFromText(s='') {
+    let m=String(s).match(/\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\b/);
+    if(m) return `${m[1]}-${String(m[2]).padStart(2,'0')}-${String(m[3]).padStart(2,'0')}`;
+    m=String(s).match(/\b(\d{1,2})[-/.](\d{1,2})[-/.](20\d{2})\b/);
+    if(m) return `${m[3]}-${String(m[2]).padStart(2,'0')}-${String(m[1]).padStart(2,'0')}`;
+    return '';
+  }
+
+  function normaliseRepeat(raw='') {
+    const v=norm(String(raw).replace(/^frequentie\s*:\s*/i,''));
+    const map=[
+      [/^dagelijks$/,'Dagelijks'],[/^(om de dag|elke 2 dagen)$/,'Om de dag'],
+      [/^(2x per week|2 per week|twee keer per week)$/,'2× per week'],
+      [/^(3x per week|3 per week|drie keer per week)$/,'3× per week'],
+      [/^wekelijks$/,'Wekelijks'],[/^(elke 2 weken|2 wekelijks|tweewekelijks)$/,'Elke 2 weken'],
+      [/^(elke 4 weken|4 wekelijks)$/,'Elke 4 weken'],[/^maandelijks$/,'Maandelijks'],
+      [/^(elke 2 maanden|2 maandelijks)$/,'Elke 2 maanden'],
+      [/^(elke 3 maanden|kwartaal|kwartaallijks)$/,'Elke 3 maanden'],
+      [/^(elke 6 maanden|halfjaarlijks)$/,'Elke 6 maanden'],
+      [/^(jaarlijks|elk jaar|1x per jaar)$/,'Jaarlijks'],
+      [/^(na elke was|na iedere was)$/,'Na elke was'],
+      [/^(wanneer nodig|indien nodig|naar behoefte)$/,'Wanneer nodig'],
+      [/^eenmalig$/,'Eenmalig']
+    ];
+    for(const [rx,label] of map) if(rx.test(v)) return label;
+    return REPEATS.includes(raw)?raw:'Wekelijks';
+  }
+
+  function defaultSubtype(target) { return SUBTYPES[target]?.[0] || ''; }
+
+  function keyValueLine(line='') {
+    const m=cleanBullet(line).match(/^([^:]{2,40}):\s*(.*)$/);
+    if(!m) return null;
+    return {key:norm(m[1]), value:m[2].trim()};
+  }
+
+  function keyValueParts(line='') {
+    const chunks=cleanBullet(line).split('|').map(x=>x.trim()).filter(Boolean);
+    const title=chunks.shift()||'';
+    const meta={}, loose=[];
+    chunks.forEach(chunk=>{
+      const m=chunk.match(/^([^:]{2,35}):\s*(.*)$/);
+      if(m) meta[norm(m[1])]=m[2].trim();
+      else loose.push(chunk);
+    });
+    return {title,meta,loose};
+  }
+
+  function stockCategory(raw, subtype) {
+    if(raw) return raw;
+    if(subtype==='Persoonlijke verzorging') return 'Badkamer';
+    if(subtype==='Keuken basisvoorraad') return 'Voorraadkast';
+    if(subtype==='Koelkast & vriezer') return 'Koelkast';
+    return 'Overig';
+  }
+
+  function duplicateOf(target,item) {
+    const arr=data[target]||[];
+    return arr.find(existing=>{
+      if(norm(existing.title||existing.name)!==norm(item.title||item.name)) return false;
+      if(target==='trips' && item.tripFolderId && existing.tripFolderId) {
+        return existing.tripFolderId===item.tripFolderId;
+      }
+      return true;
+    });
+  }
+
+  function parseChore(line) {
+    const {title,meta,loose}=keyValueParts(line);
+    if(!title || /^(huishouden|was & textiel)/i.test(title)) return null;
+    return {
+      id:id(), title,
+      person:meta['voor wie']||meta.persoon||'Samen',
+      due:meta.datum||meta['eerste keer']||todayISO(),
+      repeat:normaliseRepeat(meta.frequentie||meta.herhaling||loose[0]||'Wekelijks'),
+      secondWeekday:'',
+      notes:meta.notitie||meta.notes||meta.omschrijving||loose.slice(1).join(' · '),
+      completedDates:[],
+      category:meta.categorie||state13.subtype,
+      importSubtype:state13.subtype
+    };
+  }
+
+  function parseStock(line) {
+    const {title,meta}=keyValueParts(line);
+    if(!title || /^(huishoudvoorraad|persoonlijke verzorging|keuken basisvoorraad|koelkast)/i.test(title)) return null;
+    const desired=num(meta.gewenst??meta.doel??meta.streefvoorraad,0);
+    const minimum=num(meta.minimum??meta.min,0);
+    const given=meta.aantal??meta['in huis']??meta.huidig;
+    const amount=given!==undefined?num(given,0):0;
+    return {
+      id:id(), title,
+      category:stockCategory(meta.categorie||meta.plek,state13.subtype),
+      amount,min:minimum,desired:desired||Math.max(minimum,amount),
+      unit:meta.eenheid||'stuks',importSubtype:state13.subtype
+    };
+  }
+
+  function parseHome(line) {
+    const {title,meta,loose}=keyValueParts(line);
+    if(!title || /^(woningonderhoud|veiligheid|woningorganisatie|seizoenstaken)/i.test(title)) return null;
+    const repeatRaw=meta.frequentie||meta.herhaling||'';
+    return {
+      id:id(),title,
+      category:meta.categorie||state13.subtype||'Onderhoud',
+      due:meta.datum||'',
+      repeat:repeatRaw?normaliseRepeat(repeatRaw):'',
+      note:meta.notitie||meta.omschrijving||loose.join(' · '),
+      importSubtype:state13.subtype
+    };
+  }
+
+  function findTripFolderByName(name='') {
+    return (data.tripFolders||[]).find(f=>norm(f.name)===norm(name));
+  }
+
+  function findTripSectionByName(folderId,name='') {
+    return (data.tripSections||[]).find(s=>s.tripFolderId===folderId && norm(s.name)===norm(name));
+  }
+
+  function selectedTripFolder() {
+    return (data.tripFolders||[]).find(f=>f.id===state13.tripFolderId) || data.tripFolders?.[0] || null;
+  }
+
+  function selectedTripSection(folderId) {
+    const selected=(data.tripSections||[]).find(s=>s.id===state13.tripSectionId && s.tripFolderId===folderId);
+    return selected || (data.tripSections||[]).find(s=>s.tripFolderId===folderId) || null;
+  }
+
+  function travelSection(type='',title='') {
+    const s=norm(`${type} ${title}`);
+    if(/paklijst|reisapotheek|meenemen|kleding|schoenen|outdoor|elektronica/.test(s)) return 'Paklijst';
+    if(/verblijf|hotel|homestay|overnachting/.test(s)) return 'Verblijf';
+    if(/budget|dagbudget|spaardoel|budgetsamenvatting|budgetnotitie/.test(s)) return 'Budget';
+    if(/taak|voorbereiding|gezondheidstaak|boeking|reserver/.test(s)) return 'Boekingen & acties';
+    if(/document|visum|paspoort|verzekering/.test(s)) return 'Documenten';
+    if(/planning|route/.test(s)) return 'Route & planning';
+    if(/vervoer|vlucht|transfer|limousine|trein|bus/.test(s)) return 'Vervoer';
+    if(/activiteit|wellness|tip|eten|food|massage|spa|manicure|facial|head spa|canyoning|rafting|workshop/.test(s)) return 'Activiteiten';
+    return state13.subtype || 'Overig';
+  }
+
+  function travelType(line, subtype='') {
+    const s=norm(`${line} ${subtype}`);
+    if(/paklijst|meenemen|inpakken|reisapotheek/.test(s)) return 'Paklijst';
+    if(/hotel|homestay|verblijf|overnacht/.test(s)) return 'Verblijf';
+    if(/vlucht|trein|bus|transfer|taxi|grab|vervoer|ferry|cruise|limousine/.test(s)) return 'Vervoer';
+    if(/budget|prijs|kosten|spaardoel|euro|vnd/.test(s)) return 'Budget';
+    if(/paspoort|visum|verzekering|document|gezondheid|vaccin/.test(s)) return 'Documenten';
+    if(/boeken|vastleggen|reserveren|regelen|controleren|afspraak|taak/.test(s)) return 'Voorbereiding';
+    if(/restaurant|eten|food|coffee|koffie/.test(s)) return 'Eten';
+    if(/activiteit|tour|cave|rafting|canyoning|massage|spa|tailor|workshop|strand|museum|wellness/.test(s)) return 'Activiteit';
+    return 'Notitie';
+  }
+
+  function detectTripMeta(lines) {
+    state13.detectedTripName='';
+    state13.detectedTripStart='';
+    state13.detectedTripEnd='';
+
+    for(const line of lines.slice(0,40)) {
+      let m=line.match(/^Reis:\s*(.+)$/i);
+      if(m) state13.detectedTripName=m[1].trim();
+      m=line.match(/^(.+?\b20\d{2})\s*-\s*\d+\b/i);
+      if(m && !state13.detectedTripName) state13.detectedTripName=m[1].trim();
+    }
+
+    // Record "Reis: X" is followed by metadata in our importdocument.
+    const reisIndex=lines.findIndex(x=>/^Reis:\s*/i.test(x));
+    if(reisIndex>=0) {
+      for(let i=reisIndex+1;i<Math.min(lines.length,reisIndex+12);i++) {
+        const kv=keyValueLine(lines[i]);
+        if(!kv) break;
+        if(kv.key==='startdatum') state13.detectedTripStart=isoDateFromText(kv.value)||kv.value;
+        if(kv.key==='einddatum') state13.detectedTripEnd=isoDateFromText(kv.value)||kv.value;
+      }
+    }
+
+    // Fallback: document title "Vietnam 2027 - 01 Reisplanning"
+    if(!state13.detectedTripName && state13.filename) {
+      const m=state13.filename.replace(/\.[^.]+$/,'').match(/^(.+?20\d{2})[_ -]/);
+      if(m) state13.detectedTripName=m[1].replace(/_/g,' ').trim();
+    }
+
+    state13.detectedTripName ||= selectedTripFolder()?.name || 'Nieuwe reis';
+  }
+
+  const META_KEYS=new Set([
+    'type','locatie','startdatum','einddatum','datum','deadline','afvinken','afvinkbaar',
+    'belangrijk','personen','route','details','notitie','notes','categorie','prijs','bedrag',
+    'status','plaats','person','voor wie','frequentie','herhaling','eenheid'
+  ]);
+
+  function isDocumentNoise(line='') {
+    const s=String(line).trim();
+    return !s ||
+      /^Samen Thuis importdocument\b/i.test(s) ||
+      /^IMPORTINSTRUCTIE:/i.test(s) ||
+      /^Vietnam 20\d{2}\s*-\s*\d+/i.test(s) ||
+      /^Reis:\s*/i.test(s) ||
+      /^(Type|Startdatum|Einddatum|Afvinken|Belangrijk|Personen|Route):\s*/i.test(s) && false;
+  }
+
+  function structuredTravelBlocks(text) {
+    const rawLines=String(text||'').replace(/\r/g,'').split(/\n+/).map(x=>x.trim()).filter(Boolean);
+    detectTripMeta(rawLines);
+
+    const skipIndexes=new Set();
+    const reisIndex=rawLines.findIndex(x=>/^Reis:\s*/i.test(x));
+    if(reisIndex>=0) {
+      skipIndexes.add(reisIndex);
+      for(let i=reisIndex+1;i<Math.min(rawLines.length,reisIndex+15);i++) {
+        const kv=keyValueLine(rawLines[i]);
+        if(!kv || !META_KEYS.has(kv.key)) break;
+        skipIndexes.add(i);
+      }
+    }
+
+    const blocks=[];
+    let current=null;
+
+    function pushCurrent() {
+      if(!current) return;
+      if(current.title && !isDocumentNoise(current.title)) blocks.push(current);
+      current=null;
+    }
+
+    rawLines.forEach((line,idx)=>{
+      if(skipIndexes.has(idx)) return;
+      if(/^Samen Thuis importdocument\b/i.test(line) || /^IMPORTINSTRUCTIE:/i.test(line)) return;
+      if(/^Vietnam 20\d{2}\s*-\s*\d+/i.test(line)) return;
+
+      const kv=keyValueLine(line);
+      if(kv && META_KEYS.has(kv.key)) {
+        if(!current) return; // metadata zonder hoofdonderwerp negeren
+        current.meta[kv.key]=kv.value;
+        return;
+      }
+
+      // Een gewone regel is een nieuw hoofditem.
+      pushCurrent();
+      current={title:cleanBullet(line),meta:{}};
+    });
+
+    pushCurrent();
+    return blocks;
+  }
+
+  function blockToTrip(block) {
+    const m=block.meta||{};
+    const title=block.title?.trim();
+    if(!title) return null;
+
+    const type=m.type || travelType(title,'');
+    const sectionName=travelSection(type,title);
+    const startDate=isoDateFromText(m.startdatum||m.datum||m.deadline||'');
+    const endDate=isoDateFromText(m.einddatum||'') || startDate;
+    let checkable=false;
+    if(m.afvinken!==undefined) checkable=boolWord(m.afvinken);
+    else if(m.afvinkbaar!==undefined) checkable=boolWord(m.afvinkbaar);
+    else checkable=/\b(boek|boeken|vastleggen|reserveer|reserveren|regel|regelen|controleer|controleren|download|meenemen|inpakken)\b/i.test(title);
+
+    const important=m.belangrijk!==undefined ? boolWord(m.belangrijk) : false;
+
+    const notes=[];
+    if(m.details) notes.push(m.details);
+    if(m.notitie) notes.push(m.notitie);
+    if(m.notes) notes.push(m.notes);
+    if(m.locatie) notes.push(`Locatie: ${m.locatie}`);
+    if(m.prijs) notes.push(`Prijs: ${m.prijs}`);
+    if(m.bedrag) notes.push(`Bedrag: ${m.bedrag}`);
+    if(m.status) notes.push(`Status: ${m.status}`);
+    if(m.categorie) notes.push(`Categorie: ${m.categorie}`);
+
+    const folder=findTripFolderByName(state13.detectedTripName);
+    const section=folder?findTripSectionByName(folder.id,sectionName):null;
+
+    return {
+      id:id(),
+      tripFolderId:folder?.id||'',
+      tripSectionId:section?.id||'',
+      title,
+      date:startDate || endDate || '',
+      startDate:startDate||'',
+      endDate:endDate||'',
+      type,
+      note:notes.join('\n'),
+      checkable,
+      important,
+      done:false,
+      _pendingFolderName:folder?'':state13.detectedTripName,
+      _pendingSectionName:section?'':sectionName
+    };
+  }
+
+  function parseTripLegacy(line) {
+    const source=cleanBullet(line);
+    if(!source) return null;
+    const {title,meta}=keyValueParts(source);
+    const itemTitle=title||source;
+    if(!itemTitle || /^[A-ZÀ-Ÿ &/-]{3,}:?$/.test(itemTitle)) return null;
+    const folder=selectedTripFolder();
+    const section=folder?selectedTripSection(folder.id):null;
+    return {
+      id:id(),tripFolderId:folder?.id||'',tripSectionId:section?.id||'',
+      title:itemTitle,
+      date:meta.datum||meta.deadline||isoDateFromText(source),
+      startDate:meta.startdatum||'',
+      endDate:meta.einddatum||'',
+      type:meta.type||meta.soort||travelType(itemTitle,state13.subtype),
+      note:meta.notitie||meta.notes||'',
+      checkable:boolWord(meta.afvinkbaar||meta.afvinken) || /\b(boeken|vastleggen|reserveren|regelen|controleren|afspraak|downloaden|meenemen|inpakken)\b/i.test(itemTitle),
+      important:boolWord(meta.belangrijk),
+      done:false
+    };
+  }
+
+  function parseGeneric(line,target) {
+    const clean=cleanBullet(line);
+    if(!clean) return null;
+    if(target==='ideas') return {id:id(),title:clean,category:'Thuis',note:'',icon:'♡'};
+    return null;
+  }
+
+  function parseLines13(text,target) {
+    if(target==='planning'||target==='meals'||target==='groceries') return null;
+
+    if(target==='trips') {
+      const structured=structuredTravelBlocks(text);
+      let items=structured.map(blockToTrip).filter(Boolean);
+
+      // Als er geen blokstructuur is, val terug op de oude regelparser.
+      if(!items.length) {
+        items=String(text||'').replace(/\r/g,'').split(/\n+/)
+          .map(x=>x.trim()).filter(Boolean).slice(0,350)
+          .map(parseTripLegacy).filter(Boolean);
+      }
+
+      return items.map(item=>{
+        const dup=duplicateOf(target,item);
+        return {selected:!dup,item,duplicate:dup?dup.id:''};
+      });
+    }
+
+    const lines=String(text||'').replace(/\r/g,'').split(/\n+/).map(x=>x.trim()).filter(Boolean)
+      .filter(x=>!/^#\s*(pagina|werkblad)\b/i.test(x))
+      .filter(x=>!/^(aanbevolen uploadvolgorde|belangrijk|importregels|beperkingen|uitgangspunt woning)$/i.test(x));
+
+    const parser=target==='chores'?parseChore:
+      target==='stock'?parseStock:
+      target==='home'?parseHome:
+      line=>parseGeneric(line,target);
+
+    return lines.slice(0,350).map(parser).filter(Boolean).map(item=>{
+      const dup=duplicateOf(target,item);
+      return {selected:!dup,item,duplicate:dup?dup.id:''};
+    });
+  }
+
+  function field(label,html,cls='') {
+    return `<div class="field ${cls}"><label>${esc(label)}</label>${html}</div>`;
+  }
+
+  function optionList(values,selected) {
+    return values.map(v=>`<option value="${esc(v)}" ${v===selected?'selected':''}>${esc(v)}</option>`).join('');
+  }
+
+  function previewMeta(item,target) {
+    if(target==='stock') return `${item.category} · huidig ${item.amount} · minimum ${item.min} · gewenst ${item.desired} ${item.unit}`;
+    if(target==='chores') return `${item.repeat} · ${item.person}${item.category?' · '+item.category:''}`;
+    if(target==='home') return `${item.category}${item.repeat?' · '+item.repeat:''}${item.due?' · '+item.due:''}`;
+    if(target==='trips') {
+      const folder=(data.tripFolders||[]).find(f=>f.id===item.tripFolderId)?.name || item._pendingFolderName || state13.detectedTripName || 'Nieuwe/gekozen reis';
+      const section=(data.tripSections||[]).find(s=>s.id===item.tripSectionId)?.name || item._pendingSectionName || state13.subtype || 'Algemeen';
+      const dates=item.startDate&&item.endDate&&item.startDate!==item.endDate?`${item.startDate} → ${item.endDate}`:(item.date||item.startDate||'');
+      return `${folder} › ${section} · ${item.type}${dates?' · '+dates:''}${item.checkable?' · afvinken':''}${item.important?' · ★ belangrijk':''}`;
+    }
+    return item.category||TARGETS[target]||'';
+  }
+
+  function previewEditor(entry) {
+    const x=entry.item,t=state13.target;
+    if(t==='stock') return `
+      ${field('Product',`<input data-v13-field="title" value="${esc(x.title)}">`,'full')}
+      ${field('Categorie',`<input data-v13-field="category" value="${esc(x.category)}">`)}
+      ${field('Huidig',`<input type="number" step="0.01" data-v13-field="amount" value="${x.amount}">`)}
+      ${field('Minimum',`<input type="number" step="0.01" data-v13-field="min" value="${x.min}">`)}
+      ${field('Gewenst',`<input type="number" step="0.01" data-v13-field="desired" value="${x.desired}">`)}
+      ${field('Eenheid',`<input data-v13-field="unit" value="${esc(x.unit)}">`)}`;
+    if(t==='chores') return `
+      ${field('Taak',`<input data-v13-field="title" value="${esc(x.title)}">`,'full')}
+      ${field('Frequentie',`<select data-v13-field="repeat">${optionList(REPEATS,x.repeat)}</select>`)}
+      ${field('Voor wie',`<select data-v13-field="person">${optionList(['Samen','Kees','Daphne'],x.person)}</select>`)}
+      ${field('Categorie',`<input data-v13-field="category" value="${esc(x.category||'')}">`)}
+      ${field('Eerste keer',`<input type="date" data-v13-field="due" value="${esc(x.due||'')}">`)}
+      ${field('Notitie',`<textarea data-v13-field="notes">${esc(x.notes||'')}</textarea>`,'full')}`;
+    if(t==='home') return `
+      ${field('Onderwerp',`<input data-v13-field="title" value="${esc(x.title)}">`,'full')}
+      ${field('Categorie',`<input data-v13-field="category" value="${esc(x.category)}">`)}
+      ${field('Frequentie',`<select data-v13-field="repeat"><option value="">Geen herhaling</option>${optionList(REPEATS,x.repeat)}</select>`)}
+      ${field('Datum',`<input type="date" data-v13-field="due" value="${esc(x.due||'')}">`)}
+      ${field('Notitie',`<textarea data-v13-field="note">${esc(x.note||'')}</textarea>`,'full')}`;
+    if(t==='trips') return `
+      ${field('Onderwerp',`<input data-v13-field="title" value="${esc(x.title)}">`,'full')}
+      ${field('Startdatum',`<input type="date" data-v13-field="startDate" value="${esc(x.startDate||x.date||'')}">`)}
+      ${field('Einddatum',`<input type="date" data-v13-field="endDate" value="${esc(x.endDate||x.startDate||x.date||'')}">`)}
+      ${field('Soort',`<input data-v13-field="type" value="${esc(x.type||'Notitie')}">`)}
+      <label class="checkbox-field"><input type="checkbox" data-v13-field="checkable" ${x.checkable?'checked':''}><span>Afvinkbaar</span></label>
+      <label class="checkbox-field"><input type="checkbox" data-v13-field="important" ${x.important?'checked':''}><span>Belangrijk ★</span></label>
+      ${field('Notitie',`<textarea data-v13-field="note">${esc(x.note||'')}</textarea>`,'full')}`;
+    return field('Titel',`<input data-v13-field="title" value="${esc(x.title||'')}">`,'full');
+  }
+
+  function manualForm13() {
+    const t=state13.target;
+    const calendars=data.calendars||[];
+    const tripFolders=data.tripFolders||[];
+    const folder=selectedTripFolder();
+    const sections=(data.tripSections||[]).filter(s=>s.tripFolderId===folder?.id);
+
+    if(t==='planning') return `
+      ${field('Wat?',`<input data-v14-manual="title" required>`,'full')}
+      ${field('Datum',`<input type="date" data-v14-manual="date" value="${todayISO()}">`)}
+      ${field('Begintijd',`<input type="time" data-v14-manual="time">`)}
+      ${field('Eindtijd',`<input type="time" data-v14-manual="endTime">`)}
+      ${field('Agenda',`<select data-v14-manual="calendarId">${calendars.map(c=>`<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('')}</select>`)}
+      ${field('Voor wie?',`<select data-v14-manual="person">${optionList(['Samen','Kees','Daphne'],'Samen')}</select>`)}`;
+    if(t==='meals') return `
+      ${field('Gerecht',`<input data-v14-manual="title" required>`,'full')}
+      ${field('Datum',`<input type="date" data-v14-manual="date" value="${todayISO()}">`)}
+      ${field('Moment',`<select data-v14-manual="type">${optionList(['Ontbijt','Lunch','Avondeten','Snack'],'Avondeten')}</select>`)}`;
+    if(t==='groceries') return `
+      ${field('Product',`<input data-v14-manual="title" required>`,'full')}
+      ${field('Categorie',`<select data-v14-manual="category">${optionList(GROCERY_CATEGORIES,'Overig')}</select>`)}`;
+    if(t==='chores') return `
+      ${field('Taak',`<input data-v14-manual="title" required>`,'full')}
+      ${field('Voor wie?',`<select data-v14-manual="person">${optionList(['Samen','Kees','Daphne'],'Samen')}</select>`)}
+      ${field('Eerste keer',`<input type="date" data-v14-manual="due" value="${todayISO()}">`)}
+      ${field('Frequentie',`<select data-v14-manual="repeat">${optionList(REPEATS,'Wekelijks')}</select>`)}
+      ${field('Categorie',`<input data-v14-manual="category" value="${esc(state13.subtype||'Reguliere schoonmaak')}">`)}
+      ${field('Notitie',`<textarea data-v14-manual="notes"></textarea>`,'full')}`;
+    if(t==='stock') return `
+      ${field('Product',`<input data-v14-manual="title" required>`,'full')}
+      ${field('Categorie',`<input data-v14-manual="category" value="${esc(stockCategory('',state13.subtype))}">`)}
+      ${field('Huidig',`<input type="number" step="0.01" data-v14-manual="amount" value="0">`)}
+      ${field('Minimum',`<input type="number" step="0.01" data-v14-manual="min" value="0">`)}
+      ${field('Gewenst',`<input type="number" step="0.01" data-v14-manual="desired" value="0">`)}
+      ${field('Eenheid',`<input data-v14-manual="unit" value="stuks">`)}`;
+    if(t==='ideas') return `
+      ${field('Idee',`<input data-v14-manual="title" required>`,'full')}
+      ${field('Categorie',`<select data-v14-manual="category">${optionList(['Thuis','Uit','Actief','Gratis','Eten'],'Thuis')}</select>`)}
+      ${field('Emoji',`<input data-v14-manual="icon" value="♡">`)}
+      ${field('Notitie',`<textarea data-v14-manual="note"></textarea>`,'full')}`;
+    if(t==='home') return `
+      ${field('Onderwerp',`<input data-v14-manual="title" required>`,'full')}
+      ${field('Categorie',`<input data-v14-manual="category" value="${esc(state13.subtype||'Onderhoud')}">`)}
+      ${field('Datum',`<input type="date" data-v14-manual="due">`)}
+      ${field('Herhaling',`<select data-v14-manual="repeat"><option value="">Geen herhaling</option>${optionList(REPEATS,'')}</select>`)}
+      ${field('Notitie',`<textarea data-v14-manual="note"></textarea>`,'full')}`;
+    if(t==='trips') return `
+      ${field('Reis',`<select id="v14TripFolder" data-v14-manual="tripFolderId">${tripFolders.map(f=>`<option value="${esc(f.id)}" ${f.id===folder?.id?'selected':''}>${esc(f.name)}</option>`).join('')}</select>`)}
+      ${field('Map binnen de reis',`<select data-v14-manual="tripSectionId">${sections.map(s=>`<option value="${esc(s.id)}">${esc(s.name)}</option>`).join('')}</select>`)}
+      ${field('Onderwerp',`<input data-v14-manual="title" required>`,'full')}
+      ${field('Startdatum',`<input type="date" data-v14-manual="startDate">`)}
+      ${field('Einddatum',`<input type="date" data-v14-manual="endDate">`)}
+      ${field('Soort',`<select data-v14-manual="type">${optionList(['Voorbereiding','Reservering','Vervoer','Verblijf','Activiteit','Eten','Budget','Documenten','Paklijst','Notitie'],'Notitie')}</select>`)}
+      ${field('Notitie',`<textarea data-v14-manual="note"></textarea>`,'full')}
+      <label class="checkbox-field"><input type="checkbox" data-v14-manual="checkable"><span>Dit moet afgevinkt worden</span></label>
+      <label class="checkbox-field"><input type="checkbox" data-v14-manual="important"><span>Belangrijk ★</span></label>`;
+    return '';
+  }
+
+  function destinationFields13() {
+    if(state13.target==='trips') {
+      const detected=state13.detectedTripName?`<div class="field full"><small class="muted">Automatisch herkende reis: <strong>${esc(state13.detectedTripName)}</strong>. De documentstructuur heeft voorrang op de standaardkeuze.</small></div>`:'';
+      const folder=selectedTripFolder();
+      const sections=(data.tripSections||[]).filter(s=>s.tripFolderId===folder?.id);
+      return `
+        ${field('Standaard reis',`<select id="v14ImportTripFolder">${(data.tripFolders||[]).map(f=>`<option value="${esc(f.id)}" ${f.id===folder?.id?'selected':''}>${esc(f.name)}</option>`).join('')}</select>`)}
+        ${field('Standaard map',`<select id="v14ImportTripSection">${sections.map(s=>`<option value="${esc(s.id)}" ${s.id===state13.tripSectionId?'selected':''}>${esc(s.name)}</option>`).join('')}</select>`)}
+        ${detected}`;
+    }
+    const subtypes=SUBTYPES[state13.target]||[];
+    return subtypes.length?field('Standaard categorie/map',`<select id="v13Subtype">${subtypes.map(v=>`<option ${v===state13.subtype?'selected':''}>${esc(v)}</option>`).join('')}</select>`):'';
+  }
+
+  function renderImports13() {
+    const methodLabel=state13.method==='manual'?'Handmatig invoeren':state13.method==='file'?'Bestand uploaden':'Tekst plakken';
+    return `<div class="import-v13">
+      <section class="card">
+        <div class="card-head"><div><p class="eyebrow">SAMEN THUIS · CENTRALE INVOER</p><h2>Toevoegen & importeren</h2></div><span class="tag green">${esc(methodLabel)}</span></div>
+        <p>Kies waar het hoort en daarna hoe je het wilt toevoegen.</p>
+        <div class="form-grid">
+          ${field('Waar hoort dit bij?',`<select id="v13Target">${Object.entries(TARGETS).map(([k,v])=>`<option value="${k}" ${k===state13.target?'selected':''}>${esc(v)}</option>`).join('')}</select>`)}
+          ${state13.method!=='manual'?destinationFields13():''}
+        </div>
+        <div class="v14-methods">
+          <button class="${state13.method==='manual'?'primary':'secondary'}" data-v14-method="manual">✏️ Handmatig</button>
+          <button class="${state13.method==='file'?'primary':'secondary'}" data-v14-method="file">📄 Bestand uploaden</button>
+          <button class="${state13.method==='text'?'primary':'secondary'}" data-v14-method="text">📋 Tekst plakken</button>
+        </div>
+        ${state13.method==='manual'?`
+          <div class="form-grid v14-manual-form">${manualForm13()}</div>
+          <div class="button-row"><button class="primary" data-v14-manual-save>Opslaan</button></div>
+        `:state13.method==='file'?`
+          <div class="form-grid">${field('Bestand',`<input id="v13File" type="file" accept=".pdf,.docx,.xlsx,.xlsm,.xls,.csv,.txt,.md,application/pdf,text/plain">`,'full')}</div>
+          ${state13.filename?`<p class="muted">Bron: <strong>${esc(state13.filename)}</strong></p>`:''}
+          <p class="muted">Na kiezen wordt het bestand automatisch gelezen en geanalyseerd.</p>
+        `:`
+          <div class="form-grid">${field('Tekst/lijst plakken',`<textarea id="v13Text">${esc(state13.text)}</textarea>`,'full')}</div>
+          <div class="button-row"><button class="primary" data-v13-analyse>Analyseren</button><button class="secondary" data-v13-clear>Leegmaken</button></div>
+        `}
+      </section>
+
+      ${state13.method!=='manual'?(state13.preview.length?`<section class="card v13-preview">
+        <div class="card-head"><div><p class="eyebrow">CONTROLE</p><h2>${state13.preview.length} gevonden items</h2></div>
+          <div class="button-row"><button class="secondary" data-v13-all>Alles selecteren</button><button class="secondary" data-v13-none>Niets</button><button class="primary" data-v13-commit>Geselecteerde toevoegen</button></div>
+        </div>
+        ${state13.target==='trips'&&state13.detectedTripName?`<p class="muted">Bestemming: <strong>Reizen → ${esc(state13.detectedTripName)}</strong>${state13.detectedTripStart?` · ${esc(state13.detectedTripStart)}`:''}${state13.detectedTripEnd?` t/m ${esc(state13.detectedTripEnd)}`:''}</p>`:''}
+        ${['chores','stock','home'].includes(state13.target)?`<div class="v13-bulk">
+          <strong>Bulk aanpassen</strong>
+          ${state13.target==='chores'?`<select id="v13BulkRepeat"><option value="">Frequentie behouden</option>${REPEATS.map(x=>`<option>${esc(x)}</option>`).join('')}</select>
+          <select id="v13BulkPerson"><option value="">Persoon behouden</option><option>Samen</option><option>Kees</option><option>Daphne</option></select>`:''}
+          <input id="v13BulkCategory" placeholder="Categorie (optioneel)">
+          <button class="secondary" data-v13-bulk>Toepassen op geselecteerde</button>
+        </div>`:''}
+        <div class="v13-preview-list">${state13.preview.map((entry,i)=>`
+          <article class="v13-card ${entry.duplicate?'duplicate':''}" data-v13-card="${i}">
+            <div class="v13-card-head">
+              <label><input type="checkbox" data-v13-selected ${entry.selected?'checked':''}> Importeren</label>
+              ${entry.duplicate?'<span class="tag warning">Mogelijk al aanwezig · standaard overgeslagen</span>':''}
+            </div>
+            <div class="v13-fields">${previewEditor(entry)}</div>
+            <small class="muted">${esc(previewMeta(entry.item,state13.target))}</small>
+          </article>`).join('')}</div>
+      </section>`:`<section class="card"><p class="muted">Nog niets geanalyseerd.</p></section>`):''}
+    </div>`;
+  }
+
+  async function loadExternal13(src,test) {
+    if(test()) return;
+    await new Promise((resolve,reject)=>{
+      const s=document.createElement('script');
+      s.src=src;s.onload=resolve;s.onerror=reject;document.head.appendChild(s);
+    });
+  }
+
+  async function readFile13(file) {
+    const ext=file.name.toLowerCase().split('.').pop();
+    if(['txt','md','csv'].includes(ext)) return file.text();
+    if(ext==='pdf') return extractPdfText(file);
+    if(ext==='docx') {
+      await loadExternal13('https://cdn.jsdelivr.net/npm/mammoth@1.12.2/mammoth.browser.min.js',()=>Boolean(window.mammoth));
+      return (await window.mammoth.extractRawText({arrayBuffer:await file.arrayBuffer()})).value||'';
+    }
+    if(['xlsx','xlsm','xls'].includes(ext)) {
+      await loadExternal13('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',()=>Boolean(window.XLSX));
+      const wb=window.XLSX.read(await file.arrayBuffer(),{type:'array',cellDates:true});
+      return wb.SheetNames.map(n=>window.XLSX.utils.sheet_to_csv(wb.Sheets[n])).join('\n');
+    }
+    throw new Error('Bestandstype niet ondersteund');
+  }
+
+  function syncCardEdits() {
+    document.querySelectorAll('[data-v13-card]').forEach(card=>{
+      const entry=state13.preview[Number(card.dataset.v13Card)];
+      if(!entry) return;
+      entry.selected=Boolean(card.querySelector('[data-v13-selected]')?.checked);
+      card.querySelectorAll('[data-v13-field]').forEach(input=>{
+        const k=input.dataset.v13Field;
+        let v=input.type==='checkbox'?input.checked:input.value;
+        if(['amount','min','desired'].includes(k)) v=num(v,0);
+        entry.item[k]=v;
+      });
+      if(entry.item.startDate) entry.item.date=entry.item.startDate;
+    });
+  }
+
+  function analyse13() {
+    const special=parseLines13(state13.text,state13.target);
+    if(special!==null) {
+      state13.preview=special;
+      render();
+      toast(`${state13.preview.length} items gevonden`);
+      return;
+    }
+
+    const lines=String(state13.text||'').split(/\n+/).map(x=>x.trim()).filter(Boolean);
+    if(state13.target==='groceries') {
+      state13.preview=parseGroceryText(state13.text).slice(0,300).map(x=>({selected:true,item:{id:id(),...x}}));
+    } else if(state13.target==='planning') {
+      state13.preview=lines.filter(x=>isoDateFromText(x)).map(x=>({selected:true,item:{
+        id:id(),title:x.replace(/\b20\d{2}[-/]\d{1,2}[-/]\d{1,2}\b/,'').trim()||'Afspraak',
+        date:isoDateFromText(x),time:'',endTime:'',person:'Samen',calendarId:data.calendars[0]?.id||'persoonlijk'
+      }}));
+    } else if(state13.target==='meals') {
+      const start=startOfWeek(todayISO());
+      state13.preview=lines.slice(0,7).map((x,i)=>({selected:true,item:{id:id(),date:addDays(start,i),type:'Avondeten',title:cleanBullet(x)}}));
+    }
+    render();
+    toast(`${state13.preview.length} items gevonden`);
+  }
+
+  function resolveTripDestination13(item) {
+    data.tripFolders ||= [];
+    data.tripSections ||= [];
+    data.trips ||= [];
+
+    const wantedFolder=item._pendingFolderName || state13.detectedTripName || '';
+    let folder=(data.tripFolders||[]).find(f=>f.id===item.tripFolderId);
+
+    if(!folder && wantedFolder) {
+      folder=findTripFolderByName(wantedFolder);
+      if(!folder) {
+        folder={
+          id:id(),name:wantedFolder,
+          startDate:state13.detectedTripStart||'',
+          endDate:state13.detectedTripEnd||'',
+          note:'Aangemaakt via centrale invoer'
+        };
+        data.tripFolders.push(folder);
+      }
+    }
+    if(!folder) folder=selectedTripFolder();
+    if(!folder) return item;
+
+    // Periode van de reis aanvullen wanneer die uit het document komt.
+    if(state13.detectedTripStart && !folder.startDate) folder.startDate=state13.detectedTripStart;
+    if(state13.detectedTripEnd && !folder.endDate) folder.endDate=state13.detectedTripEnd;
+
+    const wantedSection=item._pendingSectionName || travelSection(item.type,item.title);
+    let section=(data.tripSections||[]).find(s=>s.id===item.tripSectionId && s.tripFolderId===folder.id);
+    if(!section) section=findTripSectionByName(folder.id,wantedSection);
+    if(!section) {
+      section={id:id(),tripFolderId:folder.id,name:wantedSection};
+      data.tripSections.push(section);
+    }
+
+    const clean={...item,tripFolderId:folder.id,tripSectionId:section.id};
+    delete clean._pendingFolderName;
+    delete clean._pendingSectionName;
+    clean.date=clean.startDate||clean.date||clean.endDate||'';
+    return clean;
+  }
+
+  function commit13() {
+    syncCardEdits();
+    let selected=state13.preview.filter(x=>x.selected).map(x=>x.item);
+    if(!selected.length) return toast('Selecteer minimaal één item');
+    if(state13.target==='trips') selected=selected.map(resolveTripDestination13);
+
+    data[state13.target] ||= [];
+    data[state13.target].push(...selected);
+    save();
+
+    const count=selected.length;
+    state13.preview=[];state13.text='';state13.filename='';
+    render();
+    toast(`${count} items toegevoegd aan ${TARGETS[state13.target]}`);
+  }
+
+  function manualValue13(name) {
+    const el=document.querySelector(`[data-v14-manual="${name}"]`);
+    if(!el) return '';
+    return el.type==='checkbox'?el.checked:el.value;
+  }
+
+  function saveManual13() {
+    const t=state13.target;
+    const title=String(manualValue13('title')||'').trim();
+    if(!title) return toast('Vul eerst een titel/onderwerp in');
+    let item;
+
+    if(t==='planning') item={id:id(),title,date:manualValue13('date')||todayISO(),time:manualValue13('time'),endTime:manualValue13('endTime'),calendarId:manualValue13('calendarId')||'persoonlijk',person:manualValue13('person')||'Samen',personSource:'manual'};
+    else if(t==='meals') item={id:id(),title,date:manualValue13('date')||todayISO(),type:manualValue13('type')||'Avondeten'};
+    else if(t==='groceries') item={id:id(),title,category:manualValue13('category')||'Overig',done:false};
+    else if(t==='chores') item={id:id(),title,person:manualValue13('person')||'Samen',due:manualValue13('due')||todayISO(),repeat:manualValue13('repeat')||'Wekelijks',secondWeekday:'',notes:manualValue13('notes')||'',category:manualValue13('category')||'',completedDates:[]};
+    else if(t==='stock') item={id:id(),title,category:manualValue13('category')||'Overig',amount:num(manualValue13('amount'),0),min:num(manualValue13('min'),0),desired:num(manualValue13('desired'),0),unit:manualValue13('unit')||'stuks'};
+    else if(t==='ideas') item={id:id(),title,category:manualValue13('category')||'Thuis',note:manualValue13('note')||'',icon:manualValue13('icon')||'♡'};
+    else if(t==='home') item={id:id(),title,category:manualValue13('category')||'Onderhoud',due:manualValue13('due')||'',repeat:manualValue13('repeat')||'',note:manualValue13('note')||''};
+    else if(t==='trips') {
+      const startDate=manualValue13('startDate')||'';
+      item={id:id(),title,tripFolderId:manualValue13('tripFolderId'),tripSectionId:manualValue13('tripSectionId'),date:startDate,startDate,endDate:manualValue13('endDate')||startDate,type:manualValue13('type')||'Notitie',note:manualValue13('note')||'',checkable:Boolean(manualValue13('checkable')),important:Boolean(manualValue13('important')),done:false};
+      item=resolveTripDestination13(item);
+    }
+    if(!item) return;
+    data[t] ||= [];
+    data[t].push(item);
+    save();render();
+    toast(`Toegevoegd aan ${TARGETS[t]}`);
+  }
+
+  function bind13() {
+    const target=document.querySelector('#v13Target');
+    if(target) target.onchange=()=>{
+      state13.target=target.value;
+      state13.subtype=defaultSubtype(state13.target);
+      state13.preview=[];
+      if(state13.target==='trips') {
+        state13.tripFolderId=data.tripFolders?.[0]?.id||'';
+        state13.tripSectionId=data.tripSections?.find(s=>s.tripFolderId===state13.tripFolderId)?.id||'';
+      }
+      render();
+    };
+
+    const subtype=document.querySelector('#v13Subtype');
+    if(subtype) subtype.onchange=()=>{state13.subtype=subtype.value;};
+
+    const text=document.querySelector('#v13Text');
+    if(text) text.oninput=()=>{state13.text=text.value;};
+
+    const importFolder=document.querySelector('#v14ImportTripFolder');
+    if(importFolder) importFolder.onchange=()=>{
+      state13.tripFolderId=importFolder.value;
+      state13.tripSectionId=data.tripSections?.find(s=>s.tripFolderId===state13.tripFolderId)?.id||'';
+      render();
+    };
+
+    const importSection=document.querySelector('#v14ImportTripSection');
+    if(importSection) importSection.onchange=()=>{state13.tripSectionId=importSection.value;};
+
+    const manualFolder=document.querySelector('#v14TripFolder');
+    if(manualFolder) manualFolder.onchange=()=>{
+      state13.tripFolderId=manualFolder.value;
+      state13.tripSectionId=data.tripSections?.find(s=>s.tripFolderId===state13.tripFolderId)?.id||'';
+      render();
+    };
+
+    const file=document.querySelector('#v13File');
+    if(file) file.onchange=async()=>{
+      const f=file.files?.[0];
+      if(!f) return;
+      try {
+        toast('Bestand wordt gelezen…');
+        state13.filename=f.name;
+        state13.text=await readFile13(f);
+
+        // Voor onze Samen Thuis-reisdocumenten automatisch naar Reizen.
+        if(/\bReis:\s*.+20\d{2}\b/i.test(state13.text) || /Samen Thuis importdocument/i.test(state13.text) && /\b(Startdatum|Einddatum|Afvinken|Belangrijk):/i.test(state13.text)) {
+          state13.target='trips';
+          state13.subtype='Route & planning';
+        }
+
+        analyse13();
+      } catch(e) {
+        console.error(e);
+        toast('Bestand lezen is mislukt');
+      }
+    };
+  }
+
+  render=function renderV131() {
+    if(current==='imports') {
+      document.querySelector('#view').innerHTML=renderImports13();
+      updateSyncBadge();
+      bind13();
+      return;
+    }
+    baseRender13();
+  };
+
+  document.addEventListener('click',e=>{
+    const method=e.target.closest('[data-v14-method]');
+    if(method) {
+      state13.method=method.dataset.v14Method;
+      state13.preview=[];
+      render();
+      return;
+    }
+    if(e.target.closest('[data-v14-manual-save]')) {saveManual13();return;}
+
+    const ctl=e.target.closest('[data-v13-analyse],[data-v13-clear],[data-v13-all],[data-v13-none],[data-v13-commit],[data-v13-bulk]');
+    if(!ctl) return;
+
+    if(e.target.closest('[data-v13-analyse]')) {analyse13();return;}
+    if(e.target.closest('[data-v13-clear]')) {
+      state13.text='';state13.filename='';state13.preview=[];state13.detectedTripName='';render();return;
+    }
+    if(e.target.closest('[data-v13-all]')) {
+      document.querySelectorAll('[data-v13-selected]').forEach(x=>x.checked=true);return;
+    }
+    if(e.target.closest('[data-v13-none]')) {
+      document.querySelectorAll('[data-v13-selected]').forEach(x=>x.checked=false);return;
+    }
+    if(e.target.closest('[data-v13-commit]')) {commit13();return;}
+    if(e.target.closest('[data-v13-bulk]')) {
+      syncCardEdits();
+      const cat=document.querySelector('#v13BulkCategory')?.value.trim();
+      const rep=document.querySelector('#v13BulkRepeat')?.value;
+      const person=document.querySelector('#v13BulkPerson')?.value;
+      state13.preview.filter(x=>x.selected).forEach(entry=>{
+        if(cat) entry.item.category=cat;
+        if(rep&&state13.target==='chores') entry.item.repeat=rep;
+        if(person&&state13.target==='chores') entry.item.person=person;
+      });
+      render();return;
+    }
+  },true);
+
+  formConfig=function formConfigV131(view) {
+    const cfg=baseFormConfig13(view);
+    if(!cfg) return cfg;
+    cfg.fields=(cfg.fields||[]).map(f=>[...f]);
+
+    if(view==='stock'&&!cfg.fields.some(f=>f[0]==='desired')) {
+      const minIndex=cfg.fields.findIndex(f=>f[0]==='min');
+      cfg.fields.splice(minIndex>=0?minIndex+1:cfg.fields.length,0,['desired','Gewenste voorraad','number']);
+    }
+    if(view==='chores') {
+      const r=cfg.fields.find(f=>f[0]==='repeat');
+      if(r) r[3]=REPEATS;
+      if(!cfg.fields.some(f=>f[0]==='category')) cfg.fields.push(['category','Categorie','text']);
+    }
+    if(view==='home'&&!cfg.fields.some(f=>f[0]==='repeat')) {
+      cfg.fields.push(['repeat','Herhaling','select',['',...REPEATS]]);
+    }
+    return cfg;
+  };
+
+  (data.stock||[]).forEach(item=>{
+    if(item.desired==null) item.desired=Math.max(Number(item.amount||0),Number(item.min||0));
+  });
+  (data.chores||[]).forEach(item=>{item.category||='Schoonmaak';});
+  (data.home||[]).forEach(item=>{item.repeat||='';});
+  (data.trips||[]).forEach(item=>{
+    if(item.startDate==null) item.startDate=item.date||'';
+    if(item.endDate==null) item.endDate=item.startDate||item.date||'';
+    if(item.important==null) item.important=false;
+  });
+
+  save({touch:false});
+  toast('Samen Thuis v13.1 geladen');
+})();
+
+;
+
+
+/* ===== GEÏNTEGREERD: samen-thuis-update-v14(1).js ===== */
+/* Samen Thuis v14.0 — universele importlaag
+   Eén vast importformaat voor Agenda t/m Reizen.
+   Ondersteunt | ; tab, " / " en " - " als scheidingsteken.
+   Datums zoals 2027-01-08 blijven intact.
+*/
+console.info('Samen Thuis update 14.1 geladen');
+
+(() => {
+  'use strict';
+  if (window.__SAMEN_THUIS_V140__) return;
+  window.__SAMEN_THUIS_V140__ = true;
+
+  const baseRender14 = render;
+
+  const TARGETS14 = {
+    planning:'Agenda', meals:'Weekmenu', groceries:'Boodschappen', chores:'Huishouden',
+    stock:'Voorraad', ideas:'Ideeën', home:'Woning', trips:'Reizen'
+  };
+
+  const ALIASES14 = {
+    agenda:'planning', planning:'planning', kalender:'planning', afspraak:'planning', afspraken:'planning',
+    weekmenu:'meals', menu:'meals', maaltijd:'meals', maaltijden:'meals', eten:'meals',
+    boodschappen:'groceries', boodschap:'groceries', grocery:'groceries', groceries:'groceries',
+    huishouden:'chores', huishoudelijk:'chores', schoonmaak:'chores', taak:'chores', taken:'chores',
+    voorraad:'stock', stock:'stock', inventaris:'stock',
+    idee:'ideas', ideeen:'ideas', ideeenlijst:'ideas', samen_doen:'ideas',
+    woning:'home', huis:'home', onderhoud:'home',
+    reizen:'trips', reis:'trips', vakantie:'trips', travel:'trips'
+  };
+
+  const SCHEMAS14 = {
+    planning:['type','title','startDate','startTime','endDate','endTime','allDay','location','description','repeat'],
+    meals:['type','date','mealType','title','persons','ingredients','note'],
+    groceries:['type','title','amount','unit','category','store','forMeal','done','note'],
+    chores:['type','title','category','repeat','person','startDate','nextDate','priority','done','notes'],
+    stock:['type','title','category','amount','unit','minimum','bestBefore','location','note'],
+    ideas:['type','title','category','description','person','priority','status','date','note'],
+    home:['type','title','category','description','kind','priority','startDate','deadline','status','cost','done','note'],
+    trips:['type','trip','section','title','kind','description','startDate','endDate','deadline','location','cost','priority','checkable','done','note']
+  };
+
+  const state14 = { target:'planning', text:'', filename:'', preview:[], legacy:false };
+
+  const esc14 = value => String(value ?? '')
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#039;');
+
+  const norm14 = value => String(value ?? '').toLowerCase().normalize('NFD')
+    .replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,' ').trim();
+
+  const clean14 = value => String(value ?? '').trim().replace(/^\[(.*)\]$/,'$1').trim();
+
+  function bool14(value, fallback=false) {
+    const v=norm14(value);
+    if(['1','ja','yes','true','aan','x','afgevinkt','klaar','gedaan'].includes(v)) return true;
+    if(['0','nee','no','false','uit','open','niet afgevinkt'].includes(v)) return false;
+    return fallback;
+  }
+
+  function priority14(value='') {
+    const v=norm14(value);
+    if(/urgent|belangrijk|high|hoog/.test(v)) return 'hoog';
+    if(/low|laag/.test(v)) return 'laag';
+    if(/normaal|normal|medium|midden/.test(v)) return 'normaal';
+    return value ? String(value).trim() : '';
+  }
+
+  function repeat14(value='') {
+    const v=norm14(String(value).replace(/^frequentie\s*:?\s*/i,''));
+    if(!v) return '';
+    if(/^(dagelijks|elke dag|iedere dag|daily)$/.test(v)) return 'Dagelijks';
+    if(/^(om de dag|elke 2 dagen)$/.test(v)) return 'Om de dag';
+    if(/^(2x per week|2 per week|twee keer per week|twice weekly)$/.test(v)) return '2× per week';
+    if(/^(3x per week|3 per week|drie keer per week)$/.test(v)) return '3× per week';
+    if(/^(wekelijks|iedere week|elke week|weekly)$/.test(v)) return 'Wekelijks';
+    if(/^(elke 2 weken|om de week|tweewekelijks|biweekly)$/.test(v)) return 'Elke 2 weken';
+    if(/^(elke 4 weken|4 wekelijks)$/.test(v)) return 'Elke 4 weken';
+    if(/^(maandelijks|iedere maand|elke maand|monthly)$/.test(v)) return 'Maandelijks';
+    if(/^(elke 2 maanden|2 maandelijks)$/.test(v)) return 'Elke 2 maanden';
+    if(/^(elke 3 maanden|kwartaal|kwartaallijks|quarterly)$/.test(v)) return 'Elke 3 maanden';
+    if(/^(elke 6 maanden|halfjaarlijks|semiannual)$/.test(v)) return 'Elke 6 maanden';
+    if(/^(jaarlijks|ieder jaar|elk jaar|1x per jaar|yearly)$/.test(v)) return 'Jaarlijks';
+    if(/^(na elke was|na iedere was)$/.test(v)) return 'Na elke was';
+    if(/^(wanneer nodig|indien nodig|naar behoefte)$/.test(v)) return 'Wanneer nodig';
+    if(/^(eenmalig|once)$/.test(v)) return 'Eenmalig';
+    return String(value).trim();
+  }
+
+  function iso14(value='') {
+    const s=String(value).trim();
+    let m=s.match(/\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\b/);
+    if(m) return `${m[1]}-${String(m[2]).padStart(2,'0')}-${String(m[3]).padStart(2,'0')}`;
+    m=s.match(/\b(\d{1,2})[-/.](\d{1,2})[-/.](20\d{2})\b/);
+    if(m) return `${m[3]}-${String(m[2]).padStart(2,'0')}-${String(m[1]).padStart(2,'0')}`;
+    return s;
+  }
+
+  function number14(value, fallback=0) {
+    const m=String(value ?? '').replace(',','.').match(/-?\d+(?:\.\d+)?/);
+    return m ? Number(m[0]) : fallback;
+  }
+
+  function split14(line='') {
+    const raw=String(line).trim();
+    let parts;
+    if(raw.includes('|')) parts=raw.split('|');
+    else if(raw.includes(';')) parts=raw.split(';');
+    else if(raw.includes('\t')) parts=raw.split(/\t+/);
+    else if(/\s\/\s/.test(raw)) parts=raw.split(/\s+\/\s+/);
+    else if(/\s[-–—]\s/.test(raw)) parts=raw.split(/\s+[-–—]\s+/);
+    else if(/\s{2,}/.test(raw)) parts=raw.split(/\s{2,}/);
+    else return [raw];
+    return parts.map(clean14);
+  }
+
+  function detectTarget14(parts, fallback) {
+    const first=norm14(parts[0]).replace(/\s/g,'_');
+    return ALIASES14[first] || ALIASES14[norm14(parts[0])] || fallback;
+  }
+
+  function mapLine14(line, fallbackTarget) {
+    const parts=split14(line);
+    if(!parts.length || !parts.some(Boolean)) return null;
+    const target=detectTarget14(parts,fallbackTarget);
+    const schema=SCHEMAS14[target];
+    if(!schema) return null;
+
+    const firstTarget=ALIASES14[norm14(parts[0]).replace(/\s/g,'_')] || ALIASES14[norm14(parts[0])];
+    const values=firstTarget ? parts : [TARGETS14[target], ...parts];
+    const record={target};
+    schema.forEach((key,i)=>record[key]=clean14(values[i] ?? ''));
+    return record;
+  }
+
+  function findCalendar14(name='') {
+    const n=norm14(name);
+    return (data.calendars||[]).find(c=>norm14(c.name)===n)?.id || data.calendars?.[0]?.id || 'persoonlijk';
+  }
+
+  function makeItem14(r) {
+    if(r.target==='planning') return {
+      id:id(), title:r.title||'Afspraak',
+      date:iso14(r.startDate), time:r.startTime||'',
+      endDate:iso14(r.endDate||r.startDate), endTime:r.endTime||'',
+      allDay:bool14(r.allDay,false), location:r.location||'',
+      note:r.description||'', repeat:repeat14(r.repeat),
+      person:'Samen', calendarId:findCalendar14('')
+    };
+
+    if(r.target==='meals') return {
+      id:id(), title:r.title||'Maaltijd', date:iso14(r.date),
+      type:r.mealType||'Avondeten', persons:r.persons||'',
+      ingredients:r.ingredients||'', note:r.note||''
+    };
+
+    if(r.target==='groceries') return {
+      id:id(), title:r.title||'Product',
+      amount:number14(r.amount, r.amount?0:1), unit:r.unit||'',
+      category:r.category||'Overig', store:r.store||'',
+      forMeal:r.forMeal||'', done:bool14(r.done,false), note:r.note||''
+    };
+
+    if(r.target==='chores') return {
+      id:id(), title:r.title||'Taak', category:r.category||'',
+      repeat:repeat14(r.repeat), person:r.person||'Samen',
+      due:iso14(r.startDate||r.nextDate), nextDate:iso14(r.nextDate),
+      priority:priority14(r.priority), done:bool14(r.done,false),
+      notes:r.notes||'', secondWeekday:'', completedDates:[]
+    };
+
+    if(r.target==='stock') return {
+      id:id(), title:r.title||'Product', category:r.category||'Overig',
+      amount:number14(r.amount,0), unit:r.unit||'stuks',
+      min:number14(r.minimum,0),
+      desired:Math.max(number14(r.minimum,0),number14(r.amount,0)),
+      bestBefore:iso14(r.bestBefore), location:r.location||'', note:r.note||''
+    };
+
+    if(r.target==='ideas') return {
+      id:id(), title:r.title||'Idee', category:r.category||'Thuis',
+      note:[r.description,r.note].filter(Boolean).join('\n'),
+      person:r.person||'', priority:priority14(r.priority),
+      status:r.status||'', date:iso14(r.date), icon:'♡'
+    };
+
+    if(r.target==='home') return {
+      id:id(), title:r.title||'Woningitem', category:r.category||'Onderhoud',
+      note:[r.description,r.note].filter(Boolean).join('\n'),
+      kind:r.kind||'', priority:priority14(r.priority),
+      startDate:iso14(r.startDate), due:iso14(r.deadline||r.startDate),
+      status:r.status||'', cost:number14(r.cost,0),
+      done:bool14(r.done,false), repeat:''
+    };
+
+    if(r.target==='trips') return makeTrip14(r);
+    return null;
+  }
+
+  function getOrCreateTripFolder14(name='') {
+    data.tripFolders ||= [];
+    const wanted=(name||'Nieuwe reis').trim();
+    let folder=data.tripFolders.find(f=>norm14(f.name)===norm14(wanted));
+    if(!folder) {
+      folder={id:id(),name:wanted,startDate:'',endDate:'',note:'Aangemaakt via universele import'};
+      data.tripFolders.push(folder);
+    }
+    return folder;
+  }
+
+  function getOrCreateTripSection14(folderId,name='') {
+    data.tripSections ||= [];
+    const wanted=(name||'Algemeen').trim();
+    let section=data.tripSections.find(s=>s.tripFolderId===folderId && norm14(s.name)===norm14(wanted));
+    if(!section) {
+      section={id:id(),tripFolderId:folderId,name:wanted};
+      data.tripSections.push(section);
+    }
+    return section;
+  }
+
+  function makeTrip14(r) {
+    const folder=getOrCreateTripFolder14(r.trip);
+    const section=getOrCreateTripSection14(folder.id,r.section);
+    const start=iso14(r.startDate||r.deadline);
+    const end=iso14(r.endDate||start);
+
+    if(start && !folder.startDate) folder.startDate=start;
+    if(end && !folder.endDate) folder.endDate=end;
+
+    const extras=[];
+    if(r.location) extras.push(`Locatie: ${r.location}`);
+    if(r.cost) extras.push(`Kosten: ${r.cost}`);
+    if(r.priority) extras.push(`Prioriteit: ${priority14(r.priority)}`);
+    if(r.note) extras.push(r.note);
+
+    return {
+      id:id(), tripFolderId:folder.id, tripSectionId:section.id,
+      title:r.title||'Reisitem', date:start, startDate:start, endDate:end,
+      type:r.kind||'Notitie',
+      note:[r.description,...extras].filter(Boolean).join('\n'),
+      checkable:bool14(r.checkable,false),
+      important:priority14(r.priority)==='hoog',
+      done:bool14(r.done,false)
+    };
+  }
+
+  function analyse14() {
+    const lines=String(state14.text||'').replace(/\r/g,'').split(/\n+/)
+      .map(x=>x.trim()).filter(Boolean)
+      .filter(x=>!/^#/.test(x));
+
+    const records=lines.map(line=>mapLine14(line,state14.target)).filter(Boolean);
+    state14.preview=records
+      .map(record=>({record,item:makeItem14(record),selected:true}))
+      .filter(x=>x.item);
+
+    render();
+    toast(`${state14.preview.length} items gevonden`);
+  }
+
+  function previewText14(entry) {
+    const r=entry.record;
+    if(r.target==='planning') return `${r.startDate||'geen datum'} ${r.startTime||''}`.trim();
+    if(r.target==='meals') return `${r.date||'geen datum'} · ${r.mealType||'Avondeten'}`;
+    if(r.target==='groceries') return `${r.amount||''} ${r.unit||''} · ${r.category||'Overig'}`.trim();
+    if(r.target==='chores') return `${repeat14(r.repeat)||'geen frequentie'} · ${r.person||'Samen'}`;
+    if(r.target==='stock') return `${r.amount||0} ${r.unit||'stuks'} · min ${r.minimum||0}`;
+    if(r.target==='ideas') return `${r.category||'Thuis'}${r.priority?' · '+priority14(r.priority):''}`;
+    if(r.target==='home') return `${r.category||'Onderhoud'}${r.deadline?' · '+r.deadline:''}`;
+    if(r.target==='trips') return `${r.trip||'Nieuwe reis'} › ${r.section||'Algemeen'}${r.startDate?' · '+r.startDate:''}`;
+    return '';
+  }
+
+  function renderImport14() {
+    return `<div class="import-v13">
+      <section class="card">
+        <div class="card-head">
+          <div><p class="eyebrow">SAMEN THUIS · UNIVERSELE IMPORT</p><h2>Toevoegen & importeren</h2></div>
+          <span class="tag green">v14</span>
+        </div>
+
+        <p>Gebruik <strong>|</strong>, <strong>;</strong>, tabs, <strong> / </strong>, <strong> - </strong> of meerdere spaties. Datums met een koppelteken blijven intact.</p>
+
+        <div class="form-grid">
+          <div class="field">
+            <label>Standaard pagina</label>
+            <select id="v14Target">
+              ${Object.entries(TARGETS14).map(([k,v])=>`<option value="${k}" ${k===state14.target?'selected':''}>${esc14(v)}</option>`).join('')}
+            </select>
+          </div>
+
+          <div class="field">
+            <label>Bestand</label>
+            <input id="v14File" type="file" accept=".pdf,.docx,.xlsx,.xlsm,.xls,.csv,.txt,.md,application/pdf,text/plain">
+          </div>
+
+          <div class="field full">
+            <label>Tekst / lijst</label>
+            <textarea id="v14Text" placeholder="huishouden | Badkamer schoonmaken | Badkamer | wekelijks | Samen ...">${esc14(state14.text)}</textarea>
+          </div>
+        </div>
+
+        ${state14.filename?`<p class="muted">Bron: <strong>${esc14(state14.filename)}</strong></p>`:''}
+
+        <div class="button-row">
+          <button class="primary" data-v14-analyse>Analyseren</button>
+          <button class="secondary" data-v14-clear>Leegmaken</button>
+          <button class="secondary" data-v14-legacy>Oude documentanalyse</button>
+        </div>
+
+        <details>
+          <summary>Vaste volgorde per pagina bekijken</summary>
+          <pre style="white-space:pre-wrap">Agenda: [agenda] | [titel] | [begindatum] | [begintijd] | [einddatum] | [eindtijd] | [hele dag] | [locatie] | [omschrijving] | [herhaling]
+Weekmenu: [weekmenu] | [datum] | [maaltijdmoment] | [gerecht] | [personen] | [ingrediënten] | [notitie]
+Boodschappen: [boodschappen] | [product] | [hoeveelheid] | [eenheid] | [categorie] | [winkel] | [voor weekmenu] | [afgevinkt] | [notitie]
+Huishouden: [huishouden] | [taak] | [ruimte/categorie] | [frequentie] | [toegewezen aan] | [startdatum] | [volgende datum] | [prioriteit] | [afgevinkt] | [omschrijving/subtaken]
+Voorraad: [voorraad] | [product] | [categorie] | [hoeveelheid] | [eenheid] | [minimumvoorraad] | [houdbaar-tot] | [locatie] | [notitie]
+Ideeën: [idee] | [titel] | [categorie] | [omschrijving] | [voor wie] | [prioriteit] | [status] | [datum/deadline] | [link/notitie]
+Woning: [woning] | [titel] | [categorie/ruimte] | [omschrijving] | [type] | [prioriteit] | [startdatum] | [deadline] | [status] | [kosten] | [afgevinkt] | [notitie]
+Reizen: [reizen] | [reis] | [map/onderdeel] | [titel] | [type] | [omschrijving] | [startdatum] | [einddatum] | [deadline] | [locatie] | [kosten] | [prioriteit] | [afvinken] | [afgevinkt] | [notitie/link]</pre>
+        </details>
+      </section>
+
+      ${state14.preview.length?`
+      <section class="card">
+        <div class="card-head">
+          <div><p class="eyebrow">CONTROLE</p><h2>${state14.preview.length} gevonden items</h2></div>
+          <button class="primary" data-v14-commit>Geselecteerde toevoegen</button>
+        </div>
+
+        <div class="v13-preview-list">
+          ${state14.preview.map((entry,i)=>`
+            <article class="v13-card" data-v14-card="${i}">
+              <div class="v13-card-head">
+                <label><input type="checkbox" data-v14-selected ${entry.selected?'checked':''}> Importeren</label>
+              </div>
+              <strong>${esc14(entry.item.title)}</strong><br>
+              <small class="muted">${esc14(TARGETS14[entry.record.target])} · ${esc14(previewText14(entry))}</small>
+            </article>
+          `).join('')}
+        </div>
+      </section>`:
+      '<section class="card"><p class="muted">Nog niets geanalyseerd.</p></section>'}
+    </div>`;
+  }
+
+  async function loadScript14(src,test) {
+    if(test()) return;
+    await new Promise((resolve,reject)=>{
+      const s=document.createElement('script');
+      s.src=src;
+      s.onload=resolve;
+      s.onerror=reject;
+      document.head.appendChild(s);
+    });
+  }
+
+  async function readFile14(file) {
+    const ext=file.name.toLowerCase().split('.').pop();
+
+    if(['txt','md','csv'].includes(ext)) return file.text();
+
+    if(ext==='pdf') return extractPdfText(file);
+
+    if(ext==='docx') {
+      await loadScript14(
+        'https://cdn.jsdelivr.net/npm/mammoth@1.12.2/mammoth.browser.min.js',
+        ()=>Boolean(window.mammoth)
+      );
+      return (await window.mammoth.extractRawText({arrayBuffer:await file.arrayBuffer()})).value||'';
+    }
+
+    if(['xlsx','xlsm','xls'].includes(ext)) {
+      await loadScript14(
+        'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',
+        ()=>Boolean(window.XLSX)
+      );
+      const wb=window.XLSX.read(await file.arrayBuffer(),{type:'array',cellDates:true});
+      return wb.SheetNames.map(n=>window.XLSX.utils.sheet_to_csv(wb.Sheets[n],{FS:'|'})).join('\n');
+    }
+
+    throw new Error('Bestandstype niet ondersteund');
+  }
+
+  function bind14() {
+    document.querySelector('#v14Target')?.addEventListener('change',e=>{
+      state14.target=e.target.value;
+      state14.preview=[];
+      render();
+    });
+
+    document.querySelector('#v14Text')?.addEventListener('input',e=>{
+      state14.text=e.target.value;
+    });
+
+    document.querySelector('#v14File')?.addEventListener('change',async e=>{
+      const file=e.target.files?.[0];
+      if(!file) return;
+
+      try {
+        state14.filename=file.name;
+        toast('Bestand wordt gelezen…');
+        state14.text=await readFile14(file);
+        analyse14();
+      } catch(err) {
+        console.error(err);
+        toast('Bestand lezen is mislukt');
+      }
+    });
+  }
+
+  function openManualImport14() {
+    state14.legacy=true;
+    render();
+    // De v13-importer staat standaard op handmatig. Als de gebruiker eerder
+    // een andere methode koos, schakelen we expliciet terug naar Handmatig.
+    setTimeout(()=>document.querySelector('[data-v14-method="manual"]')?.click(),0);
+  }
+
+  function bindTopAdd14() {
+    const add=document.querySelector('#addBtn');
+    if(!add || add.dataset.v14Bound==='1') return;
+    add.dataset.v14Bound='1';
+    add.addEventListener('click',e=>{
+      if(current!=='imports') return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      openManualImport14();
+    },true);
+  }
+
+  render = function renderV141() {
+    if(current==='imports' && !state14.legacy) {
+      document.querySelector('#view').innerHTML=renderImport14();
+      updateSyncBadge();
+      bind14();
+      bindTopAdd14();
+      return;
+    }
+
+    baseRender14();
+
+    if(current==='imports' && state14.legacy) {
+      const view=document.querySelector('#view');
+      if(view && !view.querySelector('[data-v14-new]')) {
+        view.insertAdjacentHTML('afterbegin',`
+          <div class="button-row" style="margin-bottom:16px">
+            <button class="secondary" data-v14-new>← Terug naar nieuwe import</button>
+          </div>`);
+      }
+      bindTopAdd14();
+    }
+  };
+
+  document.addEventListener('click',e=>{
+    if(e.target.closest('[data-v14-new]')) {
+      state14.legacy=false;
+      render();
+      return;
+    }
+
+    if(e.target.closest('[data-v14-legacy]')) {
+      state14.legacy=true;
+      render();
+      return;
+    }
+
+    if(current!=='imports' || state14.legacy) return;
+
+    if(e.target.closest('[data-v14-analyse]')) {
+      state14.text=document.querySelector('#v14Text')?.value||state14.text;
+      analyse14();
+      return;
+    }
+
+    if(e.target.closest('[data-v14-clear]')) {
+      state14.text='';
+      state14.filename='';
+      state14.preview=[];
+      render();
+      return;
+    }
+
+    if(e.target.closest('[data-v14-commit]')) {
+      document.querySelectorAll('[data-v14-card]').forEach(card=>{
+        const x=state14.preview[Number(card.dataset.v14Card)];
+        if(x) x.selected=Boolean(card.querySelector('[data-v14-selected]')?.checked);
+      });
+
+      const selected=state14.preview.filter(x=>x.selected);
+      if(!selected.length) return toast('Selecteer minimaal één item');
+
+      selected.forEach(({record,item})=>{
+        data[record.target] ||= [];
+        data[record.target].push(item);
+      });
+
+      save();
+
+      const count=selected.length;
+      state14.preview=[];
+      state14.text='';
+      state14.filename='';
+      render();
+      toast(`${count} items toegevoegd`);
+      return;
+    }
+  },true);
+
+  save({touch:false});
+  toast('Samen Thuis v14.1 geladen');
+})();
+
+;
+
+
+/* ===== GEÏNTEGREERD: samen-thuis-update-v15(1).js ===== */
+/* Samen Thuis v15.0
+   - Bodemprijzen / goede-deal database
+   - Gierige Gerda lijst 31-08-2026 als startdata
+   - Nieuwere bodemprijzen-PDF direct importeerbaar
+   - Prijsreferenties zichtbaar bij Boodschappen en Voorraad
+   - Aanbevolen huishoudverdeling kan op bestaande taken worden toegepast
+*/
+console.info('Samen Thuis update 15.0 geladen');
+
+(() => {
+  'use strict';
+  if (window.__SAMEN_THUIS_V150__) return;
+  window.__SAMEN_THUIS_V150__ = true;
+
+  const baseRender15 = render;
+  const DEFAULT_PRICES = [{"category":"(Fris)drank","product":"Aanmaaklimonade","brand":"Karvam Cevitan","quantity":"liter","floorPrice":3.33,"goodDealPrice":4.15,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"(Fris)drank","product":"Aanmaaklimonade","brand":"Raak","quantity":"liter","floorPrice":1.86,"goodDealPrice":2.0,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"(Fris)drank","product":"Aanmaaklimonade","brand":"Teisseire","quantity":"liter","floorPrice":4.0,"goodDealPrice":4.15,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"(Fris)drank","product":"Cola","brand":"Coca-Cola","quantity":"liter","floorPrice":0.85,"goodDealPrice":1.0,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"(Fris)drank","product":"Cola","brand":"huismerk","quantity":"liter","floorPrice":0.33,"goodDealPrice":0.6,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"(Fris)drank","product":"Cola","brand":"Pepsi","quantity":"liter","floorPrice":0.67,"goodDealPrice":1.0,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"(Fris)drank","product":"Energiedrank","brand":"Red Bull","quantity":"250 ml","floorPrice":0.85,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"(Fris)drank","product":"Frisdrank overig","brand":"A-merk","quantity":"liter","floorPrice":1.0,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"(Fris)drank","product":"IJsthee","brand":"Lipton","quantity":"liter","floorPrice":0.8,"goodDealPrice":1.0,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"(Fris)drank","product":"Rivella","brand":"","quantity":"liter","floorPrice":0.83,"goodDealPrice":1.0,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Chips","product":"Popcorn","brand":"Jimmy's","quantity":"100 gram","floorPrice":0.89,"goodDealPrice":1.0,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Diepvries","product":"IJs","brand":"Ben & Jerry's","quantity":"500 ml","floorPrice":3.21,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Diepvries","product":"IJsstam","brand":"Viennetta","quantity":"600 gram","floorPrice":0.89,"goodDealPrice":1.0,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Drogisterij","product":"Conditioner","brand":"A-merk","quantity":"300 ml","floorPrice":1.99,"goodDealPrice":3.0,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Drogisterij","product":"Conditioner","brand":"huismerk","quantity":"500 ml","floorPrice":1.0,"goodDealPrice":1.25,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Drogisterij","product":"Damesscheermesjes","brand":"A-merk","quantity":"stuk","floorPrice":1.67,"goodDealPrice":2.0,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Drogisterij","product":"Deodorant roller","brand":"A-merk","quantity":"stuk","floorPrice":0.8,"goodDealPrice":1.0,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Drogisterij","product":"Deodorant roller","brand":"huismerk","quantity":"stuk","floorPrice":0.8,"goodDealPrice":1.0,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Drogisterij","product":"Deodorant spuitbus","brand":"A-merk","quantity":"stuk","floorPrice":0.8,"goodDealPrice":1.0,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Drogisterij","product":"Deodorant spuitbus","brand":"huismerk","quantity":"stuk","floorPrice":0.8,"goodDealPrice":1.0,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Drogisterij","product":"Douchegel","brand":"Fa","quantity":"250 ml","floorPrice":0.33,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Drogisterij","product":"Handzeep","brand":"A-merk","quantity":"liter","floorPrice":2.0,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Drogisterij","product":"Herenscheermesjes","brand":"A-merk","quantity":"stuk","floorPrice":1.92,"goodDealPrice":2.0,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Drogisterij","product":"Opzetborstel elektrisch","brand":"A-merk","quantity":"stuk","floorPrice":1.79,"goodDealPrice":2.5,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Drogisterij","product":"Opzetborstel elektrisch","brand":"huismerk","quantity":"stuk","floorPrice":0.31,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Drogisterij","product":"Shampoo","brand":"A-merk","quantity":"300 ml","floorPrice":1.99,"goodDealPrice":3.0,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Drogisterij","product":"Shampoo","brand":"huismerk","quantity":"500 ml","floorPrice":1.0,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Drogisterij","product":"Tandenborstel","brand":"A-merk","quantity":"stuk","floorPrice":0.33,"goodDealPrice":0.5,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Drogisterij","product":"Tandpasta","brand":"A-merk (doosje)","quantity":"75 ml","floorPrice":1.0,"goodDealPrice":2.0,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Drogisterij","product":"Tandpasta","brand":"A-merk (tube)","quantity":"75 ml","floorPrice":0.5,"goodDealPrice":1.0,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Drogisterij","product":"Tandpasta","brand":"huismerk","quantity":"75 ml","floorPrice":0.25,"goodDealPrice":0.41,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Drogisterij","product":"Tandpasta","brand":"Parodontax","quantity":"75 ml","floorPrice":1.67,"goodDealPrice":2.0,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Drogisterij","product":"Zonnebrandcrème","brand":"A-merk","quantity":"200 ml","floorPrice":5.99,"goodDealPrice":8.99,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Drogisterij","product":"Zonnebrandcrème","brand":"huismerk","quantity":"200 ml","floorPrice":3.2,"goodDealPrice":4.99,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Huishouden","product":"Afwasmiddel","brand":"A-merk","quantity":"liter","floorPrice":2.85,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Huishouden","product":"Allesreiniger","brand":"A-merk","quantity":"liter","floorPrice":0.9,"goodDealPrice":1.0,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Huishouden","product":"Allesreiniger","brand":"huismerk","quantity":"liter","floorPrice":0.75,"goodDealPrice":1.0,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Huishouden","product":"Allesreiniger doekjes","brand":"huismerk","quantity":"80 stuks","floorPrice":0.49,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Huishouden","product":"Biotex","brand":"","quantity":"100 gram","floorPrice":0.42,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Huishouden","product":"Keukenrol","brand":"2-laags","quantity":"100 vel","floorPrice":0.52,"goodDealPrice":0.75,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Huishouden","product":"Keukenrol","brand":"3-laags","quantity":"100 vel","floorPrice":0.78,"goodDealPrice":1.0,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Huishouden","product":"Oxi vlekverwijderaar","brand":"A-merk","quantity":"kilo","floorPrice":6.47,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Huishouden","product":"Toiletblok","brand":"A-merk","quantity":"stuk","floorPrice":0.8,"goodDealPrice":1.0,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Huishouden","product":"Toiletblok","brand":"huismerk","quantity":"stuk","floorPrice":0.5,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Huishouden","product":"Toiletpapier","brand":"3-laags","quantity":"100 vel","floorPrice":0.13,"goodDealPrice":0.15,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Huishouden","product":"Vaatwaspoeder","brand":"A-merk","quantity":"wasbeurt","floorPrice":0.05,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Huishouden","product":"Vaatwaspoeder","brand":"huismerk","quantity":"wasbeurt","floorPrice":0.09,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Huishouden","product":"Vaatwastablet","brand":"Dreft","quantity":"wasbeurt","floorPrice":0.17,"goodDealPrice":0.2,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Huishouden","product":"Vaatwastablet","brand":"huismerk","quantity":"wasbeurt","floorPrice":0.04,"goodDealPrice":0.08,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Huishouden","product":"Vaatwastablet","brand":"Sun","quantity":"wasbeurt","floorPrice":0.09,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Huishouden","product":"Wasmiddel","brand":"Neutral","quantity":"wasbeurt","floorPrice":0.19,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Huishouden","product":"Wasmiddel pods","brand":"huismerk","quantity":"wasbeurt","floorPrice":0.1,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Huishouden","product":"Wasmiddel pods","brand":"Reus","quantity":"wasbeurt","floorPrice":0.14,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Huishouden","product":"Wasmiddel poeder","brand":"Ariel","quantity":"wasbeurt","floorPrice":0.2,"goodDealPrice":0.23,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Huishouden","product":"Wasmiddel poeder","brand":"Reus","quantity":"wasbeurt","floorPrice":0.14,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Huishouden","product":"Wasmiddel quickwash","brand":"Robijn","quantity":"wasbeurt","floorPrice":0.22,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Huishouden","product":"Wasmiddel vloeibaar","brand":"Ariel","quantity":"wasbeurt","floorPrice":0.2,"goodDealPrice":0.23,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Huishouden","product":"Wasmiddel vloeibaar","brand":"Fleuril","quantity":"wasbeurt","floorPrice":0.13,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Huishouden","product":"Wasmiddel vloeibaar","brand":"Omo","quantity":"wasbeurt","floorPrice":0.09,"goodDealPrice":0.11,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Huishouden","product":"Wasmiddel vloeibaar","brand":"Reus","quantity":"wasbeurt","floorPrice":0.09,"goodDealPrice":0.11,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Huishouden","product":"Wasmiddel vloeibaar","brand":"Robijn","quantity":"wasbeurt","floorPrice":0.13,"goodDealPrice":0.15,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Huishouden","product":"Wasmiddeldoekje","brand":"A-merk","quantity":"wasbeurt","floorPrice":0.07,"goodDealPrice":0.15,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Huishouden","product":"Wasmiddeldoekje","brand":"huismerk","quantity":"wasbeurt","floorPrice":0.1,"goodDealPrice":0.15,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Huishouden","product":"Wasparfum","brand":"Robijn","quantity":"wasbeurt","floorPrice":0.16,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Huishouden","product":"Wasverzachter","brand":"huismerk","quantity":"wasbeurt","floorPrice":0.02,"goodDealPrice":0.05,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Huishouden","product":"Zakdoekjes (4-laags)","brand":"huismerk","quantity":"pakje 10 zakdoekjes","floorPrice":0.07,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Koffie en thee","product":"Filterkoffie","brand":"A-merk","quantity":"500 gram","floorPrice":5.29,"goodDealPrice":6.5,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Koffie en thee","product":"Filterkoffie","brand":"huismerk","quantity":"500 gram","floorPrice":3.0,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Koffie en thee","product":"Koffiebonen","brand":"huismerk","quantity":"kilo","floorPrice":6.66,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Koffie en thee","product":"Koffiecup","brand":"A-merk","quantity":"stuk","floorPrice":0.25,"goodDealPrice":0.3,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Koffie en thee","product":"Koffiecup","brand":"huismerk","quantity":"stuk","floorPrice":0.09,"goodDealPrice":0.13,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Koffie en thee","product":"Koffiepads","brand":"A-merk","quantity":"per pad","floorPrice":0.07,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Koffie en thee","product":"Koffiepads","brand":"huismerk","quantity":"per pad","floorPrice":0.05,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Koffie en thee","product":"Thee","brand":"A-merk","quantity":"doosje 20 stuks","floorPrice":1.0,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Koffie en thee","product":"Thee","brand":"Clipper","quantity":"doosje 20 stuks","floorPrice":1.79,"goodDealPrice":1.99,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Olie","product":"Olijfolie extra vierge","brand":"A-merk","quantity":"liter","floorPrice":4.99,"goodDealPrice":7.99,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Ontbijt en lunch","product":"Duopasta","brand":"Duo Pennotti","quantity":"kilo","floorPrice":4.36,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Ontbijt en lunch","product":"Hazelnootpasta","brand":"A-merk","quantity":"kilo","floorPrice":5.3,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Ontbijt en lunch","product":"Hazelnootpasta","brand":"huismerk","quantity":"kilo","floorPrice":3.49,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Ontbijt en lunch","product":"Ontbijtgranen","brand":"A-merk","quantity":"kilo","floorPrice":6.5,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Ontbijt en lunch","product":"Pindakaas","brand":"A-merk","quantity":"kilo","floorPrice":3.06,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Ontbijt en lunch","product":"Pindakaas","brand":"huismerk","quantity":"kilo","floorPrice":2.54,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Ontbijt en lunch","product":"Pindakaas 100%","brand":"huismerk","quantity":"kilo","floorPrice":2.86,"goodDealPrice":3.99,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Pasta en rijst","product":"Farfalle","brand":"huismerk","quantity":"kilo","floorPrice":1.35,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Pasta en rijst","product":"Fusilli","brand":"huismerk","quantity":"kilo","floorPrice":1.39,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Pasta en rijst","product":"Macaroni","brand":"huismerk","quantity":"kilo","floorPrice":0.99,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Pasta en rijst","product":"Noodles","brand":"Indomie","quantity":"zakje","floorPrice":0.3,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Pasta en rijst","product":"Noodles","brand":"Unox","quantity":"pot","floorPrice":0.99,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Pasta en rijst","product":"Noodles","brand":"Unox","quantity":"zakje","floorPrice":0.58,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Pasta en rijst","product":"Penne","brand":"huismerk","quantity":"kilo","floorPrice":1.08,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Pasta en rijst","product":"Rijst","brand":"Lassie","quantity":"kilo","floorPrice":1.74,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Pasta en rijst","product":"Rijst basmati","brand":"huismerk","quantity":"kilo","floorPrice":1.79,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Pasta en rijst","product":"Rijst pandan","brand":"huismerk","quantity":"kilo","floorPrice":1.79,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Pasta en rijst","product":"Rijst zilvervlies","brand":"huismerk","quantity":"kilo","floorPrice":1.4,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Pasta en rijst","product":"Spaghetti","brand":"huismerk","quantity":"kilo","floorPrice":0.66,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Sauzen","product":"Mayonaise","brand":"A-merk","quantity":"liter","floorPrice":2.22,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Snoep","product":"Pepermunt","brand":"Wilhelmina","quantity":"per rol","floorPrice":0.29,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Vlees","product":"Rookworst","brand":"HEMA","quantity":"stuk","floorPrice":2.49,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Vlees","product":"Rookworst","brand":"huismerk","quantity":"stuk","floorPrice":0.99,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Wereldkeuken","product":"Pizza","brand":"Crosta & Mollica","quantity":"stuk","floorPrice":3.0,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Wereldkeuken","product":"Wereldgerechten burritos","brand":"Knorr","quantity":"pak 2-3 personen","floorPrice":1.0,"goodDealPrice":1.35,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Zuivel","product":"Chocolademelk","brand":"A-merk","quantity":"liter","floorPrice":0.75,"goodDealPrice":1.0,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Zuivel","product":"Houdbare melk","brand":"A-merk","quantity":"liter","floorPrice":0.79,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Zuivel","product":"Houdbare melk","brand":"huismerk","quantity":"liter","floorPrice":0.66,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Zuivel","product":"Kaas (jong belegen)","brand":"huismerk","quantity":"kilo","floorPrice":5.0,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Zuivel","product":"Roomboter","brand":"huismerk","quantity":"500 gram","floorPrice":2.0,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"},{"category":"Zuivel","product":"Smeerkaas","brand":"A-merk","quantity":"100 gram","floorPrice":0.75,"goodDealPrice":null,"source":"Gierige Gerda Media 2026","updatedAt":"2026-08-31"}];
+  const ASSIGNMENTS = {"Keuken en woonkamer dagelijkse reset":"Samen","WC schoonmaken":"Kees","Badkamer schoonmaken":"Daphne","Vloeren hele huis":"Kees","Afstoffen hele huis":"Daphne","Keuken grondig schoonmaken":"Daphne","Slaapkamer opruimen en schoonmaken":"Samen","Bureau- en wasruimte opruimen":"Kees","Hal opruimen en schoonmaken":"Kees","Koelkast weekcontrole":"Daphne","Spiegels en glazen oppervlakken reinigen":"Daphne","Deurklinken en lichtknoppen reinigen":"Samen","Onder bed, bank en meubels stofzuigen":"Kees","Afvalbakken reinigen":"Kees","Beddengoed verschonen":"Samen","Handdoeken en keukentextiel vervangen":"Samen","Kledingwas verwerken":"Samen","Badmat en schoonmaakdoeken wassen":"Daphne","Koelkast volledig schoonmaken":"Daphne","Oven en afzuigkap grondig reinigen":"Kees","Badkamer dieptereiniging":"Daphne","Plinten, deuren en kozijnen reinigen":"Samen","Radiatoren en ventilatieroosters reinigen":"Kees","Ramen binnenzijde en kozijnen schoonmaken":"Kees","Bank en hoge oppervlakken grondig reinigen":"Daphne","Wasmachine onderhouden":"Kees","Voorraadkast en keukenkastjes nalopen":"Daphne","Kledingkast en opbergkast nalopen":"Samen"};
+
+  const norm15 = (v='') => String(v).toLowerCase().normalize('NFD')
+    .replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,' ').trim();
+
+  const esc15 = (v='') => String(v)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#039;');
+
+  const euro15 = n => Number.isFinite(Number(n))
+    ? new Intl.NumberFormat('nl-NL',{style:'currency',currency:'EUR'}).format(Number(n))
+    : '—';
+
+  data.priceReferences ||= [];
+  if(!data.priceReferences.length) {
+    data.priceReferences = DEFAULT_PRICES.map((x,i)=>({id:`price-${i+1}`,...x}));
+    data.priceReferenceSource = 'Gierige Gerda Media 2026';
+    data.priceReferenceUpdatedAt = '2026-08-31';
+    save({touch:false});
+  }
+
+  let pricePreview15 = [];
+  let priceFileName15 = '';
+
+  function bestRefs15(title='') {
+    const q=norm15(title);
+    if(!q) return [];
+    const exact=[], loose=[];
+    for(const r of data.priceReferences||[]) {
+      const p=norm15(r.product);
+      if(!p) continue;
+      if(q===p || q.includes(p) || p.includes(q)) exact.push(r);
+      else {
+        const words=p.split(' ').filter(w=>w.length>3);
+        if(words.length && words.some(w=>q.includes(w))) loose.push(r);
+      }
+    }
+    return (exact.length?exact:loose).sort((a,b)=>(a.floorPrice??999)-(b.floorPrice??999));
+  }
+
+  function priceBadge15(ref) {
+    if(!ref) return '';
+    return `<span class="tag green">Bodem ${euro15(ref.floorPrice)} / ${esc15(ref.quantity)}</span>`+
+      (ref.goodDealPrice!=null?` <span class="tag">Goede deal ≤ ${euro15(ref.goodDealPrice)}</span>`:'');
+  }
+
+  function renderPriceReferenceCard15() {
+    const items=current==='groceries'?(data.groceries||[]):(data.stock||[]);
+    const matched=items.map(item=>({item,refs:bestRefs15(item.title||item.name||'')}))
+      .filter(x=>x.refs.length);
+
+    return `<section class="card" data-v15-price-card>
+      <div class="card-head">
+        <div>
+          <p class="eyebrow">BODEMPRIJZEN</p>
+          <h2>Prijsreferentie</h2>
+        </div>
+        <span class="tag green">${(data.priceReferences||[]).length} prijzen</span>
+      </div>
+      <p class="muted">Bron: ${esc15(data.priceReferenceSource||'Prijsreferenties')} · bijgewerkt ${esc15(data.priceReferenceUpdatedAt||'onbekend')}.</p>
+      ${matched.length?`
+        <div class="v13-preview-list">
+          ${matched.slice(0,12).map(x=>`
+            <article class="v13-card">
+              <strong>${esc15(x.item.title||x.item.name)}</strong>
+              <div style="margin-top:8px">${priceBadge15(x.refs[0])}</div>
+              <small class="muted">${esc15(x.refs[0].brand||'')}${x.refs.length>1?` · ${x.refs.length} passende referenties`:''}</small>
+            </article>`).join('')}
+        </div>`:
+        `<p class="muted">Er zijn nog geen producten op deze pagina die automatisch aan de bodemprijzenlijst gekoppeld zijn.</p>`}
+    </section>`;
+  }
+
+  function injectPagePriceCard15() {
+    if(!['groceries','stock'].includes(current)) return;
+    const view=document.querySelector('#view');
+    if(!view || view.querySelector('[data-v15-price-card]')) return;
+    view.insertAdjacentHTML('afterbegin',renderPriceReferenceCard15());
+  }
+
+  function householdStats15() {
+    const counts={Kees:0,Daphne:0,Samen:0};
+    (data.chores||[]).forEach(x=>{ if(counts[x.person]!=null) counts[x.person]++; });
+    return counts;
+  }
+
+  function injectHouseholdDistribution15() {
+    if(current!=='chores') return;
+    const view=document.querySelector('#view');
+    if(!view || view.querySelector('[data-v15-household]')) return;
+    const c=householdStats15();
+    view.insertAdjacentHTML('afterbegin',`
+      <section class="card" data-v15-household>
+        <div class="card-head">
+          <div><p class="eyebrow">VERDELING</p><h2>Huishoudtaken</h2></div>
+          <button class="secondary" data-v15-distribute>⚖️ Aanbevolen verdeling toepassen</button>
+        </div>
+        <p class="muted">Samen betekent: gezamenlijke verantwoordelijkheid; één van jullie mag de taak afronden.</p>
+        <div class="button-row">
+          <span class="tag">Kees · ${c.Kees}</span>
+          <span class="tag">Daphne · ${c.Daphne}</span>
+          <span class="tag">Samen · ${c.Samen}</span>
+        </div>
+      </section>`);
+  }
+
+  function applyHouseholdDistribution15() {
+    let changed=0;
+    (data.chores||[]).forEach(task=>{
+      const key=Object.keys(ASSIGNMENTS).find(k=>norm15(k)===norm15(task.title));
+      if(key && ASSIGNMENTS[key] && task.person!==ASSIGNMENTS[key]) {
+        task.person=ASSIGNMENTS[key];
+        changed++;
+      }
+    });
+    save(); render(); toast(`${changed} huishoudtaken opnieuw verdeeld`);
+  }
+
+  function parsePrice15(value) {
+    const m=String(value||'').match(/(\d+[,.]\d+|\d+)/);
+    return m?Number(m[1].replace(',','.')):null;
+  }
+
+  const CATS15=['(Fris)drank','Chips','Diepvries','Drogisterij','Huishouden','Koffie en thee','Olie','Ontbijt en lunch','Pasta en rijst','Sauzen','Snoep','Vlees','Wereldkeuken','Zuivel'];
+
+  function parsePricePdfText15(text='') {
+    const lines=String(text).replace(/\r/g,'').split(/\n+/).map(x=>x.trim()).filter(Boolean);
+    const updated=(String(text).match(/Update datum:\s*(\d{1,2})\s+([A-Za-zé]+)\s+(20\d{2})/i)||[]);
+    const months={januari:'01',februari:'02',maart:'03',april:'04',mei:'05',juni:'06',juli:'07',augustus:'08',september:'09',oktober:'10',november:'11',december:'12'};
+    const updateISO=updated.length?`${updated[3]}-${months[norm15(updated[2])]||'01'}-${String(updated[1]).padStart(2,'0')}`:'';
+
+    const result=[];
+    for(const line of lines) {
+      if(/^Categorie\s+Product/i.test(line) || /Copyright Gierige Gerda/i.test(line)) continue;
+      const category=CATS15.find(c=>line.startsWith(c+' '));
+      if(!category) continue;
+      const priceMatch=line.match(/€\s*(\d+[,.]\d+)\s*(?:€\s*(\d+[,.]\d+)|[-x])?\s*$/i);
+      if(!priceMatch) continue;
+
+      const prefix=line.slice(category.length,priceMatch.index).trim();
+      const qtyRx=/(pakje\s+10\s+zakdoekjes|doosje\s+20\s+stuks|pak\s+2-3\s+personen|100\s+vel|80\s+stuks|600\s+gram|500\s+gram|300\s+ml|250\s+ml|200\s+ml|100\s+gram|75\s+ml|500\s+ml|kilo|liter|stuk|wasbeurt|per\s+pad|per\s+rol|zakje|pot)$/i;
+      const qm=prefix.match(qtyRx);
+      if(!qm) continue;
+      const quantity=qm[1];
+      const left=prefix.slice(0,qm.index).trim();
+
+      let product='',brand='';
+      const known=DEFAULT_PRICES.find(r=>norm15(`${r.product} ${r.brand}`)===norm15(left))
+        || DEFAULT_PRICES.find(r=>norm15(left).startsWith(norm15(r.product)) && (!r.brand || norm15(left).includes(norm15(r.brand))));
+      if(known) {
+        product=known.product; brand=known.brand;
+      } else {
+        const tokens=left.split(/\s+/);
+        brand=tokens.pop()||'';
+        product=tokens.join(' ');
+      }
+
+      result.push({
+        id:`price-import-${Date.now()}-${result.length}`,
+        category,product,brand:brand==='-'?'':brand,quantity,
+        floorPrice:parsePrice15(priceMatch[1]),
+        goodDealPrice:parsePrice15(priceMatch[2]),
+        source:'Gierige Gerda Media',
+        updatedAt:updateISO
+      });
+    }
+    return {items:result,updatedAt:updateISO};
+  }
+
+  function priceImportCard15() {
+    return `<section class="card" data-v15-price-import>
+      <div class="card-head">
+        <div><p class="eyebrow">BODEMPRIJZEN</p><h2>Bodemprijzenlijst importeren</h2></div>
+        <span class="tag green">${(data.priceReferences||[]).length} actief</span>
+      </div>
+      <p>Upload hier rechtstreeks de <strong>Gierige Gerda bodemprijzenlijst</strong>. De lijst wordt apart bewaard en niet als voorraadproduct.</p>
+      <div class="form-grid">
+        <div class="field full">
+          <label>PDF / TXT</label>
+          <input type="file" id="v15PriceFile" accept=".pdf,.txt,text/plain,application/pdf">
+        </div>
+      </div>
+      ${priceFileName15?`<p class="muted">Bronbestand: <strong>${esc15(priceFileName15)}</strong></p>`:''}
+      ${pricePreview15.length?`
+        <div class="card-head" style="margin-top:16px">
+          <div><strong>${pricePreview15.length} prijzen gevonden</strong><br><small class="muted">Controleer het aantal en vervang daarna de huidige prijsreferenties.</small></div>
+          <button class="primary" data-v15-price-commit>Huidige lijst vervangen</button>
+        </div>
+        <div class="v13-preview-list">
+          ${pricePreview15.slice(0,8).map(r=>`
+            <article class="v13-card">
+              <strong>${esc15(r.product)}</strong><br>
+              <small>${esc15(r.brand||'Geen merk')} · ${esc15(r.quantity)}</small>
+              <div style="margin-top:6px">${priceBadge15(r)}</div>
+            </article>`).join('')}
+        </div>
+        ${pricePreview15.length>8?`<p class="muted">+ ${pricePreview15.length-8} overige prijzen</p>`:''}
+      `:''}
+    </section>`;
+  }
+
+  function injectPriceImport15() {
+    if(current!=='imports') return;
+    const view=document.querySelector('#view');
+    if(!view || view.querySelector('[data-v15-price-import]')) return;
+    view.insertAdjacentHTML('afterbegin',priceImportCard15());
+    bindPriceFile15();
+  }
+
+  function bindPriceFile15() {
+    const input=document.querySelector('#v15PriceFile');
+    if(!input || input.dataset.bound==='1') return;
+    input.dataset.bound='1';
+    input.addEventListener('change',async e=>{
+      const file=e.target.files?.[0]; if(!file) return;
+      try {
+        priceFileName15=file.name;
+        toast('Bodemprijzenlijst wordt gelezen…');
+        const ext=file.name.toLowerCase().split('.').pop();
+        const text=ext==='pdf'?await extractPdfText(file):await file.text();
+        const parsed=parsePricePdfText15(text);
+        pricePreview15=parsed.items;
+        if(parsed.updatedAt) pricePreview15.forEach(x=>x.updatedAt=parsed.updatedAt);
+        render();
+        toast(`${pricePreview15.length} bodemprijzen gevonden`);
+      } catch(err) {
+        console.error(err);
+        toast('Bodemprijzenlijst kon niet worden gelezen');
+      }
+    });
+  }
+
+  function commitPrices15() {
+    if(!pricePreview15.length) return toast('Upload eerst een bodemprijzenlijst');
+    data.priceReferences=pricePreview15.map(x=>({...x}));
+    data.priceReferenceSource='Gierige Gerda Media';
+    data.priceReferenceUpdatedAt=pricePreview15.find(x=>x.updatedAt)?.updatedAt || new Date().toISOString().slice(0,10);
+    save();
+    const n=pricePreview15.length;
+    pricePreview15=[]; priceFileName15='';
+    render(); toast(`${n} bodemprijzen opgeslagen`);
+  }
+
+  render=function renderV150() {
+    baseRender15();
+    injectPriceImport15();
+    injectPagePriceCard15();
+    injectHouseholdDistribution15();
+  };
+
+  document.addEventListener('click',e=>{
+    if(e.target.closest('[data-v15-distribute]')) {
+      e.preventDefault(); applyHouseholdDistribution15(); return;
+    }
+    if(e.target.closest('[data-v15-price-commit]')) {
+      e.preventDefault(); commitPrices15(); return;
+    }
+  },true);
+
+  save({touch:false});
+  toast('Samen Thuis v15 geladen');
+})();
+
+;
+
+
+/* ===== GEÏNTEGREERD: samen-thuis-update-v16(1).js ===== */
+/* Samen Thuis v16.0
+   SMART HOUSEHOLD + SCROLL PRESERVATION
+   - Geen vaste weekdagen meer voor huishoudtaken.
+   - Planning wordt berekend vanaf de echte laatste uitvoering.
+   - 2×/3× per week werkt met flexibele tussenpozen en cyclusstatus.
+   - completedDates blijft de bronhistorie.
+   - Wijzigen/afvinken houdt de scrollpositie vast.
+*/
+console.info('Samen Thuis update 16.0 geladen');
+
+(() => {
+  'use strict';
+  if (window.__SAMEN_THUIS_V160__) return;
+  window.__SAMEN_THUIS_V160__ = true;
+
+  const baseRender16 = render;
+  const baseOccursOn16 = typeof occursOn === 'function' ? occursOn : null;
+  const baseToggle16 = typeof toggleChoreOccurrence === 'function' ? toggleChoreOccurrence : null;
+
+  const pad16 = n => String(n).padStart(2,'0');
+  const iso16 = d => `${d.getFullYear()}-${pad16(d.getMonth()+1)}-${pad16(d.getDate())}`;
+  const parse16 = s => new Date(`${s}T12:00:00`);
+  const today16 = () => iso16(new Date());
+
+  const esc16 = (v='') => String(v).replace(/[&<>'"]/g, c=>({
+    '&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'
+  }[c]));
+
+  const norm16 = (v='') => String(v).toLowerCase().normalize('NFD')
+    .replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9×]+/g,' ').trim();
+
+  function addDays16(dateISO, amount) {
+    const d=parse16(dateISO);
+    d.setDate(d.getDate()+amount);
+    return iso16(d);
+  }
+
+  function addMonths16(dateISO, amount) {
+    const original=parse16(dateISO);
+    const day=original.getDate();
+    const d=new Date(original.getFullYear(), original.getMonth()+amount, 1, 12);
+    const last=new Date(d.getFullYear(), d.getMonth()+1, 0, 12).getDate();
+    d.setDate(Math.min(day,last));
+    return iso16(d);
+  }
+
+  function daysBetween16(a,b) {
+    return Math.round((parse16(b)-parse16(a))/86400000);
+  }
+
+  function fmt16(date) {
+    if(!date) return '';
+    return new Intl.DateTimeFormat('nl-NL',{day:'numeric',month:'short'}).format(parse16(date));
+  }
+
+  function uniqueSortedDates16(chore) {
+    return [...new Set((Array.isArray(chore.completedDates)?chore.completedDates:[])
+      .filter(x=>/^\d{4}-\d{2}-\d{2}$/.test(x)))]
+      .sort();
+  }
+
+  function lastDone16(chore) {
+    const dates=uniqueSortedDates16(chore);
+    return chore.lastDoneDate || dates.at(-1) || '';
+  }
+
+  function frequency16(chore) {
+    const r=norm16(chore.repeat);
+    if(r==='dagelijks') return {kind:'interval', target:1, days:1, lead:0};
+    if(r==='om de dag') return {kind:'interval', target:1, days:2, lead:1};
+    if(r==='2× per week' || r==='2x per week' || r==='2 per week') return {kind:'multi',target:2,days:4,lead:2,cycleDays:7};
+    if(r==='3× per week' || r==='3x per week' || r==='3 per week') return {kind:'multi',target:3,days:3,lead:1,cycleDays:7};
+    if(r==='wekelijks') return {kind:'interval',target:1,days:7,lead:3};
+    if(r==='elke 2 weken' || r==='om de week') return {kind:'interval',target:1,days:14,lead:4};
+    if(r==='elke 4 weken') return {kind:'interval',target:1,days:28,lead:7};
+    if(r==='maandelijks') return {kind:'month',target:1,months:1,lead:7};
+    if(r==='elke 2 maanden') return {kind:'month',target:1,months:2,lead:10};
+    if(r==='elke 3 maanden') return {kind:'month',target:1,months:3,lead:14};
+    if(r==='elke 6 maanden' || r==='halfjaarlijks') return {kind:'month',target:1,months:6,lead:21};
+    if(r==='jaarlijks') return {kind:'month',target:1,months:12,lead:30};
+    if(r==='eenmalig') return {kind:'once',target:1,lead:3};
+    if(r==='na elke was' || r==='wanneer nodig') return {kind:'manual',target:0,lead:0};
+    return {kind:'interval',target:1,days:7,lead:3};
+  }
+
+  function cycleCount16(chore, cfg) {
+    if(cfg.kind!=='multi') return 0;
+    const persisted=Number(chore.smartCycleCount);
+    if(Number.isFinite(persisted) && persisted>=0 && persisted<=cfg.target) return persisted;
+
+    const dates=uniqueSortedDates16(chore);
+    if(!dates.length) return 0;
+
+    // Reconstruct a current flexible cycle from the most recent completions.
+    const recent=[];
+    for(let i=dates.length-1;i>=0;i--) {
+      if(!recent.length || daysBetween16(dates[i],recent.at(-1))<=cfg.days) {
+        recent.unshift(dates[i]);
+        if(recent.length>=cfg.target) break;
+      } else break;
+    }
+    return Math.min(cfg.target,recent.length);
+  }
+
+  function nextDue16(chore) {
+    const cfg=frequency16(chore);
+    const last=lastDone16(chore);
+
+    if(cfg.kind==='manual') return '';
+    if(cfg.kind==='once') {
+      if(last) return '';
+      return chore.due || today16();
+    }
+
+    // First ever run: due is only an initial hint, never a fixed recurring weekday.
+    if(!last) return chore.due || today16();
+
+    if(cfg.kind==='month') return addMonths16(last,cfg.months);
+    return addDays16(last,cfg.days);
+  }
+
+  function smartStatus16(chore, date=today16()) {
+    const cfg=frequency16(chore);
+    const last=lastDone16(chore);
+    const due=nextDue16(chore);
+
+    if(cfg.kind==='manual') {
+      return {
+        due:'', last, count:0, target:0, level:'green',
+        text:last?`Laatst gedaan ${fmt16(last)} · wanneer nodig`:'Wanneer nodig'
+      };
+    }
+
+    if(cfg.kind==='once' && last) {
+      return {due:'',last,count:1,target:1,level:'green',text:`Afgerond ${fmt16(last)}`};
+    }
+
+    const delta=due ? daysBetween16(date,due) : 999;
+    let level='green';
+    if(delta<0) level='red';
+    else if(delta<=Math.min(2,cfg.lead||0)) level='orange';
+
+    if(cfg.kind==='multi') {
+      const count=cycleCount16(chore,cfg);
+      if(count>=cfg.target) {
+        const text = delta>0
+          ? `${cfg.target}/${cfg.target} gedaan · nieuwe cyclus over ${delta} ${delta===1?'dag':'dagen'}`
+          : delta===0
+            ? `${cfg.target}/${cfg.target} gedaan · nieuwe cyclus kan vandaag starten`
+            : `Nieuwe cyclus is ${Math.abs(delta)} ${Math.abs(delta)===1?'dag':'dagen'} aan de beurt`;
+        return {due,last,count,target:cfg.target,level,text};
+      }
+
+      const remaining=cfg.target-count;
+      const prefix=`${count}/${cfg.target} gedaan`;
+      const text=delta>0
+        ? `${prefix} · nog ${remaining}× · volgende binnen ${delta} ${delta===1?'dag':'dagen'}`
+        : delta===0
+          ? `${prefix} · nog ${remaining}× · volgende vandaag`
+          : `${prefix} · nog ${remaining}× · ${Math.abs(delta)} ${Math.abs(delta)===1?'dag':'dagen'} te laat`;
+      return {due,last,count,target:cfg.target,level,text};
+    }
+
+    const text = delta>0
+      ? `Binnen ${delta} ${delta===1?'dag':'dagen'} weer doen`
+      : delta===0
+        ? 'Vandaag weer doen'
+        : `${Math.abs(delta)} ${Math.abs(delta)===1?'dag':'dagen'} te laat`;
+
+    return {due,last,count:last?1:0,target:1,level,text};
+  }
+
+  function shouldShowSoon16(chore,date=today16()) {
+    const cfg=frequency16(chore);
+    const st=smartStatus16(chore,date);
+    if(cfg.kind==='manual') return false;
+    if(cfg.kind==='once' && st.last) return false;
+    if(!st.due) return false;
+    const d=daysBetween16(date,st.due);
+    return d<=Math.max(0,cfg.lead||0);
+  }
+
+  // Replace fixed-weekday scheduling. The calendar occurrence is now the calculated
+  // next deadline only; "soon" tasks are surfaced separately in Today/Household.
+  if(baseOccursOn16) {
+    occursOn = function occursOnV16(chore,date) {
+      const due=nextDue16(chore);
+      return Boolean(due && date===due);
+    };
+  }
+
+  // Completion is always an actual completion moment, not a recurring weekday.
+  if(baseToggle16) {
+    toggleChoreOccurrence = function toggleChoreOccurrenceV16(choreId,date) {
+      const chore=(data.chores||[]).find(x=>x.id===choreId);
+      if(!chore) return;
+
+      const doneDate = (date && date<=today16()) ? date : today16();
+      chore.completedDates ||= [];
+
+      // Clicking an already-recorded date undoes that exact completion.
+      if(chore.completedDates.includes(doneDate)) {
+        chore.completedDates=chore.completedDates.filter(x=>x!==doneDate);
+        const dates=uniqueSortedDates16(chore);
+        chore.lastDoneDate=dates.at(-1)||'';
+        delete chore.smartCycleCount;
+        delete chore.smartCycleStart;
+      } else {
+        const cfg=frequency16(chore);
+        const previousLast=lastDone16(chore);
+        chore.completedDates=[...new Set([...chore.completedDates,doneDate])].sort();
+        chore.lastDoneDate=doneDate;
+
+        if(cfg.kind==='multi') {
+          let current=cycleCount16(chore,cfg);
+          if(current>=cfg.target || !previousLast || daysBetween16(previousLast,doneDate)>cfg.cycleDays) {
+            current=1;
+            chore.smartCycleStart=doneDate;
+          } else {
+            current=Math.min(cfg.target,current+1);
+            chore.smartCycleStart ||= previousLast;
+          }
+          chore.smartCycleCount=current;
+        } else {
+          chore.smartCycleCount=1;
+          chore.smartCycleStart=doneDate;
+        }
+      }
+
+      save();
+      render();
+    };
+  }
+
+  function migrateSmartChores16() {
+    (data.chores||[]).forEach(chore=>{
+      chore.completedDates ||= [];
+      if(!chore.lastDoneDate) {
+        const dates=uniqueSortedDates16(chore);
+        chore.lastDoneDate=dates.at(-1)||'';
+      }
+      // Old second weekday is intentionally ignored from v16 onward.
+      chore.secondWeekday='';
+      chore.smartSchedule=true;
+    });
+    save({touch:false});
+  }
+
+  function statusColor16(level) {
+    if(level==='red') return '#b84f58';
+    if(level==='orange') return '#b2762c';
+    return '#2e7d67';
+  }
+
+  function smartTaskCard16(chore) {
+    const s=smartStatus16(chore);
+    const last=s.last?`Laatst: ${fmt16(s.last)}`:'Nog niet uitgevoerd';
+    return `<article class="v16-smart-task" data-v16-chore="${esc16(chore.id)}"
+      style="border:1px solid rgba(49,95,134,.18);border-left:5px solid ${statusColor16(s.level)};border-radius:16px;padding:14px;margin:10px 0;background:rgba(255,255,255,.7)">
+      <div style="display:flex;gap:12px;justify-content:space-between;align-items:flex-start">
+        <div>
+          <strong>${esc16(chore.title)}</strong>
+          <div class="muted" style="margin-top:4px">${esc16(chore.person||'Samen')} · ${esc16(chore.repeat||'')}</div>
+        </div>
+        <button class="primary" data-v16-done="${esc16(chore.id)}" style="white-space:nowrap">✓ Gedaan</button>
+      </div>
+      <div style="margin-top:10px;font-weight:700;color:${statusColor16(s.level)}">${esc16(s.text)}</div>
+      <small class="muted">${esc16(last)}${s.due?` · uiterlijk ${esc16(fmt16(s.due))}`:''}</small>
+    </article>`;
+  }
+
+  function injectSmartHousehold16() {
+    if(current!=='chores') return;
+    const view=document.querySelector('#view');
+    if(!view || view.querySelector('[data-v16-smart-household]')) return;
+
+    const chores=[...(data.chores||[])].sort((a,b)=>{
+      const sa=smartStatus16(a), sb=smartStatus16(b);
+      if(!sa.due&&!sb.due) return 0;
+      if(!sa.due) return 1;
+      if(!sb.due) return -1;
+      return sa.due.localeCompare(sb.due);
+    });
+
+    const dueSoon=chores.filter(x=>shouldShowSoon16(x));
+    const later=chores.filter(x=>!shouldShowSoon16(x));
+
+    const html=`<section class="card" data-v16-smart-household>
+      <div class="card-head">
+        <div><p class="eyebrow">SLIMME PLANNING</p><h2>Wanneer moet wat weer?</h2></div>
+        <span class="tag green">Geen vaste weekdagen</span>
+      </div>
+      <p class="muted">Na iedere afronding wordt de volgende termijn opnieuw berekend vanaf die echte datum.</p>
+      ${dueSoon.length?`
+        <h3 style="margin-top:18px">Nu / binnenkort</h3>
+        ${dueSoon.map(smartTaskCard16).join('')}
+      `:`<p class="muted">Er hoeft op dit moment niets binnenkort gedaan te worden.</p>`}
+      ${later.length?`
+        <details style="margin-top:14px">
+          <summary>Later (${later.length})</summary>
+          <div style="margin-top:10px">${later.map(smartTaskCard16).join('')}</div>
+        </details>`:''}
+    </section>`;
+
+    const distribution=view.querySelector('[data-v15-household]');
+    if(distribution) distribution.insertAdjacentHTML('afterend',html);
+    else view.insertAdjacentHTML('afterbegin',html);
+  }
+
+  function injectTodaySoon16() {
+    if(current!=='today') return;
+    const view=document.querySelector('#view');
+    if(!view || view.querySelector('[data-v16-today-chores]')) return;
+
+    const soon=(data.chores||[])
+      .filter(x=>shouldShowSoon16(x))
+      .sort((a,b)=>(nextDue16(a)||'9999').localeCompare(nextDue16(b)||'9999'));
+
+    if(!soon.length) return;
+
+    const html=`<section class="card" data-v16-today-chores>
+      <div class="card-head">
+        <div><p class="eyebrow">HUISHOUDEN · BINNENKORT</p><h2>${soon.length} ${soon.length===1?'taak':'taken'} in beeld</h2></div>
+        <span class="tag">Flexibel</span>
+      </div>
+      ${soon.slice(0,6).map(smartTaskCard16).join('')}
+    </section>`;
+
+    view.insertAdjacentHTML('beforeend',html);
+  }
+
+  // ---- SCROLL PRESERVATION ----
+  let lastRenderedPage16=null;
+  let savedPage16=null;
+  let savedY16=0;
+  let restoreToken16=0;
+
+  function captureScroll16() {
+    savedPage16=current;
+    savedY16=window.scrollY || document.documentElement.scrollTop || 0;
+  }
+
+  function restoreScroll16(page,y) {
+    const token=++restoreToken16;
+    requestAnimationFrame(()=>{
+      requestAnimationFrame(()=>{
+        if(token!==restoreToken16 || current!==page) return;
+        window.scrollTo({top:y,left:0,behavior:'auto'});
+      });
+    });
+  }
+
+  render = function renderV160() {
+    const samePage = lastRenderedPage16===current;
+    const y = samePage ? (window.scrollY || document.documentElement.scrollTop || 0) : 0;
+    const page=current;
+
+    baseRender16();
+    injectSmartHousehold16();
+    injectTodaySoon16();
+
+    lastRenderedPage16=page;
+    if(samePage && y>0) restoreScroll16(page,y);
+  };
+
+  // Capture before interactions that commonly re-render the same page:
+  // edit/delete/complete/import/save/bulk controls.
+  document.addEventListener('pointerdown',e=>{
+    const actionable=e.target.closest(
+      'button, input[type="checkbox"], select, [data-edit], [data-delete], [data-action], [data-v13-card], [data-v14-card], [data-v15-distribute], [data-v15-price-commit], [data-v16-done]'
+    );
+    if(actionable) captureScroll16();
+  },true);
+
+  document.addEventListener('click',e=>{
+    const done=e.target.closest('[data-v16-done]');
+    if(done) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      captureScroll16();
+      toggleChoreOccurrence(done.dataset.v16Done,today16());
+      return;
+    }
+  },true);
+
+  migrateSmartChores16();
+
+  // One initial render is needed so existing screens immediately use the new logic.
+  render();
+  toast('Samen Thuis v16 geladen');
+})();
+
+;
+
+/* ===== v18 CLEAN DASHBOARD ===== */
+(() => {
+'use strict';
+if(window.__ST_V18__) return; window.__ST_V18__=true;
+const oldRender18=render, WC='stWeatherV18', LOC={name:'Rotterdam',lat:51.9225,lon:4.47917};
+const wi=c=>({0:'☀️',1:'🌤️',2:'⛅',3:'☁️',45:'🌫️',48:'🌫️',51:'🌦️',53:'🌦️',55:'🌧️',61:'🌦️',63:'🌧️',65:'🌧️',71:'🌨️',73:'🌨️',75:'❄️',77:'❄️',80:'🌦️',81:'🌧️',82:'⛈️',85:'🌨️',86:'🌨️',95:'⛈️',96:'⛈️',99:'⛈️'})[c]||'🌤️';
+function wt(c){if(c===0)return'Zonnig';if(c<=2)return'Licht bewolkt';if(c===3)return'Bewolkt';if(c<=48)return'Mistig';if(c<=57)return'Motregen';if(c<=67)return'Regen';if(c<=77)return'Sneeuw';if(c<=86)return'Buien';return'Onweer'}
+function outfit(w){let f=Math.round(w.current?.apparent_temperature??15),r=+(w.daily?.precipitation_probability_max?.[0]||0),wind=+(w.current?.wind_speed_10m||0),a=f<=5?['Winterjas','warme trui']:f<=11?['Jas','trui of vest']:f<=16?['Lichte jas of vest','lange broek']:f<=22?['T-shirt','lichte broek']:['Luchtige kleding','korte broek'];if(r>=40)a.push('regenjas of paraplu');if(wind>=30)a.push('winddichte laag');if((w.current?.weather_code||99)<=1&&f>=18)a.push('zonnebril');return a}
+function data18(){
+ let chores=0;try{chores=occurrencesForDate(todayISO()).filter(({chore})=>!isChoreDone(chore,todayISO())).length}catch(_){chores=(data.chores||[]).filter(x=>!x.done).length}
+ const groceries=(data.groceries||[]).filter(x=>!x.done).length;
+ const low=(data.stock||[]).filter(x=>{let a=+(x.amount??0),m=+(x.min??x.minimum??0);return m>0&&a<=m}).length;
+ const dinner=(data.meals||[]).find(x=>x.date===todayISO()&&/avond/i.test(x.type||x.mealType||''));
+ let agenda=[];try{agenda=(data.planning||[]).filter(x=>x.date>=todayISO()).sort(typeof sortPlanning==='function'?sortPlanning:(a,b)=>`${a.date}${a.time||''}`.localeCompare(`${b.date}${b.time||''}`)).slice(0,4)}catch(_){}
+ return{chores,groceries,low,dinner,agenda}
+}
+function html18(){
+ const s=data18(),date=new Intl.DateTimeFormat('nl-NL',{weekday:'long',day:'numeric',month:'long'}).format(new Date());
+ return `<section class="dash18" data-dash18><header class="dh18"><div><p class="eyebrow">Jullie thuis, in één oogopslag</p><h2>Vandaag</h2><p>${date}</p></div><div class="people18"><span>K</span><span>D</span></div></header><div class="dg18">
+ <section class="weather18" data-weather18>Weer ophalen…</section>
+ <section class="today18"><div class="ct18"><strong>Vandaag</strong><span>${s.chores} taken</span></div><div class="stats18"><button data-view="chores"><b>${s.chores}</b><small>Huishouden</small></button><button data-view="groceries"><b>${s.groceries}</b><small>Boodschappen</small></button><button data-view="stock"><b>${s.low}</b><small>Bijna op</small></button></div><div class="meal18"><small>🍽️ VANAVOND</small><strong>${esc(s.dinner?.title||'Nog geen avondeten gepland')}</strong></div></section>
+ <section class="agenda18"><div class="ct18"><strong>Komende afspraken</strong><button class="text-btn" data-view="planning">Alles →</button></div>${s.agenda.length?s.agenda.map(x=>`<div class="ar18"><time>${esc(x.date===todayISO()?(x.time||'Hele dag'):new Intl.DateTimeFormat('nl-NL',{weekday:'short',day:'numeric'}).format(parseDate(x.date)))}</time><div><strong>${esc(x.title)}</strong><small>${esc(x.person||'')}</small></div></div>`).join(''):'<p class="muted">Geen komende afspraken.</p>'}</section>
+ <section class="outfit18" data-outfit18><span>👕</span><div><strong>Wat trek je aan?</strong><p>Weeradvies laden…</p></div></section></div></section>`
+}
+async function weather18(force=false){
+ const box=document.querySelector('[data-weather18]');if(!box)return;
+ try{let w=null;if(!force)try{let c=JSON.parse(localStorage.getItem(WC)||'null');if(c&&Date.now()-c.t<1800000)w=c.w}catch(_){}
+ if(!w){let q=new URLSearchParams({latitude:LOC.lat,longitude:LOC.lon,current:'temperature_2m,apparent_temperature,weather_code,precipitation,wind_speed_10m',hourly:'temperature_2m,weather_code,precipitation_probability',daily:'temperature_2m_max,temperature_2m_min,precipitation_probability_max',timezone:'Europe/Amsterdam',forecast_days:'5'});let r=await fetch('https://api.open-meteo.com/v1/forecast?'+q,{cache:'no-store'});if(!r.ok)throw 0;w=await r.json();localStorage.setItem(WC,JSON.stringify({t:Date.now(),w}))}
+ let c=w.current,d=w.daily,h=w.hourly,n=new Date(),i=h.time.findIndex(t=>new Date(t)>=new Date(n.getFullYear(),n.getMonth(),n.getDate(),n.getHours()));if(i<0)i=0;let ids=Array.from({length:6},(_,k)=>i+k).filter(k=>k<h.time.length);
+ box.innerHTML=`<div class="wm18"><div><small>⌖ ${LOC.name}</small><div class="temp18"><span>${wi(c.weather_code)}</span><strong>${Math.round(c.temperature_2m)}°</strong></div><p>${wt(c.weather_code)} · voelt als ${Math.round(c.apparent_temperature)}°</p></div><div class="wf18"><b>${Math.round(d.temperature_2m_max[0])}° / ${Math.round(d.temperature_2m_min[0])}°</b><span>☂ ${Math.round(d.precipitation_probability_max[0]||0)}%</span><span>↗ ${Math.round(c.wind_speed_10m||0)} km/u</span></div></div><div class="hours18">${ids.map(k=>`<div><small>${h.time[k].slice(11,16)}</small><b>${wi(h.weather_code[k])}</b><strong>${Math.round(h.temperature_2m[k])}°</strong><small>${Math.round(h.precipitation_probability[k]||0)}%</small></div>`).join('')}</div><button class="wr18" data-wr18>↻</button>`;
+ let o=document.querySelector('[data-outfit18]');if(o)o.innerHTML=`<span>👕</span><div><strong>Wat trek je aan?</strong><p>${outfit(w).map(esc).join(' · ')}</p><small>Gebaseerd op temperatuur, regen en wind.</small></div>`
+ }catch(_){box.innerHTML='<strong>Weer tijdelijk niet beschikbaar</strong><p><button class="text-btn" data-wr18>Opnieuw proberen</button></p>'}
+}
+function enhance18(){if(current!=='today')return;let v=document.querySelector('#view');if(!v||v.querySelector('[data-dash18]'))return;v.insertAdjacentHTML('afterbegin',html18());let w=v.querySelector('.welcome');if(w)w.style.display='none';weather18()}
+render=function(...a){let r=oldRender18(...a);requestAnimationFrame(enhance18);return r};
+document.addEventListener('click',e=>{if(e.target.closest('[data-wr18]'))weather18(true)});
+requestAnimationFrame(enhance18);
+})();
+
+
+/* =========================================================
+   SAMEN THUIS v19 — 12 PAGINA'S + APPARAATGEBONDEN WEERGAVE
+   ========================================================= */
+(() => {
+'use strict';
+if(window.__ST_V19__) return; window.__ST_V19__=true;
+
+const UIKEY19='samenThuisDeviceUiV19';
+const DEFAULTUI19={theme:'system',accent:'bluePurple',density:'comfortable',mobileNav:['today','planning','meals','groceries']};
+function loadUi19(){try{return {...DEFAULTUI19,...JSON.parse(localStorage.getItem(UIKEY19)||'{}')}}catch(_){return {...DEFAULTUI19}}}
+let ui19=loadUi19();
+function saveUi19(){localStorage.setItem(UIKEY19,JSON.stringify(ui19));applyUi19()}
+function applyUi19(){
+  const dark=ui19.theme==='dark'||(ui19.theme==='system'&&matchMedia('(prefers-color-scheme:dark)').matches);
+  document.documentElement.dataset.theme19=dark?'dark':'light';
+  document.documentElement.dataset.accent19=ui19.accent||'bluePurple';
+  document.documentElement.dataset.density19=ui19.density||'comfortable';
+}
+applyUi19();
+try{matchMedia('(prefers-color-scheme:dark)').addEventListener('change',()=>ui19.theme==='system'&&applyUi19())}catch(_){}
+
+const pages19=[
+ ['today','Today','⌂'],['planning','Agenda','▦'],['meals','Weekmenu','♨'],['groceries','Boodschappen','✓'],
+ ['chores','Huishouden','⌁'],['stock','Voorraad','▤'],['trips','Reizen','✈'],['ideas','Date ideeën','♡'],
+ ['home','Woning','⌂'],['budget19','Budget','€'],['extra19','Extra','＋'],['settings','Instellingen','⚙']
+];
+try{
+  sections.today={label:'Today',icon:'⌂'};
+  sections.ideas={label:'Date ideeën',icon:'♡'};
+  sections.budget19={label:'Budget',icon:'€'};
+  sections.extra19={label:'Extra',icon:'＋'};
+}catch(_){}
+
+function go19(view,focusId=''){
+  if(view==='budget19'||view==='extra19'){current=view;render();return}
+  current=view;render();
+  if(focusId)setTimeout(()=>{
+    const el=document.querySelector(`[data-id="${CSS.escape(focusId)}"],[data-edit="${CSS.escape(focusId)}"],#${CSS.escape(focusId)}`);
+    el?.scrollIntoView({behavior:'smooth',block:'center'});
+  },80);
+}
+window.SamenThuisGo=go19;
+
+function nav19(){
+  const desktop=document.querySelector('.sidebar nav,.side-nav,.nav-list');
+  if(desktop){
+    desktop.innerHTML=pages19.map(([id,label,icon])=>`<button class="${current===id?'active':''}" data-v19-go="${id}"><span>${icon}</span>${label}</button>`).join('');
+  }
+  const mobile=document.querySelector('.mobile-nav,.bottom-nav');
+  if(mobile){
+    const direct=(ui19.mobileNav||DEFAULTUI19.mobileNav).slice(0,4);
+    mobile.innerHTML=direct.map(id=>{const p=pages19.find(x=>x[0]===id)||pages19[0];return `<button class="${current===id?'active':''}" data-v19-go="${id}"><span>${p[2]}</span><small>${p[1]}</small></button>`}).join('')+
+      `<button data-v19-more><span>•••</span><small>Meer</small></button>`;
+  }
+}
+function more19(){
+  let old=document.querySelector('[data-v19-moremenu]');if(old){old.remove();return}
+  const direct=new Set(ui19.mobileNav||DEFAULTUI19.mobileNav);
+  document.body.insertAdjacentHTML('beforeend',`<div class="more19" data-v19-moremenu><div class="more19-sheet"><div class="more19-head"><strong>Alle pagina's</strong><button data-v19-more>×</button></div>${pages19.filter(p=>!direct.has(p[0])).map(p=>`<button data-v19-go="${p[0]}"><span>${p[2]}</span><b>${p[1]}</b></button>`).join('')}</div></div>`);
+}
+function budgetPage19(){
+  const b=data.budget||data.budget19||{income:0,expenses:[]};
+  const expenses=Array.isArray(b.expenses)?b.expenses:[];
+  const total=expenses.reduce((s,x)=>s+Number(x.amount||0),0), income=Number(b.income||0);
+  return `<div class="page19"><div class="page19-head"><div><p class="eyebrow">GELD</p><h1>Budget</h1><p>Inkomsten, uitgaven en doelen op één plek.</p></div><button class="primary" data-v19-budget-add>+ Toevoegen</button></div>
+  <div class="budget19-grid"><section class="card"><small>Inkomen</small><h2>€ ${income.toLocaleString('nl-NL')}</h2></section><section class="card"><small>Uitgaven</small><h2>€ ${total.toLocaleString('nl-NL')}</h2></section><section class="card"><small>Resterend</small><h2>€ ${(income-total).toLocaleString('nl-NL')}</h2></section></div>
+  <section class="card"><div class="card-head"><h2>Uitgaven</h2></div>${expenses.length?expenses.map((x,i)=>`<div class="row19"><div><strong>${esc(x.title||x.category||'Uitgave')}</strong><small>${esc(x.category||'')}</small></div><b>€ ${Number(x.amount||0).toLocaleString('nl-NL')}</b><button data-v19-budget-edit="${i}">Bewerk</button></div>`).join(''):'<p class="muted">Nog geen budgetposten. Gebruik + Toevoegen.</p>'}</section></div>`;
+}
+function extraPage19(){
+ return `<div class="page19"><div class="page19-head"><div><p class="eyebrow">HANDIGE TOOLS</p><h1>Extra</h1><p>Snelle toegang tot handige onderdelen.</p></div></div><div class="tools19">
+ ${[['weather','☀️','Weer','Actueel weer op Today'],['daily','💡','Vraag van de dag','Leer elkaar beter kennen'],['calc','▦','Omrekenen','Valuta, maten en meer'],['floor','🏷️','Bodemprijzen','Boodschappen'],['links','🔗','Links','Handige websites'],['notes','▤','Notities','Snelle notities'],['docs','📁','Documenten',"PDF's en bestanden"],['contacts','👤','Contacten','Belangrijke nummers']].map(x=>`<button data-v19-tool="${x[0]}"><span>${x[1]}</span><strong>${x[2]}</strong><small>${x[3]}</small></button>`).join('')}</div></div>`;
+}
+function settingsPanel19(){
+ if(current!=='settings')return;
+ const v=document.querySelector('#view');if(!v||v.querySelector('[data-v19-device-settings]'))return;
+ v.insertAdjacentHTML('afterbegin',`<section class="card device-settings19" data-v19-device-settings><div class="card-head"><div><p class="eyebrow">DIT APPARAAT</p><h2>Thema & weergave</h2></div><span class="tag">Niet gedeeld</span></div><p class="muted">Deze instellingen blijven alleen op dit apparaat. Daphne kan op haar telefoon dus een ander thema gebruiken.</p>
+ <div class="settings-grid19"><label>Thema<select data-v19-theme><option value="system">Systeem</option><option value="light">Licht</option><option value="dark">Donker</option></select></label>
+ <label>Accent<select data-v19-accent><option value="bluePurple">Blauw / paars</option><option value="blue">Blauw</option><option value="purple">Paars</option><option value="orange">Oranje</option></select></label>
+ <label>Weergave<select data-v19-density><option value="comfortable">Ruim</option><option value="compact">Compact</option></select></label></div></section>`);
+ v.querySelector('[data-v19-theme]').value=ui19.theme;v.querySelector('[data-v19-accent]').value=ui19.accent;v.querySelector('[data-v19-density]').value=ui19.density;
+}
+function editBudget19(index=null){
+ data.budget ||= {income:0,expenses:[]}; data.budget.expenses ||= [];
+ const old=index===null?{}:data.budget.expenses[index];
+ const title=prompt('Naam',old.title||'');if(title===null)return;
+ const amount=prompt('Bedrag (€)',old.amount??'');if(amount===null)return;
+ const category=prompt('Categorie',old.category||'Overig');if(category===null)return;
+ const item={...old,id:old.id||uid(),title,amount:Number(String(amount).replace(',','.'))||0,category};
+ if(index===null)data.budget.expenses.push(item);else data.budget.expenses[index]=item;save();render();
+}
+function crossLinks19(){
+  if(current!=='today')return;
+  const v=document.querySelector('#view');if(!v)return;
+  // Existing Today content remains source-of-truth; cards receive explicit navigation.
+  v.querySelectorAll('[data-dashboard-v18] .today18,[data-dash18] .today18').forEach(x=>{x.dataset.v19Go='chores'});
+  v.querySelectorAll('[data-dashboard-v18] .agenda18,[data-dash18] .agenda18').forEach(x=>{x.dataset.v19Go='planning'});
+  v.querySelectorAll('[data-outfit18],[data-outfit-v18]').forEach(x=>{x.dataset.v19Tool='weather'});
+}
+const baseRender19=render;
+render=function(...args){
+ let r;
+ if(current==='budget19'){document.querySelector('#view').innerHTML=budgetPage19();r=undefined}
+ else if(current==='extra19'){document.querySelector('#view').innerHTML=extraPage19();r=undefined}
+ else r=baseRender19(...args);
+ requestAnimationFrame(()=>{nav19();settingsPanel19();crossLinks19();applyUi19()});
+ return r;
+};
+document.addEventListener('click',e=>{
+ const g=e.target.closest('[data-v19-go]');if(g){e.preventDefault();go19(g.dataset.v19Go);return}
+ if(e.target.closest('[data-v19-more]')){e.preventDefault();more19();return}
+ if(e.target.closest('[data-v19-budget-add]')){editBudget19();return}
+ const be=e.target.closest('[data-v19-budget-edit]');if(be){editBudget19(Number(be.dataset.v19BudgetEdit));return}
+ const tool=e.target.closest('[data-v19-tool]');if(tool){
+   const t=tool.dataset.v19Tool;if(t==='weather'){go19('today');return}
+   if(t==='floor'){go19('groceries');return}
+   if(t==='daily'){go19('today');return}
+   toast('Deze tool kan vanuit Extra verder worden uitgebreid.');return;
+ }
+});
+document.addEventListener('change',e=>{
+ if(e.target.matches('[data-v19-theme]')){ui19.theme=e.target.value;saveUi19()}
+ if(e.target.matches('[data-v19-accent]')){ui19.accent=e.target.value;saveUi19()}
+ if(e.target.matches('[data-v19-density]')){ui19.density=e.target.value;saveUi19()}
+});
+requestAnimationFrame(()=>{nav19();settingsPanel19();applyUi19()});
+})();
+
+/* =========================================================
+   SAMEN THUIS v20 — GLASS THEME / DEVICE UI
+   Alleen interfacevoorkeuren zijn apparaatgebonden.
+   ========================================================= */
+(() => {
+'use strict';
+if (window.__ST_V20__) return;
+window.__ST_V20__ = true;
+
+const KEY20 = 'samenThuisDeviceUiV20';
+const FALLBACK20 = { theme:'system', accent:'purple', density:'comfortable' };
+
+function get20(){
+  try {
+    const old = JSON.parse(localStorage.getItem('samenThuisDeviceUiV19') || '{}');
+    const now = JSON.parse(localStorage.getItem(KEY20) || '{}');
+    return {...FALLBACK20, ...old, ...now};
+  } catch (_) { return {...FALLBACK20}; }
+}
+let ui20 = get20();
+
+function apply20(){
+  const systemDark = window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches;
+  const dark = ui20.theme === 'dark' || (ui20.theme === 'system' && systemDark);
+  const html = document.documentElement;
+  html.dataset.theme19 = dark ? 'dark' : 'light';
+  html.dataset.theme20 = dark ? 'dark' : 'light';
+  html.dataset.accent19 = ui20.accent || 'purple';
+  html.dataset.accent20 = ui20.accent || 'purple';
+  html.dataset.density19 = ui20.density || 'comfortable';
+  html.dataset.density20 = ui20.density || 'comfortable';
+  html.style.colorScheme = dark ? 'dark' : 'light';
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#081b2d' : '#eef3f9');
+}
+function save20(){
+  localStorage.setItem(KEY20, JSON.stringify(ui20));
+  localStorage.setItem('samenThuisDeviceUiV19', JSON.stringify(ui20));
+  apply20();
+}
+apply20();
+try { matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => ui20.theme === 'system' && apply20()); } catch(_){}
+
+function beautifySettings20(){
+  if (typeof current === 'undefined' || current !== 'settings') return;
+  const box = document.querySelector('[data-v19-device-settings]');
+  if (!box) return;
+  box.classList.add('glass20');
+  const theme = box.querySelector('[data-v19-theme]');
+  const accent = box.querySelector('[data-v19-accent]');
+  const density = box.querySelector('[data-v19-density]');
+  if(theme){ theme.value=ui20.theme; theme.onchange=()=>{ui20.theme=theme.value;save20()}; }
+  if(accent){ accent.value=ui20.accent; accent.onchange=()=>{ui20.accent=accent.value;save20()}; }
+  if(density){ density.value=ui20.density; density.onchange=()=>{ui20.density=density.value;save20()}; }
+}
+
+function dock20(){
+  const mobile = document.querySelector('.mobile-nav,.bottom-nav');
+  if(!mobile) return;
+  mobile.classList.add('glass-dock20');
+  const buttons = [...mobile.querySelectorAll('button')];
+  buttons.forEach(b => b.classList.add('glass-dock-item20'));
+
+  // Make the middle action a prominent glass + button without changing navigation data.
+  let add = mobile.querySelector('[data-v20-add]');
+  if(!add){
+    add = document.createElement('button');
+    add.type='button';
+    add.dataset.v20Add='';
+    add.className='glass-dock-item20 glass-add20';
+    add.innerHTML='<span>＋</span><small>Toevoegen</small>';
+    const more = mobile.querySelector('[data-v19-more]');
+    mobile.insertBefore(add, more || null);
+  }
+}
+function enhance20(){
+  document.body.classList.add('st-glass20');
+  apply20();
+  beautifySettings20();
+  dock20();
+}
+
+const previousRender20 = typeof render === 'function' ? render : null;
+if(previousRender20){
+  render = function(...args){
+    const result = previousRender20(...args);
+    requestAnimationFrame(enhance20);
+    return result;
+  };
+}
+
+document.addEventListener('click', e => {
+  if(e.target.closest('[data-v20-add]')){
+    const topAdd = [...document.querySelectorAll('button')].find(b =>
+      !b.closest('.mobile-nav,.bottom-nav') && /toevoegen|\+\s*toevoegen/i.test(b.textContent || '')
+    );
+    if(topAdd) topAdd.click();
+    else {
+      const generic = document.querySelector('[data-add],[data-action="add"],.add-btn');
+      generic?.click();
+    }
+  }
+});
+requestAnimationFrame(enhance20);
+})();
+
+/* ===== v21 TRUE GLASS DOCK ===== */
+(()=>{'use strict';if(window.__ST21)return;window.__ST21=1;
+const pages=[['today','⌂','Today'],['planning','▦','Agenda'],['meals','♨','Weekmenu'],['groceries','✓','Boodschappen'],['chores','⌁','Huishouden'],['stock','▤','Voorraad'],['trips','✈','Reizen'],['ideas','♡','Date ideeën'],['home','⌂','Woning'],['budget19','€','Budget'],['extra19','＋','Extra'],['settings','⚙','Instellingen']],direct=['today','planning','meals','groceries'];
+function go(id){if(window.SamenThuisGo)SamenThuisGo(id);else{current=id;render()}}
+function dock(){
+ document.querySelectorAll('.mobile-nav,.bottom-nav').forEach(x=>x.classList.add('old21'));
+ let n=document.querySelector('#dock21');if(!n){n=document.createElement('nav');n.id='dock21';n.className='dock21';document.body.append(n)}
+ n.innerHTML=direct.map(id=>{let p=pages.find(x=>x[0]===id);return`<button data-go21="${id}" class="${current===id?'on':''}"><span>${p[1]}</span><small>${p[2]}</small></button>`}).join('')+`<button data-more21 class="${direct.includes(current)?'':'on'}"><span>•••</span><small>Meer</small></button>`;
+ document.querySelectorAll('.sync-info,[class*="info-box"],[class*="sync-info"]').forEach(x=>x.classList.add('surface21'));
+}
+function sheet(){document.querySelector('#sheet21')?.remove();let w=document.createElement('div');w.id='sheet21';w.className='sheetwrap21';w.innerHTML=`<button class="shade21" data-close21></button><section class="sheet21"><header><div><small>SNEL NAAR</small><strong>Alle pagina's</strong></div><button data-close21>×</button></header><div>${pages.filter(p=>!direct.includes(p[0])).map(p=>`<button data-go21="${p[0]}" class="${current===p[0]?'on':''}"><span>${p[1]}</span><b>${p[2]}</b></button>`).join('')}</div></section>`;document.body.append(w)}
+const rr=render;render=function(...a){let x=rr(...a);requestAnimationFrame(dock);return x};
+document.addEventListener('click',e=>{let g=e.target.closest('[data-go21]');if(g){e.preventDefault();document.querySelector('#sheet21')?.remove();go(g.dataset.go21);return}if(e.target.closest('[data-more21]')){e.preventDefault();sheet();return}if(e.target.closest('[data-close21]'))document.querySelector('#sheet21')?.remove()});
+requestAnimationFrame(dock);
+})();
+
+/* Samen Thuis v21.6 · build 2026-09-16 22:xx · app.js volledig opnieuw uitgegeven */
+
+/* v21.7 fresh build: 2026-09-16 20:58:16 +0000 */
+
+/* v21.8 build 2026-09-16 21:01:28 +0000 */
+
+
+/* =========================================================
+   SAMEN THUIS v23 — GEÏNTEGREERDE MOBIELE NAVIGATIE + BUDGET
+   Eén implementatie; geen v21.9/v22 render-wrappers.
+   ========================================================= */
+(()=>{
+'use strict';
+if(window.__ST_V23__) return; window.__ST_V23__=true;
+
+const NAV23=[
+ ['today','⌂','Today'],['planning','▦','Agenda'],['meals','♨','Weekmenu'],
+ ['groceries','✓','Boodschappen'],['chores','⌁','Huishouden'],['stock','▤','Voorraad'],
+ ['trips','✈','Reizen'],['ideas','♡','Date ideeën'],['home','⌂','Woning'],
+ ['budget19','€','Budget'],['extra19','＋','Extra'],['settings','⚙','Instellingen']
+];
+
+const DEFAULT_BUDGET23={
+ incomes:{Kees:2731,Daphne:3427},
+ contributionPct:75,
+ houseBudget:1000,
+ houseCategories:[
+  {id:'hb-groceries',title:'Boodschappen',amount:650},
+  {id:'hb-household',title:'Huishouden',amount:125},
+  {id:'hb-home',title:'Woning',amount:125},
+  {id:'hb-other',title:'Overig gezamenlijk',amount:100}
+ ],
+ investing:75,
+ fixed:[
+  ['Huur',1170.11,'maand'],['Eneco',101,'maand'],['Evides',20,'maand'],
+  ['Odido',40.52,'maand'],['Vodafone',22.33,'maand'],['Gym',27.99,'maand'],
+  ['Univé',181.19,'maand'],['Zorgverzekering',184.50,'maand'],
+  ['Scooterverzekering',33.15,'maand'],['Netflix',6.30,'maand'],
+  ['Rabobank',5.95,'maand'],['Parkeervergunning',35.20,'maand'],
+  ['Wegenbelasting Daphne',62.67,'maand'],['Wegenbelasting Kees',33,'maand']
+ ].map((x,i)=>({id:`fixed23-${i}`,title:x[0],amount:x[1],period:x[2]})),
+ goals:[
+  {id:'buffer23',title:'Buffer',target:3000,current:1000,monthly:150,deadline:'',recurring:false},
+  {id:'vacation23',title:'Vakantie',target:5000,current:0,monthly:416.67,deadline:'Jaarlijks',recurring:true},
+  {id:'home23',title:'Huis',target:15000,current:0,monthly:1000,deadline:'2027-12-31',recurring:false},
+  {id:'other23',title:'Overig',target:10000,current:0,monthly:0,deadline:'',recurring:false}
+ ]
+};
+const clone23=x=>JSON.parse(JSON.stringify(x));
+function budget23(){
+ if(!data.budgetV23){
+   const old=data.budget219||data.budgetV22||null;
+   data.budgetV23=clone23(DEFAULT_BUDGET23);
+   if(old){
+    if(old.incomes) data.budgetV23.incomes={...data.budgetV23.incomes,...old.incomes};
+    ['contributionPct','houseBudget','investing'].forEach(k=>{if(old[k]!=null)data.budgetV23[k]=Number(old[k])});
+    if(Array.isArray(old.fixed)&&old.fixed.length)data.budgetV23.fixed=old.fixed.map(x=>({...x}));
+    if(Array.isArray(old.goals)&&old.goals.length)data.budgetV23.goals=old.goals.map(x=>({...x}));
+   }
+   save({touch:false});
+ }
+ const b=data.budgetV23;
+ b.incomes={...DEFAULT_BUDGET23.incomes,...(b.incomes||{})};
+ b.fixed=Array.isArray(b.fixed)?b.fixed:clone23(DEFAULT_BUDGET23.fixed);
+ b.goals=Array.isArray(b.goals)?b.goals:clone23(DEFAULT_BUDGET23.goals);
+ b.houseCategories=Array.isArray(b.houseCategories)&&b.houseCategories.length?b.houseCategories:clone23(DEFAULT_BUDGET23.houseCategories);
+ return b;
+}
+const n23=v=>Number(String(v??0).replace(',','.'))||0;
+const eur23=v=>new Intl.NumberFormat('nl-NL',{style:'currency',currency:'EUR'}).format(n23(v));
+const pct23=v=>Math.max(0,Math.min(100,n23(v)));
+const monthlyFixed23=x=>x.period==='jaar'?n23(x.amount)/12:x.period==='kwartaal'?n23(x.amount)/3:n23(x.amount);
+function calcBudget23(){
+ const b=budget23(),K=n23(b.incomes.Kees),D=n23(b.incomes.Daphne),rate=n23(b.contributionPct)/100;
+ const fixed=b.fixed.reduce((s,x)=>s+monthlyFixed23(x),0);
+ const saving=b.goals.reduce((s,x)=>s+n23(x.monthly),0);
+ const investing=n23(b.investing),house=n23(b.houseBudget),income=K+D,contribution=income*rate;
+ const needed=fixed+house+saving+investing,remainder=contribution-needed;
+ const saved=b.goals.reduce((s,x)=>s+n23(x.current),0),targets=b.goals.reduce((s,x)=>s+n23(x.target),0);
+ return {b,K,D,rate,fixed,saving,investing,house,income,contribution,needed,remainder,saved,targets,
+  kContribution:K*rate,dContribution:D*rate,kPersonal:K*(1-rate),dPersonal:D*(1-rate),
+  neededPct:income?needed/income*100:0};
+}
+function deadlineMonths23(deadline){
+ if(!deadline||deadline==='Jaarlijks')return null;
+ const d=new Date(deadline+'T12:00:00'),now=new Date();
+ if(Number.isNaN(d.getTime()))return null;
+ return Math.max(0,Math.ceil((d-now)/(30.4375*86400000)));
+}
+function goalStatus23(g){
+ const left=Math.max(0,n23(g.target)-n23(g.current)),m=n23(g.monthly);
+ const months=m>0?Math.ceil(left/m):null,deadline=deadlineMonths23(g.deadline);
+ return {left,months,deadline,enough:deadline==null||left===0||(m>0&&months<=deadline)};
+}
+function donut23(value,max,label){
+ const p=pct23(max?n23(value)/n23(max)*100:0),r=42,c=2*Math.PI*r,d=c*p/100;
+ return `<div class="donut23"><svg viewBox="0 0 110 110"><circle class="ring-bg23" cx="55" cy="55" r="${r}"/><circle class="ring-value23" cx="55" cy="55" r="${r}" stroke-dasharray="${d} ${c-d}" transform="rotate(-90 55 55)"/></svg><div><b>${Math.round(p)}%</b><small>${esc(label)}</small></div></div>`;
+}
+function bars23(rows,stacked=false){
+ const max=Math.max(1,...rows.flatMap(x=>[Math.abs(n23(x.value)),Math.abs(n23(x.value2))]));
+ return `<div class="chart-bars23">${rows.map(x=>`<div class="chart-row23"><span>${esc(x.label)}</span><div class="chart-track23"><i style="width:${Math.max(x.value?2:0,Math.abs(n23(x.value))/max*100)}%"></i>${x.value2!=null?`<em style="width:${Math.max(x.value2?2:0,Math.abs(n23(x.value2))/max*100)}%"></em>`:''}</div><b>${eur23(x.value)}</b></div>`).join('')}</div>`;
+}
+function projection23(g){
+ const st=goalStatus23(g),points=[],months=Math.min(24,Math.max(12,st.months||12));
+ for(let i=0;i<=months;i+=Math.max(1,Math.ceil(months/8)))points.push({m:i,v:Math.min(n23(g.target),n23(g.current)+n23(g.monthly)*i)});
+ if(points.at(-1)?.m!==months)points.push({m:months,v:Math.min(n23(g.target),n23(g.current)+n23(g.monthly)*months)});
+ const max=Math.max(1,n23(g.target)),w=300,h=100,pad=12;
+ const coords=points.map((p,i)=>`${pad+(w-2*pad)*(p.m/months)},${h-pad-(h-2*pad)*(p.v/max)}`).join(' ');
+ return `<svg class="projection23" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><line x1="${pad}" y1="${h-pad}" x2="${w-pad}" y2="${h-pad}"/><line x1="${pad}" y1="${pad}" x2="${w-pad}" y2="${pad}" class="target23"/><polyline points="${coords}"/></svg>`;
+}
+function renderBudget23(){
+ const c=calcBudget23(),b=c.b;
+ const goals=b.goals.map((g,i)=>{
+  const st=goalStatus23(g);
+  return `<article class="light-surface23 goal-card23">
+   <header><div><small>SPAARDOEL</small><h3>${esc(g.title)}</h3><p>${esc(g.deadline||'Geen deadline')}</p></div><div><button data-budget23-goal="${i}">Bewerk</button><button class="danger23" data-budget23-delgoal="${i}">×</button></div></header>
+   <div class="goal-visual23">${donut23(g.current,g.target,g.title)}<div><b>${eur23(g.current)} / ${eur23(g.target)}</b><span>Nog nodig ${eur23(st.left)}</span><span>${n23(g.monthly)>0?`${eur23(g.monthly)} per maand`:'Geen maandbedrag'}</span><span class="${st.enough?'ok23':'warn23'}">${st.months===0?'Doel bereikt':st.months?`Verwacht over ${st.months} maanden`:'Geen prognose'}${st.deadline!=null?` · ${st.enough?'op schema':'inleg te laag voor deadline'}`:''}</span></div></div>
+   ${projection23(g)}
+  </article>`;
+ }).join('');
+ const fixed=b.fixed.map((x,i)=>`<div class="light-surface23 fixed-row23"><div><b>${esc(x.title)}</b><small>${x.period==='jaar'?'Jaarlijks':x.period==='kwartaal'?'Per kwartaal':'Maandelijks'} · ${eur23(monthlyFixed23(x))}/mnd</small></div><strong>${eur23(x.amount)}</strong><button data-budget23-fixed="${i}">Bewerk</button><button class="danger23" data-budget23-delfixed="${i}">×</button></div>`).join('');
+ const goalBars=b.goals.map(g=>({label:g.title,value:n23(g.current),value2:Math.max(0,n23(g.target)-n23(g.current))}));
+ const money=[{label:'Vaste lasten',value:c.fixed},{label:'Huisbudget',value:c.house},{label:'Sparen',value:c.saving},{label:'Beleggen',value:c.investing},{label:'Resterend',value:Math.max(0,c.remainder)}];
+ const house=b.houseCategories.map((x,i)=>`<label>${esc(x.title)}<input inputmode="decimal" data-budget23-house="${i}" value="${n23(x.amount)}"></label>`).join('');
+ return `<div class="budget23">
+  <header class="budget-title23"><p class="eyebrow">SAMEN THUIS · FINANCIËN</p><h1>Budgetdashboard</h1><p>Één maandberekening voor inkomen, lasten, sparen, beleggen en wat er overblijft.</p></header>
+  <section class="kpis23">
+   <article><small>NETTO INKOMEN</small><b>${eur23(c.income)}</b><span>samen per maand</span></article>
+   <article><small>GEZAMENLIJKE AFDACHT</small><b>${eur23(c.contribution)}</b><span>${n23(b.contributionPct)}%</span></article>
+   <article><small>MAANDELIJKS NODIG</small><b>${eur23(c.needed)}</b><span>benodigd ${c.neededPct.toFixed(1).replace('.',',')}%</span></article>
+   <article class="${c.remainder<0?'negative23':'positive23'}"><small>${c.remainder<0?'TEKORT':'OVER'}</small><b>${eur23(Math.abs(c.remainder))}</b><span>na alle ingestelde posten</span></article>
+   <article><small>SPAARGELD TOTAAL</small><b>${eur23(c.saved)}</b><span>van ${eur23(c.targets)}</span></article>
+   <article><small>BELEGGEN</small><b>${eur23(c.investing)}</b><span>per maand</span></article>
+  </section>
+
+  <section class="budget-grid23">
+   <article class="budget-sheet23"><header><div><small>INKOMEN & VERDELING</small><h2>Kees en Daphne</h2></div></header>
+    <div class="people23"><div><b>Kees</b><strong>${eur23(c.K)}</strong><span>Gezamenlijk ${eur23(c.kContribution)}</span><span>Persoonlijk ${eur23(c.kPersonal)}</span></div><div><b>Daphne</b><strong>${eur23(c.D)}</strong><span>Gezamenlijk ${eur23(c.dContribution)}</span><span>Persoonlijk ${eur23(c.dPersonal)}</span></div></div>
+    <div class="fields23"><label>Kees netto<input data-budget23-field="incomes.Kees" inputmode="decimal" value="${c.K}"></label><label>Daphne netto<input data-budget23-field="incomes.Daphne" inputmode="decimal" value="${c.D}"></label><label>Afdracht %<input data-budget23-field="contributionPct" inputmode="decimal" value="${n23(b.contributionPct)}"></label><label>Huisbudget<input data-budget23-field="houseBudget" inputmode="decimal" value="${c.house}"></label><label>Beleggen<input data-budget23-field="investing" inputmode="decimal" value="${c.investing}"></label></div>
+   </article>
+   <article class="budget-sheet23"><header><div><small>MAANDELIJKSE GELDVERDELING</small><h2>Waar gaat het heen?</h2></div></header>${bars23(money)}
+    <div class="calc23"><span>Gezamenlijke afdracht <b>${eur23(c.contribution)}</b></span><span>Maandbehoefte <b>− ${eur23(c.needed)}</b></span><span class="total23">Resterend <b>${eur23(c.remainder)}</b></span></div>
+   </article>
+  </section>
+
+  <section class="budget-sheet23"><header><div><small>SPAARDOELEN & PROGNOSE</small><h2>Voortgang</h2></div><button class="primary" data-budget23-addgoal>+ Spaardoel</button></header><div class="goals23">${goals}</div></section>
+
+  <section class="budget-grid23">
+   <article class="budget-sheet23"><header><div><small>SPAARGELD PER DOEL</small><h2>Gespaard versus nog nodig</h2></div></header><div class="legend23"><span><i></i>Gespaard</span><span><em></em>Nog nodig</span></div>${bars23(goalBars,true)}</article>
+   <article class="budget-sheet23"><header><div><small>HUISBUDGET</small><h2>${eur23(c.house)} per maand</h2></div></header><div class="fields23 house-fields23">${house}</div><p class="muted">Subcategorieën zijn een verdeling binnen het huisbudget; het totaalbudget blijft leidend in de maandberekening.</p></article>
+  </section>
+
+  <section class="budget-sheet23"><header><div><small>VASTE LASTEN</small><h2>${eur23(c.fixed)} per maand</h2></div><button class="primary" data-budget23-addfixed>+ Vaste last</button></header><div class="fixed-list23">${fixed}</div></section>
+ </div>`;
+}
+function setBudgetField23(path,value){
+ const b=budget23(),p=path.split('.');
+ if(p.length===2)b[p[0]][p[1]]=n23(value);else b[path]=n23(value);
+ save();render();
+}
+function editFixed23(i){
+ const b=budget23(),x=i==null?{id:id(),title:'Nieuwe vaste last',amount:0,period:'maand'}:b.fixed[i];
+ const title=prompt('Naam vaste last',x.title);if(title===null)return;
+ const amount=prompt('Bedrag',x.amount);if(amount===null)return;
+ const period=prompt('Frequentie: maand, kwartaal of jaar',x.period||'maand');if(period===null)return;
+ const item={...x,title:title.trim()||'Vaste last',amount:n23(amount),period:['maand','kwartaal','jaar'].includes(period.toLowerCase())?period.toLowerCase():'maand'};
+ if(i==null)b.fixed.push(item);else b.fixed[i]=item;save();render();
+}
+function editGoal23(i){
+ const b=budget23(),g=i==null?{id:id(),title:'Nieuw spaardoel',target:0,current:0,monthly:0,deadline:'',recurring:false}:b.goals[i];
+ const title=prompt('Naam spaardoel',g.title);if(title===null)return;
+ const target=prompt('Doelbedrag',g.target);if(target===null)return;
+ const currentAmount=prompt('Huidig gespaard',g.current);if(currentAmount===null)return;
+ const monthly=prompt('Maandelijkse inleg',g.monthly);if(monthly===null)return;
+ const deadline=prompt('Deadline (YYYY-MM-DD), "Jaarlijks" of leeg',g.deadline||'');if(deadline===null)return;
+ const item={...g,title:title.trim()||'Spaardoel',target:n23(target),current:n23(currentAmount),monthly:n23(monthly),deadline:deadline.trim(),recurring:/jaarlijks/i.test(deadline)};
+ if(i==null)b.goals.push(item);else b.goals[i]=item;save();render();
+}
+function mobileNav23(){
+ document.querySelectorAll('#dock21,#dock219,.dock21,.dock219,[data-v19-moremenu]').forEach(x=>x.remove());
+ document.querySelectorAll('.mobile-nav,.bottom-nav').forEach(x=>x.classList.add('legacy-mobile23'));
+ let nav=document.querySelector('#mobileNav23');
+ if(!nav){nav=document.createElement('nav');nav.id='mobileNav23';nav.className='mobile-nav23';nav.setAttribute('aria-label','Pagina navigatie');document.body.append(nav)}
+ nav.innerHTML=`<div class="mobile-nav-scroll23">${NAV23.map(([key,icon,label])=>`<button data-nav23="${key}" class="${current===key?'active':''}"><span>${icon}</span><small>${label}</small></button>`).join('')}</div>`;
+ const active=nav.querySelector('.active');
+ requestAnimationFrame(()=>active?.scrollIntoView({behavior:'smooth',block:'nearest',inline:'center'}));
+}
+function go23(view){
+ current=view;
+ if(view!=='budget19'&&view!=='extra19'&&sections[view]){setupNav();document.querySelector('#pageTitle').textContent=sections[view].label;document.querySelector('#addBtn').style.display=['today','settings'].includes(view)?'none':''}
+ render();
+}
+window.SamenThuisGo=go23;
+
+const baseRender23=render;
+render=function(...args){
+ if(current==='budget19'){document.querySelector('#view').innerHTML=renderBudget23();updateSyncBadge();}
+ else baseRender23(...args);
+ requestAnimationFrame(mobileNav23);
+};
+
+document.addEventListener('click',e=>{
+ const nav=e.target.closest('[data-nav23]');if(nav){e.preventDefault();go23(nav.dataset.nav23);return}
+ if(e.target.closest('[data-budget23-addfixed]')){editFixed23(null);return}
+ const ef=e.target.closest('[data-budget23-fixed]');if(ef){editFixed23(Number(ef.dataset.budget23Fixed));return}
+ const df=e.target.closest('[data-budget23-delfixed]');if(df&&confirm('Deze vaste last verwijderen?')){budget23().fixed.splice(Number(df.dataset.budget23Delfixed),1);save();render();return}
+ if(e.target.closest('[data-budget23-addgoal]')){editGoal23(null);return}
+ const eg=e.target.closest('[data-budget23-goal]');if(eg){editGoal23(Number(eg.dataset.budget23Goal));return}
+ const dg=e.target.closest('[data-budget23-delgoal]');if(dg&&confirm('Dit spaardoel verwijderen?')){budget23().goals.splice(Number(dg.dataset.budget23Delgoal),1);save();render();return}
+});
+document.addEventListener('change',e=>{
+ const f=e.target.closest('[data-budget23-field]');if(f){setBudgetField23(f.dataset.budget23Field,f.value);return}
+ const h=e.target.closest('[data-budget23-house]');if(h){budget23().houseCategories[Number(h.dataset.budget23House)].amount=n23(h.value);save();render();}
+});
+requestAnimationFrame(mobileNav23);
+})();
+
+/* v23.2 visual integration 2026-09-18 06:17:59 +0000 */
+
+
+/* =========================================================
+   v23.3 — mobiele navigatiepositie bewaren
+   ========================================================= */
+(() => {
+  const NAV_POS_KEY = 'samenThuisMobileNavScrollV233';
+  let restoringNav = false;
+
+  function getNavScroller(){
+    return document.querySelector('.mobile-nav-scroll23');
+  }
+
+  function saveNavPosition(){
+    const scroller = getNavScroller();
+    if (!scroller || restoringNav) return;
+    try {
+      sessionStorage.setItem(NAV_POS_KEY, String(scroller.scrollLeft || 0));
+    } catch {}
+  }
+
+  function restoreNavPosition(){
+    const scroller = getNavScroller();
+    if (!scroller) return;
+    let saved = 0;
+    try {
+      saved = Number(sessionStorage.getItem(NAV_POS_KEY) || 0);
+    } catch {}
+    restoringNav = true;
+    requestAnimationFrame(() => {
+      scroller.scrollLeft = saved;
+      requestAnimationFrame(() => {
+        scroller.scrollLeft = saved;
+        restoringNav = false;
+      });
+    });
+  }
+
+  document.addEventListener('scroll', (event) => {
+    if (event.target && event.target.classList &&
+        event.target.classList.contains('mobile-nav-scroll23')) {
+      saveNavPosition();
+    }
+  }, true);
+
+  /* Vóór een navklik positie vastleggen. */
+  document.addEventListener('pointerdown', (event) => {
+    if (event.target.closest && event.target.closest('.mobile-nav23 button')) {
+      saveNavPosition();
+    }
+  }, true);
+
+  /* Na iedere klik/rerender dezelfde positie terugzetten. */
+  document.addEventListener('click', (event) => {
+    if (event.target.closest && event.target.closest('.mobile-nav23 button')) {
+      setTimeout(restoreNavPosition, 0);
+      setTimeout(restoreNavPosition, 60);
+    }
+  }, true);
+
+  /* MutationObserver vangt render() / innerHTML-vervanging van de balk af. */
+  const observer = new MutationObserver(() => {
+    if (getNavScroller()) restoreNavPosition();
+  });
+
+  function start(){
+    observer.observe(document.body, {childList:true, subtree:true});
+    restoreNavPosition();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', start, {once:true});
+  } else {
+    start();
+  }
+
+  window.addEventListener('pageshow', restoreNavPosition);
+})();
+
+
+/* build v23.3 2026-09-18 07:18:05 +0000 */
