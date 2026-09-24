@@ -1,5 +1,5 @@
-const CACHE='samen-thuis-css-structured';
-const ASSETS=['./','./index.html','./styles.css?v=234','./app.js?v=234','./manifest.webmanifest','./icon.svg'];
+const CACHE='samen-thuis-v24-fuelnest-weather';
+const ASSETS=['./','./index.html','./styles.css?v=240','./app.js?v=240','./manifest.webmanifest','./icon.svg'];
 
 self.addEventListener('install',event=>{
   event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(ASSETS)).then(()=>self.skipWaiting()));
