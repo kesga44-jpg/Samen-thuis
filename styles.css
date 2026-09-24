@@ -1576,3 +1576,21 @@ html[data-theme19="dark"] .auto-tabs24,html[data-theme19="dark"] .fill24,html[da
 .car-actions24{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
 .car-actions24 .danger24{color:var(--red)}
 .empty-car24{max-width:720px}
+
+/* v24.2 FuelMate-geïnspireerde statistieken */
+.stats-hero24{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;background:linear-gradient(135deg,#2d94ae,#12556b);border-radius:24px;overflow:hidden;margin:14px 0;color:#fff}
+.stats-hero24>div{padding:22px;min-height:112px;display:flex;flex-direction:column;justify-content:center;background:rgba(255,255,255,.025)}
+.stats-hero24 small{opacity:.78}.stats-hero24 strong{font-size:clamp(1.35rem,4vw,2rem);margin-top:8px}
+.chart-bars24{height:250px;display:flex;align-items:stretch;gap:10px;padding:10px 4px 0;overflow-x:auto}
+.chart-col24{min-width:52px;flex:1;display:grid;grid-template-rows:24px 1fr 24px;text-align:center;color:var(--muted)}
+.chart-value24{font-size:.72rem;white-space:nowrap}.chart-track24{display:flex;align-items:flex-end;justify-content:center;border-bottom:1px solid var(--line);min-height:150px}
+.chart-track24 i{display:block;width:min(34px,70%);background:linear-gradient(#2d94ae,#12556b);border-radius:10px 10px 2px 2px}
+.weekdays24 .chart-track24 i{width:min(30px,62%)}
+.heat24{display:grid;grid-template-columns:repeat(12,1fr);gap:5px;margin-top:14px}
+.heat24 i{aspect-ratio:1;border-radius:4px;background:var(--surface-2,#e7eef2)}
+.heat24 i.hit{background:#17647a}
+.projection24{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:14px 0}
+.projection24 article{display:flex;flex-direction:column;gap:8px}.projection24 strong{font-size:1.8rem;color:#17647a}.projection24 p{margin:0;color:var(--muted)}
+.records24>div{display:flex;justify-content:space-between;gap:16px;padding:13px 0;border-top:1px solid var(--line)}
+.records24>div:first-of-type{border-top:0}.records24 b{text-align:right}
+@media(max-width:560px){.stats-hero24{grid-template-columns:1fr 1fr}.stats-hero24>div{padding:16px 12px;min-height:100px}.projection24{grid-template-columns:1fr}.chart-bars24{height:220px}.heat24{gap:4px}}

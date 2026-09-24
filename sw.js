@@ -1,5 +1,5 @@
-const CACHE='samen-thuis-v24-1-rdw';
-const ASSETS=['./','./index.html','./styles.css?v=241','./app.js?v=241','./manifest.webmanifest','./icon.svg'];
+const CACHE='samen-thuis-v24-2-fuelmate-stats';
+const ASSETS=['./','./index.html','./styles.css?v=242','./app.js?v=242','./manifest.webmanifest','./icon.svg'];
 
 self.addEventListener('install',event=>{
   event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(ASSETS)).then(()=>self.skipWaiting()));
