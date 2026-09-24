@@ -1569,3 +1569,10 @@ html[data-theme20="dark"] body.st-glass20 button.primary{
 .air24{background:var(--paper);border:1px solid var(--line);border-radius:18px;padding:18px;box-shadow:var(--shadow);grid-column:1/-1}.air-head24,.aqi24{display:flex;align-items:center;justify-content:space-between;gap:12px}.air-head24 h3{margin:.15rem 0}.air-head24 small,.aqi24 small,.air-note24{color:var(--muted)}.air-head24 button{border:0;background:var(--bg);width:36px;height:36px;border-radius:50%}.aqi24{justify-content:flex-start;margin:14px 0}.aqi-badge24{background:var(--green-soft);color:var(--green);padding:9px 12px;border-radius:12px;font-weight:800}.aqi24 strong,.aqi24 small{display:block}.pollen-grid24{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}.pollen-grid24>div{background:var(--bg);padding:11px;border-radius:12px}.pollen-grid24 span,.pollen-grid24 b,.pollen-grid24 small{display:block}.pollen-grid24 b{margin:3px 0}.air-note24{font-size:.78rem;margin:12px 0 0}
 html[data-theme19="dark"] .auto-tabs24,html[data-theme19="dark"] .fill24,html[data-theme19="dark"] .fuel-form24,html[data-theme19="dark"] .car24,html[data-theme19="dark"] .stats-grid24 article,html[data-theme19="dark"] .stats-card24,html[data-theme19="dark"] .air24{background:var(--paper);color:var(--ink)}
 @media(max-width:760px){.form-grid24,.car-grid24{grid-template-columns:1fr}.stats-grid24{grid-template-columns:repeat(2,1fr)}.pollen-grid24{grid-template-columns:repeat(2,1fr)}.fill24{grid-template-columns:42px 1fr}.fill-money24{grid-column:2;text-align:left}.barrow24{grid-template-columns:1fr auto}.barrow24>div{grid-row:2;grid-column:1/-1}.auto-tabs24{width:100%}.auto-tabs24 button{flex:1}.air24{grid-column:auto}}
+
+/* v24.1 RDW voertuiggegevens */
+.rdw-meta24{display:flex;justify-content:space-between;gap:12px;margin:.45rem 0 0;color:var(--muted)}
+.rdw-meta24 strong{color:var(--ink);text-align:right}
+.car-actions24{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.car-actions24 .danger24{color:var(--red)}
+.empty-car24{max-width:720px}
