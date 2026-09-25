@@ -5454,3 +5454,116 @@ ensureCar24();save({touch:false,sync:false});requestAnimationFrame(()=>{nav24();
 })();
 
 /* build v24.2 · FuelMate stats/charts + vehicle owner/tank capacity + RDW/APK */
+
+
+/* ===== v24.3 CENTRALE IMPORTPAGINA ===== */
+(()=>{'use strict';if(window.__ST243IMPORT)return;window.__ST243IMPORT=1;
+let importTarget243='backup', importFile243=null;
+
+const IMPORT243={
+ backup:{label:'Volledige Samen Thuis back-up',formats:'JSON',example:'samen-thuis-backup-2026-09-24.json',help:'Herstelt de volledige app. Gebruik een JSON-back-up die door Samen Thuis zelf is gemaakt.'},
+ planning:{label:'Agenda',formats:'CSV · TXT · JSON',example:'title,date,time,endTime,person,calendarId\nTandarts,2026-10-02,09:30,10:00,Kees,persoonlijk',help:'Velden: title, date (YYYY-MM-DD), time, endTime, person, calendarId.'},
+ meals:{label:'Weekmenu',formats:'CSV · TXT · JSON',example:'title,date,type\nCurry,2026-09-25,Avondeten',help:'Velden: title, date (YYYY-MM-DD), type.'},
+ groceries:{label:'Boodschappen',formats:'CSV · TXT · JSON',example:'title,category,done\nSpinazie,Groente,false',help:'Velden: title, category, done.'},
+ chores:{label:'Huishouden',formats:'CSV · TXT · JSON',example:'title,category,repeat,person,due\nBadkamer schoonmaken,Badkamer,Wekelijks,Samen,2026-09-26',help:'Velden: title, category, repeat, person, due.'},
+ stock:{label:'Voorraad',formats:'CSV · TXT · JSON',example:'title,category,amount,unit,min\nRijst,Voorraadkast,2,pakken,1',help:'Velden: title, category, amount, unit, min.'},
+ trips:{label:'Reizen',formats:'CSV · TXT · JSON',example:'title,type,date,note\nHotel Hanoi,Verblijf,2027-01-11,Inchecken',help:'Velden: title, type, date, note. Bestaande reismappen kunnen daarna in Reizen verder worden ingedeeld.'},
+ ideas:{label:'Date ideeën',formats:'CSV · TXT · JSON',example:'title,category,note\nMuseum,Uitje,Weekend',help:'Velden: title, category, note.'},
+ home:{label:'Woning',formats:'CSV · TXT · JSON',example:'title,category,note\nKit badkamer vervangen,Badkamer,Controleren',help:'Velden: title, category, note.'},
+ budget:{label:'Budget',formats:'JSON',example:'{"incomes":{"Kees":0,"Daphne":0},"fixed":[],"goals":[],"contributionPct":75,"houseBudget":1000,"investing":75}',help:'JSON-object met incomes, fixed, goals, contributionPct, houseBudget en investing.'},
+ auto:{label:'Auto / FuelMate',formats:'FuelMate JSON · CSV · Samen Thuis JSON',example:'FuelMate: fuelmate_backup_YYYY-MM-DD.json\nCSV tankbeurten: date,odometer,volume,totalCost,station,partial,missedFill',help:'FuelMate JSON importeert voertuigen én tankbeurten. Een CSV importeert tankbeurten; als er één voertuig is wordt dat automatisch gebruikt.'}
+};
+
+function esc243(v=''){return String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function renderImport243(){
+ const x=IMPORT243[importTarget243]||IMPORT243.backup;
+ return `<div class="import243">
+ <header class="import-head243"><div><p class="eyebrow">SAMEN THUIS · IMPORT</p><h1>Importeren</h1><p>Alle imports op één plek. Kies eerst waarvoor de informatie bedoeld is; hieronder staat precies welk formaat wordt verwacht.</p></div></header>
+ <section class="card import-main243">
+  <div class="form-grid">
+   <label class="field"><span>Wat wil je importeren?</span><select data-import243-target>${Object.entries(IMPORT243).map(([k,v])=>`<option value="${k}" ${k===importTarget243?'selected':''}>${esc243(v.label)}</option>`).join('')}</select></label>
+   <label class="field"><span>Bestand</span><input data-import243-file type="file" accept=".json,.csv,.txt,application/json,text/csv,text/plain"></label>
+  </div>
+  <div class="format243"><div><small>TOEGESTAAN FORMAAT</small><strong>${esc243(x.formats)}</strong><p>${esc243(x.help)}</p></div><pre>${esc243(x.example)}</pre></div>
+  <div class="button-row"><button class="primary" data-import243-run ${importFile243?'':'disabled'}>Importeren</button><button class="secondary" data-import243-template>Voorbeeldbestand downloaden</button></div>
+  ${importFile243?`<p class="muted">Gekozen: <strong>${esc243(importFile243.name)}</strong></p>`:''}
+ </section>
+ <section class="card">
+  <div class="card-head"><div><p class="eyebrow">FORMAATOVERZICHT</p><h2>Wat kan waar worden ingelezen?</h2></div></div>
+  <div class="format-list243">${Object.entries(IMPORT243).map(([k,v])=>`<button data-import243-jump="${k}"><span>${esc243(v.label)}</span><b>${esc243(v.formats)}</b></button>`).join('')}</div>
+  <p class="muted">PDF, Word en Excel worden bewust niet als universeel importformaat gebruikt: CSV/JSON is controleerbaarder en voorkomt dat kolommen verkeerd worden geïnterpreteerd. Excel kun je eerst opslaan als CSV.</p>
+ </section>
+ </div>`;
+}
+function csv243(text){
+ const lines=String(text).replace(/^\uFEFF/,'').replace(/\r/g,'').split('\n').filter(x=>x.trim());
+ if(!lines.length)return[];
+ const delim=lines[0].includes(';')?';':lines[0].includes('\t')?'\t':',';
+ const parse=line=>{let out=[],cur='',q=false;return out};
+ function row(line){const a=[];let c='',q=false;for(let i=0;i<line.length;i++){const ch=line[i];if(ch==='"'){if(q&&line[i+1]==='"'){c+='"';i++}else q=!q}else if(ch===delim&&!q){a.push(c.trim());c=''}else c+=ch}a.push(c.trim());return a}
+ const h=row(lines[0]).map(x=>x.trim());
+ return lines.slice(1).map(line=>{const vals=row(line),o={};h.forEach((k,i)=>o[k]=vals[i]??'');return o});
+}
+function bool243(v){return ['1','true','ja','yes','x','✓'].includes(String(v||'').trim().toLowerCase())}
+function num243(v){return Number(String(v??0).replace(',','.'))||0}
+function normalize243(target,r){
+ const idv=typeof id==='function'?id():`i243-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+ if(target==='planning')return {id:idv,title:r.title||r.titel||'',date:r.date||r.datum||'',time:r.time||r.tijd||'',endTime:r.endTime||r.eindtijd||'',person:r.person||r.persoon||'Samen',calendarId:r.calendarId||r.agenda||'persoonlijk'};
+ if(target==='meals')return {id:idv,title:r.title||r.gerecht||'',date:r.date||r.datum||'',type:r.type||r.maaltijdmoment||'Avondeten'};
+ if(target==='groceries')return {id:idv,title:r.title||r.product||'',category:r.category||r.categorie||'Overig',done:bool243(r.done||r.afgevinkt)};
+ if(target==='chores')return {id:idv,title:r.title||r.taak||'',category:r.category||r.categorie||'',repeat:r.repeat||r.frequentie||'Wekelijks',person:r.person||r.persoon||r.toegewezenAan||'Samen',due:r.due||r.datum||r.startdatum||todayISO(),completedDates:[]};
+ if(target==='stock')return {id:idv,title:r.title||r.product||'',category:r.category||r.categorie||'Overig',amount:num243(r.amount||r.hoeveelheid),unit:r.unit||r.eenheid||'stuks',min:num243(r.min||r.minimum||r.minimumvoorraad)};
+ if(target==='trips')return {id:idv,title:r.title||r.titel||'',type:r.type||r.typeOnderdeel||'Notitie',date:r.date||r.datum||'',note:r.note||r.notitie||'',checkable:false,done:false};
+ if(target==='ideas')return {id:idv,title:r.title||r.titel||'',category:r.category||r.categorie||'Uitje',note:r.note||r.notitie||''};
+ if(target==='home')return {id:idv,title:r.title||r.titel||'',category:r.category||r.categorie||'Onderhoud',note:r.note||r.notitie||''};
+ return r;
+}
+function arrayKey243(target){return {planning:'planning',meals:'meals',groceries:'groceries',chores:'chores',stock:'stock',trips:'trips',ideas:'ideas',home:'home'}[target]}
+function fuelMate243(obj){
+ ensureCar24();const vehicleMap=new Map();
+ (obj.vehicles||[]).forEach(v=>{const c={id:`fm-${v.id}`,name:v.name||v.makeModel||'Auto',make:(v.makeModel||'').split(' ')[0]||'',model:(v.makeModel||'').split(' ').slice(1).join(' '),year:v.year||'',plate:plate24(v.plate||''),tankLiters:num243(v.tankLiters),owner:v.owner||v.name||'',isDefault:!!v.isDefault};data.cars=data.cars.filter(x=>plate24(x.plate)!==c.plate);data.cars.push(c);vehicleMap.set(String(v.id),c.id)});
+ (obj.fillups||[]).forEach(f=>{const carId=vehicleMap.get(String(f.vehicleId))||data.cars[0]?.id;if(!carId)return;const liters=num243(f.volume),total=num243(f.totalCost);data.fuelEntries.push({id:`fm-fill-${f.id}-${Date.now()}`,carId,date:String(f.date||'').slice(0,10),odometer:num243(f.odometer),liters,total,pricePerLiter:liters?total/liters:0,fuelGrade:String(f.grade??'0'),station:f.station||'',partialFill:!!f.partial,missedPrevious:!!f.missedFill,note:f.note||''})});
+}
+async function runImport243(){
+ if(!importFile243)return toast('Kies eerst een bestand');
+ try{
+  const text=await importFile243.text(), ext=importFile243.name.split('.').pop().toLowerCase();
+  if(importTarget243==='backup'){if(ext!=='json')throw new Error('Voor een volledige back-up is JSON nodig');data=migrateData(JSON.parse(text));save();render();toast('Volledige back-up geïmporteerd');return}
+  if(importTarget243==='budget'){const o=JSON.parse(text);data.budgetV23={...(data.budgetV23||{}),...o};save();render();toast('Budget geïmporteerd');return}
+  if(importTarget243==='auto'){
+   if(ext==='json'){const o=JSON.parse(text);if(o.app==='fuelmate'||Array.isArray(o.fillups)||Array.isArray(o.vehicles))fuelMate243(o);else{if(Array.isArray(o.cars))data.cars.push(...o.cars);if(Array.isArray(o.fuelEntries))data.fuelEntries.push(...o.fuelEntries)}}
+   else{const rows=csv243(text);ensureCar24();if(!data.cars.length)throw new Error('Voeg eerst een voertuig toe of gebruik een FuelMate JSON-back-up');const car=data.cars.length===1?data.cars[0]:data.cars.find(x=>x.isDefault)||data.cars[0];rows.forEach((r,i)=>{const liters=num243(r.volume||r.liters),total=num243(r.totalCost||r.total);data.fuelEntries.push({id:`csv-fill-${Date.now()}-${i}`,carId:car.id,date:String(r.date||r.datum||'').slice(0,10),odometer:num243(r.odometer||r.kilometerstand),liters,total,pricePerLiter:num243(r.pricePerLiter)||(liters?total/liters:0),fuelGrade:r.grade||r.fuelGrade||'',station:r.station||r.tankstation||'',partialFill:bool243(r.partial||r.partialFill),missedPrevious:bool243(r.missedFill||r.missedPrevious),note:r.note||r.notitie||''})})}
+   save();render();toast('Auto-informatie geïmporteerd');return
+  }
+  const key=arrayKey243(importTarget243);if(!key)throw new Error('Onbekend importdoel');
+  let rows;if(ext==='json'){const o=JSON.parse(text);rows=Array.isArray(o)?o:(Array.isArray(o[key])?o[key]:[])}else rows=csv243(text);
+  if(!rows.length)throw new Error('Geen regels gevonden');
+  data[key] ||= [];data[key].push(...rows.map(r=>normalize243(importTarget243,r)).filter(r=>r.title));save();render();toast(`${rows.length} regels geïmporteerd`);
+ }catch(err){console.error(err);toast(err?.message||'Importeren is mislukt')}
+}
+function template243(){
+ const x=IMPORT243[importTarget243],isJson=['backup','budget','auto'].includes(importTarget243);
+ let content=x.example,name=`samen-thuis-${importTarget243}-voorbeeld.${isJson?'json':'csv'}`;
+ if(importTarget243==='backup')content=JSON.stringify({planning:[],meals:[],groceries:[],chores:[],stock:[],trips:[],ideas:[],home:[],cars:[],fuelEntries:[],budgetV23:{}},null,2);
+ if(importTarget243==='auto')content=JSON.stringify({app:'fuelmate',version:1,vehicles:[{id:1,name:'Kees',makeModel:'Seat Ibiza',year:2012,plate:'JB796D',tankLiters:45,isDefault:1}],fillups:[{id:1,vehicleId:1,date:'2026-09-19T11:43:00',odometer:165275,volume:46.4,totalCost:108.44,partial:0,missedFill:0,station:'',grade:0,note:''}]},null,2);
+ const blob=new Blob([content],{type:isJson?'application/json':'text/csv'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)
+}
+function navImport243(){
+ const desktop=document.querySelector('.sidebar nav');if(desktop&&!desktop.querySelector('[data-import243-go]')){const settings=desktop.querySelector('[data-v19-go="settings"],[data-view="settings"]');const b=document.createElement('button');b.className=current==='imports243'?'active nav-item':'nav-item';b.dataset.import243Go='';b.innerHTML='<span>↥</span>Importeren';desktop.insertBefore(b,settings||null)}
+ const scroll=document.querySelector('.mobile-nav-scroll23');if(scroll&&!scroll.querySelector('[data-import243-go]')){const b=document.createElement('button');b.dataset.import243Go='';b.className=current==='imports243'?'active':'';b.innerHTML='<span>↥</span><small>Import</small>';scroll.append(b)}
+}
+const prevRender243=render;render=function(...args){if(current==='imports243'){document.querySelector('#view').innerHTML=renderImport243();updateSyncBadge();requestAnimationFrame(navImport243);return}const r=prevRender243(...args);requestAnimationFrame(navImport243);return r};
+document.addEventListener('click',e=>{
+ if(e.target.closest('[data-import243-go]')){current='imports243';render();return}
+ const j=e.target.closest('[data-import243-jump]');if(j){importTarget243=j.dataset.import243Jump;importFile243=null;render();return}
+ if(e.target.closest('[data-import243-run]')){runImport243();return}
+ if(e.target.closest('[data-import243-template]')){template243();return}
+});
+document.addEventListener('change',e=>{
+ if(e.target.matches('[data-import243-target]')){importTarget243=e.target.value;importFile243=null;render();return}
+ if(e.target.matches('[data-import243-file]')){importFile243=e.target.files?.[0]||null;render();return}
+});
+requestAnimationFrame(navImport243);
+})();
+
+/* build v24.3 · centrale importpagina voor alle app-onderdelen */
