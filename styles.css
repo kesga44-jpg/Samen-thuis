@@ -1608,3 +1608,58 @@ html[data-theme19="dark"] .auto-tabs24,html[data-theme19="dark"] .fill24,html[da
 .auto-tabs24 button{min-width:0!important;padding:11px 8px!important;display:flex;align-items:center;justify-content:center;gap:7px;white-space:normal!important;line-height:1.1}
 .auto-tabs24 button span{font-size:1.05rem;flex:0 0 auto}.auto-tabs24 button b{font-size:.88rem;overflow:hidden;text-overflow:ellipsis}
 @media(max-width:560px){.auto-tabs24{grid-template-columns:repeat(2,minmax(0,1fr))!important}.auto-tabs24 button{min-height:48px}.auto-tabs24 button b{font-size:.84rem}}
+/* v24.7 statistiek voertuigfilter */
+.stats-filter24{margin-bottom:14px;padding:16px}.stats-filter-head24{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px}.stats-filter-head24 small{display:block;color:var(--muted);font-weight:800;letter-spacing:.05em}.stats-filter-head24 strong{display:block;margin-top:3px;font-size:1.05rem}.stats-filter-head24 button{border:1px solid var(--line);background:var(--paper);border-radius:12px;padding:9px 12px;font-weight:800;color:var(--ink)}.stats-filter-head24 button.active{background:var(--ink);color:#fff;border-color:var(--ink)}.stats-car-options24{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.stats-car-options24 label{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:var(--paper);cursor:pointer}.stats-car-options24 label.selected{border-color:var(--blue);background:var(--blue-soft)}.stats-car-options24 input{width:18px;height:18px}.stats-car-options24 span{font-weight:800}.stats-car-options24 span small{display:block;color:var(--muted);font-weight:600;margin-top:2px}@media(max-width:560px){.stats-car-options24{grid-template-columns:1fr}.stats-filter-head24{align-items:flex-start}.stats-filter-head24 button{white-space:nowrap}}
+
+/* =========================================================
+   v24.8 — iPhone-achtige Liquid Glass onderbalk
+   ========================================================= */
+@media(max-width:900px){
+  body{padding-bottom:112px!important}
+  .mobile-nav23{
+    position:fixed!important;
+    left:12px!important;right:12px!important;bottom:max(10px,env(safe-area-inset-bottom))!important;
+    width:auto!important;height:auto!important;min-height:72px!important;
+    padding:0!important;margin:0!important;
+    border:1px solid rgba(255,255,255,.62)!important;
+    border-radius:28px!important;
+    background:rgba(246,249,253,.72)!important;
+    -webkit-backdrop-filter:blur(28px) saturate(180%)!important;
+    backdrop-filter:blur(28px) saturate(180%)!important;
+    box-shadow:0 14px 40px rgba(18,35,58,.18),inset 0 1px 0 rgba(255,255,255,.82)!important;
+    overflow:hidden!important;z-index:1000!important;
+  }
+  .mobile-nav-scroll23{
+    display:flex!important;align-items:stretch!important;gap:5px!important;
+    padding:7px!important;min-height:72px!important;
+    scroll-padding-inline:12px!important;
+    background:transparent!important;
+  }
+  .mobile-nav-scroll23>button{
+    flex:0 0 76px!important;min-width:76px!important;height:58px!important;
+    display:flex!important;flex-direction:column!important;align-items:center!important;justify-content:center!important;gap:3px!important;
+    margin:0!important;padding:6px 5px!important;border:0!important;border-radius:20px!important;
+    background:transparent!important;box-shadow:none!important;
+    color:#26364b!important;-webkit-text-fill-color:#26364b!important;
+    opacity:.72!important;transition:background .18s ease,opacity .18s ease,transform .18s ease!important;
+  }
+  .mobile-nav-scroll23>button span{font-size:1.22rem!important;line-height:1!important;color:inherit!important;-webkit-text-fill-color:inherit!important}
+  .mobile-nav-scroll23>button small{font-size:.68rem!important;line-height:1.05!important;font-weight:750!important;white-space:nowrap!important;color:inherit!important;-webkit-text-fill-color:inherit!important}
+  .mobile-nav-scroll23>button.active{
+    background:rgba(255,255,255,.82)!important;
+    color:#13243b!important;-webkit-text-fill-color:#13243b!important;
+    opacity:1!important;
+    box-shadow:0 5px 16px rgba(25,50,78,.12),inset 0 0 0 1px rgba(255,255,255,.72)!important;
+  }
+  .mobile-nav-scroll23>button:active{transform:scale(.96)!important}
+}
+
+/* In dark/system-dark blijft de dock bewust een lichte glass-surface met DONKERE tekst. */
+@media(max-width:900px) and (prefers-color-scheme:dark){
+  .mobile-nav23{background:rgba(231,237,246,.74)!important;border-color:rgba(255,255,255,.42)!important}
+  .mobile-nav-scroll23>button,.mobile-nav-scroll23>button *{color:#17243a!important;-webkit-text-fill-color:#17243a!important}
+  .mobile-nav-scroll23>button.active{background:rgba(255,255,255,.72)!important;color:#0d1d33!important;-webkit-text-fill-color:#0d1d33!important}
+}
+html[data-theme20="dark"] .mobile-nav23,html[data-theme19="dark"] .mobile-nav23{background:rgba(231,237,246,.74)!important;border-color:rgba(255,255,255,.42)!important}
+html[data-theme20="dark"] .mobile-nav-scroll23>button,html[data-theme20="dark"] .mobile-nav-scroll23>button *,html[data-theme19="dark"] .mobile-nav-scroll23>button,html[data-theme19="dark"] .mobile-nav-scroll23>button *{color:#17243a!important;-webkit-text-fill-color:#17243a!important}
+html[data-theme20="dark"] .mobile-nav-scroll23>button.active,html[data-theme19="dark"] .mobile-nav-scroll23>button.active{background:rgba(255,255,255,.76)!important;color:#0d1d33!important;-webkit-text-fill-color:#0d1d33!important}
