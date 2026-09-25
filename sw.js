@@ -1,5 +1,5 @@
-const CACHE='samen-thuis-v24-3-import';
-const ASSETS=['./','./index.html','./styles.css?v=243','./app.js?v=243','./manifest.webmanifest','./icon.svg'];
+const CACHE='samen-thuis-v24-4-import-excel';
+const ASSETS=['./','./index.html','./styles.css?v=244','./app.js?v=244','./manifest.webmanifest','./icon.svg'];
 
 self.addEventListener('install',event=>{
   event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(ASSETS)).then(()=>self.skipWaiting()));
