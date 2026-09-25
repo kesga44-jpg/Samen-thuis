@@ -5505,6 +5505,7 @@ function csv243(text){
  return lines.slice(1).map(line=>{const vals=row(line),o={};h.forEach((k,i)=>o[k]=vals[i]??'');return o});
 }
 function bool243(v){return ['1','true','ja','yes','x','✓'].includes(String(v||'').trim().toLowerCase())}
+function plateImport243(v=''){return String(v||'').toUpperCase().replace(/[^A-Z0-9]/g,'')}
 function num243(v){return Number(String(v??0).replace(',','.'))||0}
 function normalize243(target,r){
  const idv=typeof id==='function'?id():`i243-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -5528,10 +5529,10 @@ async function rowsFromExcel243(file){
 function arraysDeep243(obj){const found=[],seen=new Set();function walk(v,path=''){if(!v||typeof v!=='object'||seen.has(v))return;seen.add(v);if(Array.isArray(v)){if(v.length&&v.some(x=>x&&typeof x==='object'))found.push({path,rows:v});v.forEach((x,i)=>walk(x,`${path}[${i}]`));return}Object.entries(v).forEach(([k,x])=>walk(x,path?`${path}.${k}`:k))}walk(obj);return found}
 function pickArray243(obj,names){const direct=names.map(n=>obj?.[n]).find(Array.isArray);if(direct)return direct;const all=arraysDeep243(obj),lower=names.map(x=>x.toLowerCase());return all.find(x=>lower.some(n=>x.path.toLowerCase().endsWith(n)))?.rows||[]}
 function fuelMate243(obj){
- ensureCar24();const vehicles=pickArray243(obj,['vehicles','vehicle','cars','autos','voertuigen']),fills=pickArray243(obj,['fillups','fillUps','fuelEntries','fills','refuels','tankbeurten']);
+ data.cars ||= []; data.fuelEntries ||= [];const vehicles=pickArray243(obj,['vehicles','vehicle','cars','autos','voertuigen']),fills=pickArray243(obj,['fillups','fillUps','fuelEntries','fills','refuels','tankbeurten']);
  if(!vehicles.length&&!fills.length)throw new Error('Geen voertuigen of tankbeurten gevonden in deze JSON');
  const map=new Map();
- vehicles.forEach((v,i)=>{const raw=v.plate??v.licensePlate??v.kenteken??v.registration??'',mm=v.makeModel??v.make_model??v.vehicleName??'',make=v.make??v.brand??v.merk??String(mm).split(' ')[0]??'',model=v.model??v.handelsbenaming??String(mm).split(' ').slice(1).join(' '),old=String(v.id??v.vehicleId??v.uuid??i),plate=plate24(raw),existing=data.cars.find(x=>plate&&plate24(x.plate)===plate),c=existing||{id:`imp-car-${Date.now()}-${i}`,isDefault:!!(v.isDefault??v.default??v.primary)};Object.assign(c,{name:(v.name??v.nickname??[make,model].filter(Boolean).join(' ')??'')||plate||`Voertuig ${i+1}`,make,model,year:v.year??v.buildYear??v.bouwjaar??'',plate,tankLiters:num243(v.tankLiters??v.tankCapacity??v.tankSize??v.tankinhoud),owner:v.owner??v.eigenaar??''});if(!existing)data.cars.push(c);map.set(old,c.id)});
+ vehicles.forEach((v,i)=>{const raw=v.plate??v.licensePlate??v.kenteken??v.registration??'',mm=v.makeModel??v.make_model??v.vehicleName??'',make=v.make??v.brand??v.merk??String(mm).split(' ')[0]??'',model=v.model??v.handelsbenaming??String(mm).split(' ').slice(1).join(' '),old=String(v.id??v.vehicleId??v.uuid??i),plate=plateImport243(raw),existing=data.cars.find(x=>plate&&plateImport243(x.plate)===plate),c=existing||{id:`imp-car-${Date.now()}-${i}`,isDefault:!!(v.isDefault??v.default??v.primary)};Object.assign(c,{name:(v.name??v.nickname??[make,model].filter(Boolean).join(' ')??'')||plate||`Voertuig ${i+1}`,make,model,year:v.year??v.buildYear??v.bouwjaar??'',plate,tankLiters:num243(v.tankLiters??v.tankCapacity??v.tankSize??v.tankinhoud),owner:v.owner??v.eigenaar??''});if(!existing)data.cars.push(c);map.set(old,c.id)});
  fills.forEach((f,i)=>{let carId=map.get(String(f.vehicleId??f.carId??f.vehicle_id??f.vehicle??''));if(!carId&&data.cars.length===1)carId=data.cars[0].id;if(!carId)carId=data.cars.find(x=>x.isDefault)?.id||data.cars[0]?.id;if(!carId)return;const liters=num243(f.volume??f.liters??f.litres??f.amountLiters??f.hoeveelheid),total=num243(f.totalCost??f.total??f.cost??f.amount??f.bedrag),ppl=num243(f.pricePerLiter??f.price_per_liter??f.unitPrice??f.literPrice)||(liters?total/liters:0);data.fuelEntries.push({id:`imp-fill-${Date.now()}-${i}`,carId,date:String(f.date??f.datetime??f.createdAt??f.datum??'').slice(0,10),odometer:num243(f.odometer??f.mileage??f.kilometerstand),liters,total,pricePerLiter:ppl,fuelGrade:String(f.grade??f.fuelGrade??f.fuelType??f.brandstof??''),station:f.station??f.gasStation??f.tankstation??'',partialFill:bool243(f.partial??f.partialFill??f.isPartial),missedPrevious:bool243(f.missedFill??f.missedPrevious??f.missed),note:f.note??f.notes??f.notitie??''})})
 }
 async function runImport243(){
@@ -5542,7 +5543,7 @@ async function runImport243(){
   if(importTarget243==='budget'){const o=JSON.parse(text);data.budgetV23={...(data.budgetV23||{}),...o};save();render();toast('Budget geïmporteerd');return}
   if(importTarget243==='auto'){
    if(ext==='json'){fuelMate243(JSON.parse(text))}
-   else{const rows=(ext==='xlsx'||ext==='xls')?await rowsFromExcel243(importFile243):csv243(text);ensureCar24();if(!data.cars.length)throw new Error('Voeg eerst een voertuig toe of gebruik een FuelMate JSON-back-up');const car=data.cars.length===1?data.cars[0]:data.cars.find(x=>x.isDefault)||data.cars[0];rows.forEach((r,i)=>{const liters=num243(r.volume||r.liters),total=num243(r.totalCost||r.total);data.fuelEntries.push({id:`csv-fill-${Date.now()}-${i}`,carId:car.id,date:String(r.date||r.datum||'').slice(0,10),odometer:num243(r.odometer||r.kilometerstand),liters,total,pricePerLiter:num243(r.pricePerLiter)||(liters?total/liters:0),fuelGrade:r.grade||r.fuelGrade||'',station:r.station||r.tankstation||'',partialFill:bool243(r.partial||r.partialFill),missedPrevious:bool243(r.missedFill||r.missedPrevious),note:r.note||r.notitie||''})})}
+   else{const rows=(ext==='xlsx'||ext==='xls')?await rowsFromExcel243(importFile243):csv243(text);data.cars ||= []; data.fuelEntries ||= [];if(!data.cars.length)throw new Error('Voeg eerst een voertuig toe of gebruik een FuelMate JSON-back-up');const car=data.cars.length===1?data.cars[0]:data.cars.find(x=>x.isDefault)||data.cars[0];rows.forEach((r,i)=>{const liters=num243(r.volume||r.liters),total=num243(r.totalCost||r.total);data.fuelEntries.push({id:`csv-fill-${Date.now()}-${i}`,carId:car.id,date:String(r.date||r.datum||'').slice(0,10),odometer:num243(r.odometer||r.kilometerstand),liters,total,pricePerLiter:num243(r.pricePerLiter)||(liters?total/liters:0),fuelGrade:r.grade||r.fuelGrade||'',station:r.station||r.tankstation||'',partialFill:bool243(r.partial||r.partialFill),missedPrevious:bool243(r.missedFill||r.missedPrevious),note:r.note||r.notitie||''})})}
    save();render();toast('Auto-informatie geïmporteerd');return
   }
   const key=arrayKey243(importTarget243);if(!key)throw new Error('Onbekend importdoel');
@@ -5577,3 +5578,5 @@ requestAnimationFrame(navImport243);
 })();
 
 /* build v24.3 · centrale importpagina voor alle app-onderdelen */
+
+/* build v24.5 · fix Auto JSON/Excel importer scope (cars/fuelEntries/plate) */
