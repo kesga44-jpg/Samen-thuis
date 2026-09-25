@@ -5461,7 +5461,7 @@ ensureCar24();save({touch:false,sync:false});requestAnimationFrame(()=>{nav24();
 let importTarget243='backup', importFile243=null;
 
 const IMPORT243={
- backup:{label:'Volledige Samen Thuis back-up',formats:'JSON',example:'samen-thuis-backup-2026-09-24.json',help:'Herstelt de volledige app. Gebruik een JSON-back-up die door Samen Thuis zelf is gemaakt.'},
+ backup:{label:'Volledige Samen Thuis back-up',formats:'JSON',example:'samen-thuis-backup-2026-09-24.json',help:'Voegt een Samen Thuis JSON-back-up samen met je huidige gegevens. Bestaande gegevens worden niet verwijderd.'},
  planning:{label:'Agenda',formats:'Excel · CSV · TXT · JSON',example:'title,date,time,endTime,person,calendarId\nTandarts,2026-10-02,09:30,10:00,Kees,persoonlijk',help:'Velden: title, date (YYYY-MM-DD), time, endTime, person, calendarId.'},
  meals:{label:'Weekmenu',formats:'Excel · CSV · TXT · JSON',example:'title,date,type\nCurry,2026-09-25,Avondeten',help:'Velden: title, date (YYYY-MM-DD), type.'},
  groceries:{label:'Boodschappen',formats:'Excel · CSV · TXT · JSON',example:'title,category,done\nSpinazie,Groente,false',help:'Velden: title, category, done.'},
@@ -5535,21 +5535,24 @@ function fuelMate243(obj){
  vehicles.forEach((v,i)=>{const raw=v.plate??v.licensePlate??v.kenteken??v.registration??'',mm=v.makeModel??v.make_model??v.vehicleName??'',make=v.make??v.brand??v.merk??String(mm).split(' ')[0]??'',model=v.model??v.handelsbenaming??String(mm).split(' ').slice(1).join(' '),old=String(v.id??v.vehicleId??v.uuid??i),plate=plateImport243(raw),existing=data.cars.find(x=>plate&&plateImport243(x.plate)===plate),c=existing||{id:`imp-car-${Date.now()}-${i}`,isDefault:!!(v.isDefault??v.default??v.primary)};Object.assign(c,{name:(v.name??v.nickname??[make,model].filter(Boolean).join(' ')??'')||plate||`Voertuig ${i+1}`,make,model,year:v.year??v.buildYear??v.bouwjaar??'',plate,tankLiters:num243(v.tankLiters??v.tankCapacity??v.tankSize??v.tankinhoud),owner:v.owner??v.eigenaar??''});if(!existing)data.cars.push(c);map.set(old,c.id)});
  fills.forEach((f,i)=>{let carId=map.get(String(f.vehicleId??f.carId??f.vehicle_id??f.vehicle??''));if(!carId&&data.cars.length===1)carId=data.cars[0].id;if(!carId)carId=data.cars.find(x=>x.isDefault)?.id||data.cars[0]?.id;if(!carId)return;const liters=num243(f.volume??f.liters??f.litres??f.amountLiters??f.hoeveelheid),total=num243(f.totalCost??f.total??f.cost??f.amount??f.bedrag),ppl=num243(f.pricePerLiter??f.price_per_liter??f.unitPrice??f.literPrice)||(liters?total/liters:0);data.fuelEntries.push({id:`imp-fill-${Date.now()}-${i}`,carId,date:String(f.date??f.datetime??f.createdAt??f.datum??'').slice(0,10),odometer:num243(f.odometer??f.mileage??f.kilometerstand),liters,total,pricePerLiter:ppl,fuelGrade:String(f.grade??f.fuelGrade??f.fuelType??f.brandstof??''),station:f.station??f.gasStation??f.tankstation??'',partialFill:bool243(f.partial??f.partialFill??f.isPartial),missedPrevious:bool243(f.missedFill??f.missedPrevious??f.missed),note:f.note??f.notes??f.notitie??''})})
 }
+function sigImport246(x,kind=''){if(!x||typeof x!=='object')return String(x);if(kind==='cars')return plateImport243(x.plate||'')||String(x.id||'');if(kind==='fuelEntries')return [x.carId||'',String(x.date||'').slice(0,10),num243(x.odometer),num243(x.liters||x.volume),num243(x.total||x.totalCost)].join('|');if(kind==='planning')return [x.title||'',x.date||'',x.time||'',x.person||''].join('|').toLowerCase();return String(x.id||[x.title||x.name||'',x.date||x.due||'',x.category||''].join('|')).toLowerCase()}
+function mergeArray246(a,b,kind=''){const out=Array.isArray(a)?a.slice():[],seen=new Set(out.map(x=>sigImport246(x,kind)));(Array.isArray(b)?b:[]).forEach(x=>{const k=sigImport246(x,kind);if(!seen.has(k)){out.push(x);seen.add(k)}});return out}
+function mergeBackup246(raw){const incoming=typeof migrateData==='function'?migrateData(raw):raw;if(!incoming||typeof incoming!=='object')throw new Error('Ongeldige Samen Thuis back-up');const keys=['planning','meals','groceries','chores','stock','trips','ideas','home','cars','fuelEntries'];keys.forEach(k=>{if(Array.isArray(incoming[k]))data[k]=mergeArray246(data[k],incoming[k],k)});Object.entries(incoming).forEach(([k,v])=>{if(keys.includes(k)||v==null)return;if(v&&typeof v==='object'&&!Array.isArray(v)){data[k]={...v,...((data[k]&&typeof data[k]==='object'&&!Array.isArray(data[k]))?data[k]:{})}}else if(data[k]===undefined||data[k]===null||data[k]==='')data[k]=v})}
 async function runImport243(){
  if(!importFile243)return toast('Kies eerst een bestand');
  try{
   const ext=importFile243.name.split('.').pop().toLowerCase(), text=(ext==='xlsx'||ext==='xls')?'':await importFile243.text();
-  if(importTarget243==='backup'){if(ext!=='json')throw new Error('Voor een volledige back-up is JSON nodig');data=migrateData(JSON.parse(text));save();render();toast('Volledige back-up geïmporteerd');return}
-  if(importTarget243==='budget'){const o=JSON.parse(text);data.budgetV23={...(data.budgetV23||{}),...o};save();render();toast('Budget geïmporteerd');return}
+  if(importTarget243==='backup'){if(ext!=='json')throw new Error('Voor een volledige back-up is JSON nodig');mergeBackup246(JSON.parse(text));save();render();toast('Back-up samengevoegd · bestaande gegevens behouden');return}
+  if(importTarget243==='budget'){const o=JSON.parse(text);data.budgetV23={...o,...(data.budgetV23||{})};save();render();toast('Budget samengevoegd · bestaande waarden behouden');return}
   if(importTarget243==='auto'){
    if(ext==='json'){fuelMate243(JSON.parse(text))}
    else{const rows=(ext==='xlsx'||ext==='xls')?await rowsFromExcel243(importFile243):csv243(text);data.cars ||= []; data.fuelEntries ||= [];if(!data.cars.length)throw new Error('Voeg eerst een voertuig toe of gebruik een FuelMate JSON-back-up');const car=data.cars.length===1?data.cars[0]:data.cars.find(x=>x.isDefault)||data.cars[0];rows.forEach((r,i)=>{const liters=num243(r.volume||r.liters),total=num243(r.totalCost||r.total);data.fuelEntries.push({id:`csv-fill-${Date.now()}-${i}`,carId:car.id,date:String(r.date||r.datum||'').slice(0,10),odometer:num243(r.odometer||r.kilometerstand),liters,total,pricePerLiter:num243(r.pricePerLiter)||(liters?total/liters:0),fuelGrade:r.grade||r.fuelGrade||'',station:r.station||r.tankstation||'',partialFill:bool243(r.partial||r.partialFill),missedPrevious:bool243(r.missedFill||r.missedPrevious),note:r.note||r.notitie||''})})}
-   save();render();toast('Auto-informatie geïmporteerd');return
+   data.fuelEntries=mergeArray246([],data.fuelEntries,'fuelEntries');save();render();toast('Auto-informatie samengevoegd · bestaande gegevens behouden');return
   }
   const key=arrayKey243(importTarget243);if(!key)throw new Error('Onbekend importdoel');
   let rows;if(ext==='json'){const o=JSON.parse(text);rows=Array.isArray(o)?o:(Array.isArray(o[key])?o[key]:pickArray243(o,[key,importTarget243]))}else if(ext==='xlsx'||ext==='xls')rows=await rowsFromExcel243(importFile243);else rows=csv243(text);
   if(!rows.length)throw new Error('Geen regels gevonden');
-  data[key] ||= [];data[key].push(...rows.map(r=>normalize243(importTarget243,r)).filter(r=>r.title));save();render();toast(`${rows.length} regels geïmporteerd`);
+  data[key] ||= [];const incomingRows=rows.map(r=>normalize243(importTarget243,r)).filter(r=>r.title);data[key]=mergeArray246(data[key],incomingRows,key);save();render();toast(`${incomingRows.length} regels verwerkt · bestaande gegevens behouden`);
  }catch(err){console.error(err);toast(err?.message||'Importeren is mislukt')}
 }
 function template243(){
@@ -5580,3 +5583,5 @@ requestAnimationFrame(navImport243);
 /* build v24.3 · centrale importpagina voor alle app-onderdelen */
 
 /* build v24.5 · fix Auto JSON/Excel importer scope (cars/fuelEntries/plate) */
+
+/* build v24.6 · veilige merge-import */
