@@ -118,6 +118,7 @@ const initialData = {
 };
 
 const clone = value => structuredClone(value);
+const syncConflictStore = SamenThuisCore.createConflictStore(localStorage, SYNC_CONFLICT_KEY);
 const id = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const esc = (value = '') => String(value).replace(/[&<>'"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[character]));
 const fmtDate = (value, options = { weekday: 'short', day: 'numeric', month: 'short' }) => value ? new Intl.DateTimeFormat('nl-NL', options).format(parseDate(value)) : 'Geen datum';
@@ -153,15 +154,6 @@ function migrateData(raw) {
       migrated.tripFolders = [{ id: 'folder-algemeen', name: 'Reisplannen', startDate: '', endDate: '', note: '' }];
     }
 
-    function renderSyncConflictCard() {
-      const conflict = getSyncConflict();
-      if (!conflict) return '';
-      const date = value => {
-        const parsed = new Date(value);
-        return Number.isNaN(parsed.getTime()) ? 'onbekend' : parsed.toLocaleString('nl-NL');
-      };
-      return `<section class="card settings-card sync-conflict"><div class="card-head"><div><p class="eyebrow">SYNCHRONISATIECONFLICT</p><h2>Beide apparaten zijn gewijzigd</h2></div><span class="tag red">Actie nodig</span></div><p>Er zijn sinds de vorige synchronisatie wijzigingen op beide apparaten. Kies welke volledige versie leidend wordt. De andere versie blijft bewaard in de conflictback-up op dit apparaat totdat de keuze succesvol is gesynchroniseerd.</p><p><strong>Dit apparaat:</strong> ${esc(date(conflict.localUpdatedAt))}<br><strong>Andere apparaat:</strong> ${esc(date(conflict.remoteUpdatedAt))}</p><div class="button-row"><button class="primary" data-sync-conflict-choice="local">Deze apparaatversie gebruiken</button><button class="secondary" data-sync-conflict-choice="remote">Andere apparaatversie gebruiken</button></div></section>`;
-    }
     const fallbackFolderId = migrated.tripFolders[0]?.id || '';
     migrated.trips = oldTrips.filter(item => item.type !== 'Reis').map(item => ({ ...item, tripFolderId: item.tripFolderId || fallbackFolderId }));
   }
@@ -263,7 +255,6 @@ let syncTimer;
 let syncing = false;
 let syncError = '';
 let syncConflictResolution = '';
-let syncConflictFallback = null;
 let calendarOperation = null;
 let addMode = 'item';
 
@@ -2143,12 +2134,7 @@ if (syncConfigured()) syncNow();
       let remoteLoaded = false;
 
       if (!remoteData) {
-        const payload = await encryptData(data, syncConfig.householdCode);
-        const upload = await fetch(`${baseUrl}/rest/v1/household_data?on_conflict=id`, {
-          method: 'POST', headers: { ...supabaseHeaders(), Prefer: 'resolution=merge-duplicates,return=minimal' },
-          body: JSON.stringify({ id: householdId, payload, updated_at: data.meta.updatedAt })
-        });
-        if (!upload.ok) throw new Error(`Opslaan gaf ${upload.status}`);
+        await uploadSyncData(baseUrl, householdId);
       } else if (!syncConflictResolution && SamenThuisCore.hasConcurrentChanges(
         data.meta?.updatedAt, remoteData.meta?.updatedAt, syncConfig.lastSyncedAt, data, remoteData
       )) {
@@ -2159,10 +2145,7 @@ if (syncConfigured()) syncNow();
           remoteUpdatedAt: remoteData.meta.updatedAt,
           detectedAt: new Date().toISOString()
         };
-        syncConflictFallback = conflict;
-        try {
-          localStorage.setItem(SYNC_CONFLICT_KEY, JSON.stringify(conflict));
-        } catch {
+        if (!syncConflictStore.store(conflict)) {
           syncError = 'Conflict gevonden, maar browseropslag is vol. Kies een versie voordat je deze pagina verlaat.';
           if (current === 'settings') render();
           toast(syncError);
@@ -2178,32 +2161,20 @@ if (syncConfigured()) syncNow();
         save({ touch: false, sync: false });
         remoteLoaded = true;
       } else if (syncConflictResolution === 'local') {
-        const payload = await encryptData(data, syncConfig.householdCode);
-        const upload = await fetch(`${baseUrl}/rest/v1/household_data?on_conflict=id`, {
-          method: 'POST', headers: { ...supabaseHeaders(), Prefer: 'resolution=merge-duplicates,return=minimal' },
-          body: JSON.stringify({ id: householdId, payload, updated_at: data.meta.updatedAt })
-        });
-        if (!upload.ok) throw new Error(`Opslaan gaf ${upload.status}`);
+        await uploadSyncData(baseUrl, householdId);
       } else if (remoteTime > localTime) {
         data = remoteData;
         normaliseTravelData();
         save({ touch: false, sync: false });
         remoteLoaded = true;
-      } else if (localTime >= remoteTime) {
-        const payload = await encryptData(data, syncConfig.householdCode);
-        const upload = await fetch(`${baseUrl}/rest/v1/household_data?on_conflict=id`, {
-          method: 'POST', headers: { ...supabaseHeaders(), Prefer: 'resolution=merge-duplicates,return=minimal' },
-          body: JSON.stringify({ id: householdId, payload, updated_at: data.meta.updatedAt })
-        });
-        if (!upload.ok) throw new Error(`Opslaan gaf ${upload.status}`);
+      } else if (localTime > remoteTime) {
+        await uploadSyncData(baseUrl, householdId);
       }
 
       syncConfig.lastSyncedAt = nowIso();
       localStorage.setItem(SYNC_KEY, JSON.stringify(syncConfig));
       if (syncConflictResolution) {
-        localStorage.removeItem(SYNC_CONFLICT_KEY);
-        syncConflictFallback = null;
-        syncConflictResolution = '';
+        if (syncConflictStore.clear()) syncConflictResolution = '';
       }
       syncError = '';
       if (current === 'settings' || remoteLoaded) render();
@@ -5653,8 +5624,26 @@ requestAnimationFrame(navImport243);
 /* build v24.8 · liquid glass dock + logical navigation order */
 
 function getSyncConflict() {
-  try { return JSON.parse(localStorage.getItem(SYNC_CONFLICT_KEY) || 'null') || syncConflictFallback; }
-  catch { return syncConflictFallback; }
+  return syncConflictStore.get();
+}
+
+function renderSyncConflictCard() {
+  const conflict = getSyncConflict();
+  if (!conflict) return '';
+  const date = value => {
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? 'onbekend' : parsed.toLocaleString('nl-NL');
+  };
+  return `<section class="card settings-card sync-conflict"><div class="card-head"><div><p class="eyebrow">SYNCHRONISATIECONFLICT</p><h2>Beide apparaten zijn gewijzigd</h2></div><span class="tag red">Actie nodig</span></div><p>Er zijn sinds de vorige synchronisatie wijzigingen op beide apparaten. Kies welke volledige versie leidend wordt. De andere versie blijft bewaard in de conflictback-up op dit apparaat totdat de keuze succesvol is gesynchroniseerd.</p><p><strong>Dit apparaat:</strong> ${esc(date(conflict.localUpdatedAt))}<br><strong>Andere apparaat:</strong> ${esc(date(conflict.remoteUpdatedAt))}</p><div class="button-row"><button class="primary" data-sync-conflict-choice="local">Deze apparaatversie gebruiken</button><button class="secondary" data-sync-conflict-choice="remote">Andere apparaatversie gebruiken</button></div></section>`;
+}
+
+async function uploadSyncData(baseUrl, householdId) {
+  const payload = await encryptData(data, syncConfig.householdCode);
+  const upload = await fetch(`${baseUrl}/rest/v1/household_data?on_conflict=id`, {
+    method: 'POST', headers: { ...supabaseHeaders(), Prefer: 'resolution=merge-duplicates,return=minimal' },
+    body: JSON.stringify({ id: householdId, payload, updated_at: data.meta.updatedAt })
+  });
+  if (!upload.ok) throw new Error(`Opslaan gaf ${upload.status}`);
 }
 
 document.addEventListener('click', event => {

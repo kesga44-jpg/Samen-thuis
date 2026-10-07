@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { hasConcurrentChanges, mergeUnique, nextDue, normalizeFuelMateFill, preserveUnknownFields, resolveSyncConflict } = require('../data-core.js');
+const { hasConcurrentChanges, mergeUnique, nextDue, normalizeFuelMateFill, preserveUnknownFields, resolveSyncConflict, createConflictStore } = require('../data-core.js');
 
 test('concurrent sync edits are detected after a shared baseline', () => {
   assert.equal(hasConcurrentChanges('2026-10-07T10:00:00Z', '2026-10-07T10:01:00Z', '2026-10-07T09:00:00Z'), true);
@@ -61,6 +61,25 @@ test('conflict choice clones the selected version and advances local data timest
   assert.deepEqual(resolveSyncConflict(conflict, 'remote', value => structuredClone(value), '2026-10-03'), {
     choice: 'remote', data: conflict.remoteData
   });
+});
+
+test('conflict store retains state through storage failures and clears after resolution', () => {
+  const entries = new Map();
+  const storage = {
+    getItem: key => entries.get(key) || null,
+    setItem: (key, value) => entries.set(key, value),
+    removeItem: key => entries.delete(key)
+  };
+  const store = createConflictStore(storage, 'conflict');
+  const conflict = { localData: { value: 'local' }, remoteData: { value: 'remote' } };
+  assert.equal(store.store(conflict), true);
+  assert.deepEqual(store.get(), conflict);
+  assert.equal(store.clear(), true);
+  assert.equal(store.get(), null);
+
+  storage.setItem = () => { throw new Error('storage full'); };
+  assert.equal(store.store(conflict), false);
+  assert.deepEqual(store.get(), conflict);
 });
 
 test('smart recurrence uses the actual completion date and clamps month ends', () => {

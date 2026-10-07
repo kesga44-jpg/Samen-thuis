@@ -95,6 +95,31 @@
     return { choice, data: selected };
   }
 
+  function createConflictStore(storage, key) {
+    let memory = null;
+    return {
+      get() {
+        try { return JSON.parse(storage.getItem(key) || 'null') || memory; }
+        catch { return memory; }
+      },
+      store(conflict) {
+        memory = conflict;
+        try {
+          storage.setItem(key, JSON.stringify(conflict));
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      clear() {
+        try { storage.removeItem(key); }
+        catch { return false; }
+        memory = null;
+        return true;
+      }
+    };
+  }
+
   function nextDue(lastDone, initialDue, repeat) {
     const normalized = String(repeat || '').toLocaleLowerCase('nl-NL').replaceAll('x', '×');
     if (['na elke was', 'wanneer nodig'].includes(normalized)) return '';
@@ -115,5 +140,5 @@
     return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
   }
 
-  return { hasConcurrentChanges, mergeUnique, nextDue, normalizeFuelMateFill, preserveUnknownFields, resolveSyncConflict };
+  return { hasConcurrentChanges, mergeUnique, nextDue, normalizeFuelMateFill, preserveUnknownFields, resolveSyncConflict, createConflictStore };
 });
