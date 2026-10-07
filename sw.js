@@ -1,5 +1,5 @@
-const CACHE='samen-thuis-v24-8-liquid-glass-nav';
-const ASSETS=['./','./index.html','./styles.css?v=248','./app.js?v=248','./manifest.webmanifest','./icon.svg'];
+const CACHE='samen-thuis-v24-8-sync-conflict-safety';
+const ASSETS=['./','./index.html','./styles.css?v=248','./data-core.js?v=248','./app.js?v=248','./manifest.webmanifest','./icon.svg'];
 
 self.addEventListener('install',event=>{
   event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(ASSETS)).then(()=>self.skipWaiting()));
@@ -17,8 +17,4 @@ self.addEventListener('fetch',event=>{
   }).catch(()=>caches.match(event.request).then(cached=>cached||(event.request.mode==='navigate'?caches.match('./index.html'):Response.error()))));
 });
 
-// v23.1 data-veilige build 2026-09-18 06:00:01 +0000
-
-// v23.2 2026-09-18 06:17:59 +0000
-
-// v23.3 2026-09-18 07:18:05 +0000
+// Samen Thuis v24.8
