@@ -61,6 +61,9 @@ test('conflict choice clones the selected version and advances local data timest
   assert.deepEqual(resolveSyncConflict(conflict, 'remote', value => structuredClone(value), '2026-10-03'), {
     choice: 'remote', data: conflict.remoteData
   });
+  assert.deepEqual(resolveSyncConflict({ localData: { value: 'legacy' }, remoteData: {} }, 'local', value => structuredClone(value), '2026-10-03'), {
+    choice: 'local', data: { value: 'legacy', meta: { updatedAt: '2026-10-03' } }
+  });
 });
 
 test('conflict store retains state through storage failures and clears after resolution', () => {

@@ -1,5 +1,5 @@
-const CACHE='samen-thuis-v24-8-sync-conflict-safety';
-const ASSETS=['./','./index.html','./styles.css?v=248','./data-core.js?v=248','./app.js?v=248','./manifest.webmanifest','./icon.svg'];
+const CACHE='samen-thuis-v24-8-sync-conflict-safety-2';
+const ASSETS=['./','./index.html','./styles.css?v=249','./data-core.js?v=249','./app.js?v=249','./manifest.webmanifest','./icon.svg'];
 
 self.addEventListener('install',event=>{
   event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(ASSETS)).then(()=>self.skipWaiting()));

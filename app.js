@@ -4939,10 +4939,9 @@ document.addEventListener('click',e=>{
  if(e.target.closest('[data-v19-budget-add]')){editBudget19();return}
  const be=e.target.closest('[data-v19-budget-edit]');if(be){editBudget19(Number(be.dataset.v19BudgetEdit));return}
  const tool=e.target.closest('[data-v19-tool]');if(tool){
-   const t=tool.dataset.v19Tool;if(t==='weather'){go19('today');return}
+   const t=tool.dataset.v19Tool;   if(t==='weather'){go19('today');return}
    if(t==='floor'){go19('groceries');return}
    if(t==='daily'){go19('today');return}
-   return;
  }
 });
 document.addEventListener('change',e=>{
