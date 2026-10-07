@@ -1,11 +1,12 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { hasConcurrentChanges, mergeUnique, nextDue, normalizeFuelMateFill, preserveUnknownFields } = require('../data-core.js');
+const { hasConcurrentChanges, mergeUnique, nextDue, normalizeFuelMateFill, preserveUnknownFields, resolveSyncConflict } = require('../data-core.js');
 
 test('concurrent sync edits are detected after a shared baseline', () => {
   assert.equal(hasConcurrentChanges('2026-10-07T10:00:00Z', '2026-10-07T10:01:00Z', '2026-10-07T09:00:00Z'), true);
   assert.equal(hasConcurrentChanges('2026-10-07T10:00:00Z', '2026-10-07T10:00:00Z', '2026-10-07T09:00:00Z', { value: 'local' }, { value: 'remote' }), true);
   assert.equal(hasConcurrentChanges('2026-10-07T10:00:00Z', '2026-10-07T10:00:00Z', '2026-10-07T09:00:00Z', { value: 'same' }, { value: 'same' }), false);
+  assert.equal(hasConcurrentChanges('2026-10-07T10:00:00Z', '2026-10-07T10:00:00Z', '2026-10-07T09:00:00Z', { b: 2, a: 1 }, { a: 1, b: 2 }), false);
   assert.equal(hasConcurrentChanges('2026-10-07T10:00:00Z', '2026-10-07T09:00:00Z', '2026-10-07T09:00:00Z'), false);
   assert.equal(hasConcurrentChanges('2026-10-07T10:00:00Z', '2026-10-07T10:00:00Z', ''), false);
 });
@@ -46,6 +47,19 @@ test('FuelMate fillups normalize aliases, derive unit price, and retain flags', 
     partialFill: true,
     missedPrevious: true,
     note: ''
+  });
+});
+
+test('conflict choice clones the selected version and advances local data timestamp', () => {
+  const conflict = {
+    localData: { meta: { updatedAt: '2026-10-01' }, value: 'local' },
+    remoteData: { meta: { updatedAt: '2026-10-02' }, value: 'remote' }
+  };
+  const local = resolveSyncConflict(conflict, 'local', value => structuredClone(value), '2026-10-03');
+  assert.deepEqual(local, { choice: 'local', data: { meta: { updatedAt: '2026-10-03' }, value: 'local' } });
+  assert.equal(conflict.localData.meta.updatedAt, '2026-10-01');
+  assert.deepEqual(resolveSyncConflict(conflict, 'remote', value => structuredClone(value), '2026-10-03'), {
+    choice: 'remote', data: conflict.remoteData
   });
 });
 

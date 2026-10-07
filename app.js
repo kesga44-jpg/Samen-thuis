@@ -152,6 +152,16 @@ function migrateData(raw) {
     if (!migrated.tripFolders.length && oldTrips.length) {
       migrated.tripFolders = [{ id: 'folder-algemeen', name: 'Reisplannen', startDate: '', endDate: '', note: '' }];
     }
+
+    function renderSyncConflictCard() {
+      const conflict = getSyncConflict();
+      if (!conflict) return '';
+      const date = value => {
+        const parsed = new Date(value);
+        return Number.isNaN(parsed.getTime()) ? 'onbekend' : parsed.toLocaleString('nl-NL');
+      };
+      return `<section class="card settings-card sync-conflict"><div class="card-head"><div><p class="eyebrow">SYNCHRONISATIECONFLICT</p><h2>Beide apparaten zijn gewijzigd</h2></div><span class="tag red">Actie nodig</span></div><p>Er zijn sinds de vorige synchronisatie wijzigingen op beide apparaten. Kies welke volledige versie leidend wordt. De andere versie blijft bewaard in de conflictback-up op dit apparaat totdat de keuze succesvol is gesynchroniseerd.</p><p><strong>Dit apparaat:</strong> ${esc(date(conflict.localUpdatedAt))}<br><strong>Andere apparaat:</strong> ${esc(date(conflict.remoteUpdatedAt))}</p><div class="button-row"><button class="primary" data-sync-conflict-choice="local">Deze apparaatversie gebruiken</button><button class="secondary" data-sync-conflict-choice="remote">Andere apparaatversie gebruiken</button></div></section>`;
+    }
     const fallbackFolderId = migrated.tripFolders[0]?.id || '';
     migrated.trips = oldTrips.filter(item => item.type !== 'Reis').map(item => ({ ...item, tripFolderId: item.tripFolderId || fallbackFolderId }));
   }
@@ -253,6 +263,7 @@ let syncTimer;
 let syncing = false;
 let syncError = '';
 let syncConflictResolution = '';
+let syncConflictFallback = null;
 let calendarOperation = null;
 let addMode = 'item';
 
@@ -624,6 +635,7 @@ function renderSettings() {
       <form id="syncForm" class="form-grid compact-form"><div class="field"><label for="syncHouseholdCode">Geheime huishoudcode (minimaal 12 tekens)</label><input id="syncHouseholdCode" name="householdCode" type="password" value="${esc(syncConfig.householdCode)}" minlength="12" autocomplete="off" placeholder="Jullie gedeelde geheime code"></div><div class="button-row"><button class="primary" type="submit">Bewaren en verbinden</button>${configured ? '<button class="secondary" type="button" data-sync-now>Nu synchroniseren</button>' : ''}</div></form>
     </section>
     ${renderCalendarSettings()}
+    ${renderSyncConflictCard()}
     <section class="card settings-card"><div class="card-head"><div><p class="eyebrow">Gegevens</p><h2>Back-up</h2></div></div><p>Maak een los JSON-bestand of herstel een eerdere back-up. Herstellen vervangt alle huidige gegevens op dit apparaat; Importeren voegt gegevens samen. De synchronisatiecode en sleutel worden niet in de back-up gezet.</p><div class="button-row"><button class="secondary" data-action="backup">Back-up maken</button><button class="secondary" data-action="restore">Back-up herstellen (vervangen)</button></div></section>
     <section class="card settings-card"><div class="card-head"><div><p class="eyebrow">Apple Opdracht</p><h2>Eenvoudig tekstformaat</h2></div></div><p>Laat de Opdracht per afspraak één regel maken:</p><pre><code>Agendanaam | 2026-09-04 | 09:00 | Titel</code></pre><p>De persoon volgt uit de agenda. Een vijfde veld met Kees, Daphne of Samen is optioneel en gaat voor de agendakeuze. Een zesde veld mag de eindtijd bevatten. Bij onbekende namen kies je de persoon één keer.</p><p>Dit is een import, geen tweerichtingskoppeling. Verplaatsen of verwijderen in Apple Agenda wordt niet automatisch overgenomen.</p></section>
   </div>`;
@@ -1619,7 +1631,11 @@ document.querySelector('#addBtn').addEventListener('click', openAdd);
 document.querySelector('#laptopSaveBtn').addEventListener('click', exportBackup);
 document.querySelector('#itemForm').addEventListener('submit', handleSubmit);
 document.querySelector('#questionForm').addEventListener('submit', handleQuestionSubmit);
-document.querySelector('#restoreInput').addEventListener('change', event => event.target.files[0] && importBackup(event.target.files[0]));
+document.querySelector('#restoreInput').addEventListener('change', async event => {
+  const file = event.target.files[0];
+  if (file) await importBackup(file);
+  event.target.value = '';
+});
 document.querySelector('#groceryImportFile').addEventListener('change', event => event.target.files[0] && readImportFile(event.target.files[0], 'groceries'));
 document.querySelector('#ostaImportFile').addEventListener('change', event => event.target.files[0] && readImportFile(event.target.files[0], 'osta'));
 document.querySelector('#calendarImportFile').addEventListener('change', event => event.target.files[0] && readImportFile(event.target.files[0], 'calendar'));
@@ -1782,8 +1798,13 @@ if (syncConfigured()) syncNow();
   };
 
   updateSyncBadge = function updateSyncBadgeV11(message) {
-    baseUpdateSyncBadge(message);
     const badge = document.querySelector('#syncState');
+    if (!message && badge && getSyncConflict()) {
+      badge.textContent = 'Conflict oplossen';
+      badge.title = 'Open Instellingen en kies welke apparaatversie je wilt bewaren.';
+      return;
+    }
+    baseUpdateSyncBadge(message);
     if (!badge || message) return;
     if (syncConfigured() && navigator.onLine && !syncing && !syncError && syncConfig.lastSyncedAt) {
       const date = new Date(syncConfig.lastSyncedAt);
@@ -2131,13 +2152,22 @@ if (syncConfigured()) syncNow();
       } else if (!syncConflictResolution && SamenThuisCore.hasConcurrentChanges(
         data.meta?.updatedAt, remoteData.meta?.updatedAt, syncConfig.lastSyncedAt, data, remoteData
       )) {
-        localStorage.setItem(SYNC_CONFLICT_KEY, JSON.stringify({
+        const conflict = {
           localData: clone(data),
           remoteData: clone(remoteData),
           localUpdatedAt: data.meta.updatedAt,
           remoteUpdatedAt: remoteData.meta.updatedAt,
           detectedAt: new Date().toISOString()
-        }));
+        };
+        syncConflictFallback = conflict;
+        try {
+          localStorage.setItem(SYNC_CONFLICT_KEY, JSON.stringify(conflict));
+        } catch {
+          syncError = 'Conflict gevonden, maar browseropslag is vol. Kies een versie voordat je deze pagina verlaat.';
+          if (current === 'settings') render();
+          toast(syncError);
+          return;
+        }
         syncError = 'Wijzigingen op beide apparaten; kies welke versie je wilt bewaren.';
         if (current === 'settings') render();
         toast('Wijzigingen op beide apparaten gevonden. Kies een versie bij Instellingen.');
@@ -2159,7 +2189,7 @@ if (syncConfigured()) syncNow();
         normaliseTravelData();
         save({ touch: false, sync: false });
         remoteLoaded = true;
-      } else if (localTime > remoteTime) {
+      } else if (localTime >= remoteTime) {
         const payload = await encryptData(data, syncConfig.householdCode);
         const upload = await fetch(`${baseUrl}/rest/v1/household_data?on_conflict=id`, {
           method: 'POST', headers: { ...supabaseHeaders(), Prefer: 'resolution=merge-duplicates,return=minimal' },
@@ -2172,6 +2202,7 @@ if (syncConfigured()) syncNow();
       localStorage.setItem(SYNC_KEY, JSON.stringify(syncConfig));
       if (syncConflictResolution) {
         localStorage.removeItem(SYNC_CONFLICT_KEY);
+        syncConflictFallback = null;
         syncConflictResolution = '';
       }
       syncError = '';
@@ -5622,43 +5653,20 @@ requestAnimationFrame(navImport243);
 /* build v24.8 · liquid glass dock + logical navigation order */
 
 function getSyncConflict() {
-  try { return JSON.parse(localStorage.getItem(SYNC_CONFLICT_KEY) || 'null'); }
-  catch { return null; }
+  try { return JSON.parse(localStorage.getItem(SYNC_CONFLICT_KEY) || 'null') || syncConflictFallback; }
+  catch { return syncConflictFallback; }
 }
-
-const updateSyncBadgeWithConflict = updateSyncBadge;
-updateSyncBadge = function updateSyncBadgeConflict(message) {
-  const badge = document.querySelector('#syncState');
-  if (!message && badge && getSyncConflict()) {
-    badge.textContent = 'Conflict oplossen';
-    badge.title = 'Open Instellingen en kies welke apparaatversie je wilt bewaren.';
-    return;
-  }
-  updateSyncBadgeWithConflict(message);
-};
-
-const renderSettingsWithConflict = renderSettings;
-renderSettings = function renderSettingsWithConflictState(...args) {
-  const html = renderSettingsWithConflict(...args);
-  const conflict = getSyncConflict();
-  if (!conflict) return html;
-  const date = value => {
-    const parsed = new Date(value);
-    return Number.isNaN(parsed.getTime()) ? 'onbekend' : parsed.toLocaleString('nl-NL');
-  };
-  const card = `<section class="card settings-card sync-conflict"><div class="card-head"><div><p class="eyebrow">SYNCHRONISATIECONFLICT</p><h2>Beide apparaten zijn gewijzigd</h2></div><span class="tag red">Actie nodig</span></div><p>Er zijn sinds de vorige synchronisatie wijzigingen op beide apparaten. Kies welke volledige versie leidend wordt. De andere versie blijft bewaard in de conflictback-up op dit apparaat totdat de keuze succesvol is gesynchroniseerd.</p><p><strong>Dit apparaat:</strong> ${esc(date(conflict.localUpdatedAt))}<br><strong>Andere apparaat:</strong> ${esc(date(conflict.remoteUpdatedAt))}</p><div class="button-row"><button class="primary" data-sync-conflict-choice="local">Deze apparaatversie gebruiken</button><button class="secondary" data-sync-conflict-choice="remote">Andere apparaatversie gebruiken</button></div></section>`;
-  const lastDiv = html.lastIndexOf('</div>');
-  return lastDiv < 0 ? html + card : `${html.slice(0, lastDiv)}${card}${html.slice(lastDiv)}`;
-};
 
 document.addEventListener('click', event => {
   const choice = event.target.closest('[data-sync-conflict-choice]');
   if (!choice) return;
   const conflict = getSyncConflict();
   if (!conflict) return;
-  syncConflictResolution = choice.dataset.syncConflictChoice;
-  data = clone(syncConflictResolution === 'local' ? conflict.localData : conflict.remoteData);
-  if (syncConflictResolution === 'local') data.meta.updatedAt = new Date().toISOString();
+  const selection = SamenThuisCore.resolveSyncConflict(
+    conflict, choice.dataset.syncConflictChoice, clone, new Date().toISOString()
+  );
+  syncConflictResolution = selection.choice;
+  data = selection.data;
   save({ touch: false, sync: false });
   render();
   syncNow({ manual: true });
