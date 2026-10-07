@@ -95,7 +95,10 @@
   function resolveSyncConflict(conflict, choice, cloneValue, now) {
     if (!['local', 'remote'].includes(choice)) throw new Error('Kies een geldige synchronisatieversie');
     const selected = cloneValue(choice === 'local' ? conflict.localData : conflict.remoteData);
-    if (choice === 'local') selected.meta.updatedAt = now;
+    if (choice === 'local') {
+      selected.meta ||= {};
+      selected.meta.updatedAt = now;
+    }
     return { choice, data: selected };
   }
 
@@ -125,7 +128,7 @@
   }
 
   function nextDue(lastDone, initialDue, repeat) {
-    const normalized = String(repeat || '').toLocaleLowerCase('nl-NL').replaceAll('x', '×');
+    const normalized = String(repeat || '').toLocaleLowerCase('nl-NL').replace(/(\d)x/g, '$1×');
     if (['na elke was', 'wanneer nodig'].includes(normalized)) return '';
     if (normalized === 'eenmalig') return lastDone ? '' : (initialDue || '');
     if (!lastDone) return initialDue || '';
