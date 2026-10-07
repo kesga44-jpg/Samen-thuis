@@ -33,13 +33,17 @@
     return JSON.stringify(value);
   }
 
+  function sameData(left, right) {
+    return stableStringify(left) === stableStringify(right);
+  }
+
   function hasConcurrentChanges(localUpdatedAt, remoteUpdatedAt, lastSyncedAt, localData, remoteData) {
     const local = Date.parse(localUpdatedAt || '');
     const remote = Date.parse(remoteUpdatedAt || '');
     const baseline = Date.parse(lastSyncedAt || '');
     if (!Number.isFinite(baseline) || !Number.isFinite(local) || !Number.isFinite(remote)
       || local <= baseline || remote <= baseline) return false;
-    if (localData !== undefined) return stableStringify(localData) !== stableStringify(remoteData);
+    if (localData !== undefined) return !sameData(localData, remoteData);
     return local !== remote;
   }
 
@@ -140,5 +144,5 @@
     return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
   }
 
-  return { hasConcurrentChanges, mergeUnique, nextDue, normalizeFuelMateFill, preserveUnknownFields, resolveSyncConflict, createConflictStore };
+  return { hasConcurrentChanges, mergeUnique, nextDue, normalizeFuelMateFill, preserveUnknownFields, resolveSyncConflict, createConflictStore, sameData };
 });

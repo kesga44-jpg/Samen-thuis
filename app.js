@@ -254,7 +254,7 @@ let agendaWeekStart = startOfWeek(todayISO());
 let syncTimer;
 let syncing = false;
 let syncError = '';
-let syncConflictResolution = '';
+let syncConflictResolution = syncConflictStore.get()?.resolution || '';
 let calendarOperation = null;
 let addMode = 'item';
 
@@ -2128,6 +2128,28 @@ if (syncConfigured()) syncNow();
       const rows = await response.json();
       let remoteData = null;
       if (rows[0]?.payload) remoteData = migrateData(await decryptData(rows[0].payload, syncConfig.householdCode));
+      const pendingConflict = syncConflictStore.get();
+      if (syncConflictResolution && pendingConflict?.resolution && remoteData
+        && !SamenThuisCore.sameData(remoteData, pendingConflict.remoteData)) {
+        const selectedData = pendingConflict.selectedData
+          || (syncConflictResolution === 'local' ? pendingConflict.localData : pendingConflict.remoteData);
+        const renewedConflict = {
+          ...pendingConflict,
+          localData: clone(selectedData),
+          remoteData: clone(remoteData),
+          localUpdatedAt: selectedData.meta.updatedAt,
+          remoteUpdatedAt: remoteData.meta.updatedAt,
+          resolution: '',
+          selectedData: null,
+          detectedAt: new Date().toISOString()
+        };
+        syncConflictStore.store(renewedConflict);
+        syncConflictResolution = '';
+        syncError = 'De andere versie is verder gewijzigd; maak opnieuw een keuze.';
+        if (current === 'settings') render();
+        toast(syncError);
+        return;
+      }
 
       const localTime = new Date(data.meta?.updatedAt || 0).getTime();
       const remoteTime = new Date(remoteData?.meta?.updatedAt || 0).getTime();
@@ -2156,11 +2178,12 @@ if (syncConfigured()) syncNow();
         toast('Wijzigingen op beide apparaten gevonden. Kies een versie bij Instellingen.');
         return;
       } else if (syncConflictResolution === 'remote') {
-        data = remoteData;
+        data = clone(pendingConflict?.selectedData || remoteData);
         normaliseTravelData();
         save({ touch: false, sync: false });
         remoteLoaded = true;
       } else if (syncConflictResolution === 'local') {
+        data = clone(pendingConflict?.selectedData || data);
         await uploadSyncData(baseUrl, householdId);
       } else if (remoteTime > localTime) {
         data = remoteData;
@@ -5656,6 +5679,7 @@ document.addEventListener('click', event => {
   );
   syncConflictResolution = selection.choice;
   data = selection.data;
+  syncConflictStore.store({ ...conflict, resolution: selection.choice, selectedData: clone(selection.data) });
   save({ touch: false, sync: false });
   render();
   syncNow({ manual: true });

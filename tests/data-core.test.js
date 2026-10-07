@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { hasConcurrentChanges, mergeUnique, nextDue, normalizeFuelMateFill, preserveUnknownFields, resolveSyncConflict, createConflictStore } = require('../data-core.js');
+const { hasConcurrentChanges, mergeUnique, nextDue, normalizeFuelMateFill, preserveUnknownFields, resolveSyncConflict, createConflictStore, sameData } = require('../data-core.js');
 
 test('concurrent sync edits are detected after a shared baseline', () => {
   assert.equal(hasConcurrentChanges('2026-10-07T10:00:00Z', '2026-10-07T10:01:00Z', '2026-10-07T09:00:00Z'), true);
@@ -80,6 +80,28 @@ test('conflict store retains state through storage failures and clears after res
   storage.setItem = () => { throw new Error('storage full'); };
   assert.equal(store.store(conflict), false);
   assert.deepEqual(store.get(), conflict);
+});
+
+test('conflict resolution is resumable after reload and detects a changed remote snapshot', () => {
+  const entries = new Map();
+  const storage = {
+    getItem: key => entries.get(key) || null,
+    setItem: (key, value) => entries.set(key, value),
+    removeItem: key => entries.delete(key)
+  };
+  const conflict = {
+    localData: { meta: { updatedAt: '2026-10-01' }, value: 'local' },
+    remoteData: { meta: { updatedAt: '2026-10-02' }, value: 'remote' }
+  };
+  const selection = resolveSyncConflict(conflict, 'remote', value => structuredClone(value), '2026-10-03');
+  const store = createConflictStore(storage, 'conflict');
+  store.store({ ...conflict, resolution: selection.choice, selectedData: selection.data });
+
+  const reloaded = createConflictStore(storage, 'conflict').get();
+  assert.equal(reloaded.resolution, 'remote');
+  assert.deepEqual(reloaded.selectedData, conflict.remoteData);
+  assert.equal(sameData(reloaded.remoteData, { value: 'remote', meta: { updatedAt: '2026-10-02' } }), true);
+  assert.equal(sameData(reloaded.remoteData, { ...reloaded.remoteData, value: 'new remote edit' }), false);
 });
 
 test('smart recurrence uses the actual completion date and clamps month ends', () => {
