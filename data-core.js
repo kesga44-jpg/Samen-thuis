@@ -37,6 +37,14 @@
     return stableStringify(left) === stableStringify(right);
   }
 
+  function remoteChangedSinceChoice(expectedRemote, currentRemote) {
+    return Boolean(expectedRemote && currentRemote && !sameData(expectedRemote, currentRemote));
+  }
+
+  function conditionalUpdateSucceeded(rows) {
+    return Array.isArray(rows) && rows.length > 0;
+  }
+
   function hasConcurrentChanges(localUpdatedAt, remoteUpdatedAt, lastSyncedAt, localData, remoteData) {
     const local = Date.parse(localUpdatedAt || '');
     const remote = Date.parse(remoteUpdatedAt || '');
@@ -147,5 +155,5 @@
     return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
   }
 
-  return { hasConcurrentChanges, mergeUnique, nextDue, normalizeFuelMateFill, preserveUnknownFields, resolveSyncConflict, createConflictStore, sameData };
+  return { hasConcurrentChanges, mergeUnique, nextDue, normalizeFuelMateFill, preserveUnknownFields, resolveSyncConflict, createConflictStore, sameData, remoteChangedSinceChoice, conditionalUpdateSucceeded };
 });

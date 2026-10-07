@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { hasConcurrentChanges, mergeUnique, nextDue, normalizeFuelMateFill, preserveUnknownFields, resolveSyncConflict, createConflictStore, sameData } = require('../data-core.js');
+const { hasConcurrentChanges, mergeUnique, nextDue, normalizeFuelMateFill, preserveUnknownFields, resolveSyncConflict, createConflictStore, sameData, remoteChangedSinceChoice, conditionalUpdateSucceeded } = require('../data-core.js');
 
 test('concurrent sync edits are detected after a shared baseline', () => {
   assert.equal(hasConcurrentChanges('2026-10-07T10:00:00Z', '2026-10-07T10:01:00Z', '2026-10-07T09:00:00Z'), true);
@@ -64,6 +64,7 @@ test('conflict choice clones the selected version and advances local data timest
   assert.deepEqual(resolveSyncConflict({ localData: { value: 'legacy' }, remoteData: {} }, 'local', value => structuredClone(value), '2026-10-03'), {
     choice: 'local', data: { value: 'legacy', meta: { updatedAt: '2026-10-03' } }
   });
+  assert.throws(() => resolveSyncConflict(conflict, 'other', value => structuredClone(value), '2026-10-03'), /geldige synchronisatieversie/);
 });
 
 test('conflict store retains state through storage failures and clears after resolution', () => {
@@ -105,6 +106,10 @@ test('conflict resolution is resumable after reload and detects a changed remote
   assert.deepEqual(reloaded.selectedData, conflict.remoteData);
   assert.equal(sameData(reloaded.remoteData, { value: 'remote', meta: { updatedAt: '2026-10-02' } }), true);
   assert.equal(sameData(reloaded.remoteData, { ...reloaded.remoteData, value: 'new remote edit' }), false);
+  assert.equal(remoteChangedSinceChoice(reloaded.remoteData, { ...reloaded.remoteData, value: 'new remote edit' }), true);
+  assert.equal(remoteChangedSinceChoice(reloaded.remoteData, reloaded.remoteData), false);
+  assert.equal(conditionalUpdateSucceeded([{ updated_at: '2026-10-02' }]), true);
+  assert.equal(conditionalUpdateSucceeded([]), false);
 });
 
 test('smart recurrence uses the actual completion date and clamps month ends', () => {

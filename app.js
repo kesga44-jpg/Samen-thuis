@@ -2133,7 +2133,7 @@ if (syncConfigured()) syncNow();
       if (rows[0]?.payload) remoteData = migrateData(await decryptData(rows[0].payload, syncConfig.householdCode));
       const pendingConflict = syncConflictStore.get();
       if (syncConflictResolution && pendingConflict?.resolution && remoteData
-        && !SamenThuisCore.sameData(remoteData, pendingConflict.remoteData)) {
+        && SamenThuisCore.remoteChangedSinceChoice(pendingConflict.remoteData, remoteData)) {
         const selectedData = pendingConflict.selectedData
           || (syncConflictResolution === 'local' ? pendingConflict.localData : pendingConflict.remoteData);
         const renewedConflict = {
@@ -4895,8 +4895,13 @@ function budgetPage19(){
   <section class="card"><div class="card-head"><h2>Uitgaven</h2></div>${expenses.length?expenses.map((x,i)=>`<div class="row19"><div><strong>${esc(x.title||x.category||'Uitgave')}</strong><small>${esc(x.category||'')}</small></div><b>€ ${Number(x.amount||0).toLocaleString('nl-NL')}</b><button data-v19-budget-edit="${i}">Bewerk</button></div>`).join(''):'<p class="muted">Nog geen budgetposten. Gebruik + Toevoegen.</p>'}</section></div>`;
 }
 function extraPage19(){
+ const tools=[
+ ['weather','☀️','Weer','Actueel weer op Vandaag','today'],
+ ['daily','💡','Vraag van de dag','Beantwoord de vraag op Vandaag','today'],
+ ['floor','🏷️','Bodemprijzen','Bekijk prijsreferenties bij Boodschappen','groceries']
+ ];
  return `<div class="page19"><div class="page19-head"><div><p class="eyebrow">HANDIGE TOOLS</p><h1>Extra</h1><p>Snelle toegang tot handige onderdelen.</p></div></div><div class="tools19">
- ${[['weather','☀️','Weer','Actueel weer op Vandaag'],['daily','💡','Vraag van de dag','Beantwoord de vraag op Vandaag'],['floor','🏷️','Bodemprijzen','Bekijk prijsreferenties bij Boodschappen']].map(x=>`<button data-v19-tool="${x[0]}"><span>${x[1]}</span><strong>${x[2]}</strong><small>${x[3]}</small></button>`).join('')}</div></div>`;
+ ${tools.map(([id,icon,label,description])=>`<button data-v19-tool="${id}"><span>${icon}</span><strong>${label}</strong><small>${description}</small></button>`).join('')}</div></div>`;
 }
 function settingsPanel19(){
  if(current!=='settings')return;
@@ -5678,7 +5683,7 @@ async function uploadSyncData(baseUrl, householdId, expectedRemoteRow = null) {
     });
     if (!upload.ok) throw new Error(`Opslaan gaf ${upload.status}`);
     const updatedRows = await upload.json();
-    if (!updatedRows.length) throw new Error('De andere versie is ondertussen bijgewerkt. Synchroniseer opnieuw om de wijzigingen te vergelijken.');
+    if (!SamenThuisCore.conditionalUpdateSucceeded(updatedRows)) throw new Error('De andere versie is ondertussen bijgewerkt. Synchroniseer opnieuw om de wijzigingen te vergelijken.');
     return;
   }
   upload = await fetch(`${baseUrl}/rest/v1/household_data?on_conflict=id`, {
@@ -5691,11 +5696,22 @@ async function uploadSyncData(baseUrl, householdId, expectedRemoteRow = null) {
 document.addEventListener('click', event => {
   const choice = event.target.closest('[data-sync-conflict-choice]');
   if (!choice) return;
+  if (syncing) return;
   const conflict = getSyncConflict();
   if (!conflict) return;
-  const selection = SamenThuisCore.resolveSyncConflict(
-    conflict, choice.dataset.syncConflictChoice, clone, new Date().toISOString()
-  );
+  if (!conflict.resolution && !['local', 'remote'].includes(choice.dataset.syncConflictChoice)) {
+    toast('Kies een geldige versie om de synchronisatie te hervatten.');
+    return;
+  }
+  let selection;
+  try {
+    selection = SamenThuisCore.resolveSyncConflict(
+      conflict, choice.dataset.syncConflictChoice, clone, new Date().toISOString()
+    );
+  } catch (error) {
+    toast(error.message);
+    return;
+  }
   const pending = { ...conflict, resolution: selection.choice, selectedData: clone(selection.data) };
   if (!syncConflictStore.store(pending)) {
     toast('De keuze kan niet veilig worden bewaard omdat browseropslag vol is. Maak ruimte en probeer opnieuw.');
