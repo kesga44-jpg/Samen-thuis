@@ -3,14 +3,23 @@
   if (typeof module === 'object' && module.exports) module.exports = core;
   root.SamenThuisCore = core;
 })(globalThis, function () {
-  function hasConcurrentChanges(localUpdatedAt, remoteUpdatedAt, lastSyncedAt) {
+  function hasConcurrentChanges(localUpdatedAt, remoteUpdatedAt, lastSyncedAt, localData, remoteData) {
     const local = Date.parse(localUpdatedAt || '');
     const remote = Date.parse(remoteUpdatedAt || '');
     const baseline = Date.parse(lastSyncedAt || '');
     if (!Number.isFinite(baseline) || !Number.isFinite(local) || !Number.isFinite(remote)
       || local <= baseline || remote <= baseline) return false;
-    if (arguments.length > 3) return JSON.stringify(arguments[3]) !== JSON.stringify(arguments[4]);
+    if (arguments.length > 3) return JSON.stringify(localData) !== JSON.stringify(remoteData);
     return local !== remote;
+  }
+
+  function preserveUnknownFields(raw, target, cloneValue) {
+    Object.keys(raw || {}).forEach(key => {
+      if (key in target) return;
+      try { target[key] = cloneValue(raw[key]); }
+      catch { target[key] = raw[key]; }
+    });
+    return target;
   }
 
   function mergeUnique(existing, incoming, signature) {
@@ -24,6 +33,29 @@
       }
     });
     return result;
+  }
+
+  function normalizeFuelMateFill(fill, carId, id) {
+    const number = value => Number(String(value ?? 0).replace(',', '.')) || 0;
+    const flag = value => ['1', 'true', 'ja', 'yes', 'x', '✓'].includes(String(value || '').trim().toLowerCase());
+    const liters = number(fill.volume ?? fill.liters ?? fill.litres ?? fill.amountLiters ?? fill.hoeveelheid);
+    const total = number(fill.totalCost ?? fill.total ?? fill.cost ?? fill.amount ?? fill.bedrag);
+    const pricePerLiter = number(fill.pricePerLiter ?? fill.price_per_liter ?? fill.unitPrice ?? fill.literPrice)
+      || (liters ? total / liters : 0);
+    return {
+      id,
+      carId,
+      date: String(fill.date ?? fill.datetime ?? fill.createdAt ?? fill.datum ?? '').slice(0, 10),
+      odometer: number(fill.odometer ?? fill.mileage ?? fill.kilometerstand),
+      liters,
+      total,
+      pricePerLiter,
+      fuelGrade: String(fill.grade ?? fill.fuelGrade ?? fill.fuelType ?? fill.brandstof ?? ''),
+      station: fill.station ?? fill.gasStation ?? fill.tankstation ?? '',
+      partialFill: flag(fill.partial ?? fill.partialFill ?? fill.isPartial),
+      missedPrevious: flag(fill.missedFill ?? fill.missedPrevious ?? fill.missed),
+      note: fill.note ?? fill.notes ?? fill.notitie ?? ''
+    };
   }
 
   function nextDue(lastDone, initialDue, repeat) {
@@ -65,5 +97,5 @@
     return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
   }
 
-  return { hasConcurrentChanges, mergeUnique, nextDue };
+  return { hasConcurrentChanges, mergeUnique, nextDue, normalizeFuelMateFill, preserveUnknownFields };
 });

@@ -133,11 +133,7 @@ function migrateData(raw) {
   // v23.1 DATA-VEILIG: behoud ook velden die door latere/oude modules zijn toegevoegd.
   // Bekende structuren worden hieronder nog genormaliseerd, onbekende structuren
   // worden één-op-één meegenomen zodat een update ze niet stilzwijgend verwijdert.
-  Object.keys(raw).forEach(key => {
-    if (!(key in migrated)) {
-      try { migrated[key] = clone(raw[key]); } catch { migrated[key] = raw[key]; }
-    }
-  });
+  SamenThuisCore.preserveUnknownFields(raw, migrated, clone);
   ['planning', 'meals', 'groceries', 'chores', 'stock', 'ideas', 'home', 'trips'].forEach(key => {
     if (Array.isArray(raw[key])) migrated[key] = raw[key];
   });
@@ -2103,6 +2099,11 @@ if (syncConfigured()) syncNow();
       if (manual && !navigator.onLine) toast('Geen internetverbinding');
       return;
     }
+    if (getSyncConflict() && !syncConflictResolution) {
+      syncError = 'Wijzigingen op beide apparaten; kies welke versie je wilt bewaren.';
+      updateSyncBadge();
+      return;
+    }
     syncing = true;
     syncError = '';
     updateSyncBadge();
@@ -2139,7 +2140,7 @@ if (syncConfigured()) syncNow();
         }));
         syncError = 'Wijzigingen op beide apparaten; kies welke versie je wilt bewaren.';
         if (current === 'settings') render();
-        if (manual) toast('Wijzigingen op beide apparaten gevonden. Kies een versie bij Instellingen.');
+        toast('Wijzigingen op beide apparaten gevonden. Kies een versie bij Instellingen.');
         return;
       } else if (syncConflictResolution === 'remote') {
         data = remoteData;
@@ -5539,7 +5540,7 @@ function fuelMate243(obj){
  if(!vehicles.length&&!fills.length)throw new Error('Geen voertuigen of tankbeurten gevonden in deze JSON');
  const map=new Map();
  vehicles.forEach((v,i)=>{const raw=v.plate??v.licensePlate??v.kenteken??v.registration??'',mm=v.makeModel??v.make_model??v.vehicleName??'',make=v.make??v.brand??v.merk??String(mm).split(' ')[0]??'',model=v.model??v.handelsbenaming??String(mm).split(' ').slice(1).join(' '),old=String(v.id??v.vehicleId??v.uuid??i),plate=plateImport243(raw),existing=data.cars.find(x=>plate&&plateImport243(x.plate)===plate),c=existing||{id:`imp-car-${Date.now()}-${i}`,isDefault:!!(v.isDefault??v.default??v.primary)};Object.assign(c,{name:(v.name??v.nickname??[make,model].filter(Boolean).join(' ')??'')||plate||`Voertuig ${i+1}`,make,model,year:v.year??v.buildYear??v.bouwjaar??'',plate,tankLiters:num243(v.tankLiters??v.tankCapacity??v.tankSize??v.tankinhoud),owner:v.owner??v.eigenaar??''});if(!existing)data.cars.push(c);map.set(old,c.id)});
- fills.forEach((f,i)=>{let carId=map.get(String(f.vehicleId??f.carId??f.vehicle_id??f.vehicle??''));if(!carId&&data.cars.length===1)carId=data.cars[0].id;if(!carId)carId=data.cars.find(x=>x.isDefault)?.id||data.cars[0]?.id;if(!carId)return;const liters=num243(f.volume??f.liters??f.litres??f.amountLiters??f.hoeveelheid),total=num243(f.totalCost??f.total??f.cost??f.amount??f.bedrag),ppl=num243(f.pricePerLiter??f.price_per_liter??f.unitPrice??f.literPrice)||(liters?total/liters:0);data.fuelEntries.push({id:`imp-fill-${Date.now()}-${i}`,carId,date:String(f.date??f.datetime??f.createdAt??f.datum??'').slice(0,10),odometer:num243(f.odometer??f.mileage??f.kilometerstand),liters,total,pricePerLiter:ppl,fuelGrade:String(f.grade??f.fuelGrade??f.fuelType??f.brandstof??''),station:f.station??f.gasStation??f.tankstation??'',partialFill:bool243(f.partial??f.partialFill??f.isPartial),missedPrevious:bool243(f.missedFill??f.missedPrevious??f.missed),note:f.note??f.notes??f.notitie??''})})
+ fills.forEach((f,i)=>{let carId=map.get(String(f.vehicleId??f.carId??f.vehicle_id??f.vehicle??''));if(!carId&&data.cars.length===1)carId=data.cars[0].id;if(!carId)carId=data.cars.find(x=>x.isDefault)?.id||data.cars[0]?.id;if(!carId)return;data.fuelEntries.push(SamenThuisCore.normalizeFuelMateFill(f,carId,`imp-fill-${Date.now()}-${i}`))})
 }
 function sigImport246(x,kind=''){if(!x||typeof x!=='object')return String(x);if(kind==='cars')return plateImport243(x.plate||'')||String(x.id||'');if(kind==='fuelEntries')return [x.carId||'',String(x.date||'').slice(0,10),num243(x.odometer),num243(x.liters||x.volume),num243(x.total||x.totalCost)].join('|');if(kind==='planning')return [x.title||'',x.date||'',x.time||'',x.person||''].join('|').toLowerCase();return String(x.id||[x.title||x.name||'',x.date||x.due||'',x.category||''].join('|')).toLowerCase()}
 function mergeArray246(a,b,kind=''){return SamenThuisCore.mergeUnique(a,b,x=>sigImport246(x,kind))}
@@ -5624,6 +5625,17 @@ function getSyncConflict() {
   try { return JSON.parse(localStorage.getItem(SYNC_CONFLICT_KEY) || 'null'); }
   catch { return null; }
 }
+
+const updateSyncBadgeWithConflict = updateSyncBadge;
+updateSyncBadge = function updateSyncBadgeConflict(message) {
+  const badge = document.querySelector('#syncState');
+  if (!message && badge && getSyncConflict()) {
+    badge.textContent = 'Conflict oplossen';
+    badge.title = 'Open Instellingen en kies welke apparaatversie je wilt bewaren.';
+    return;
+  }
+  updateSyncBadgeWithConflict(message);
+};
 
 const renderSettingsWithConflict = renderSettings;
 renderSettings = function renderSettingsWithConflictState(...args) {
