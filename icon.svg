@@ -1,9 +1,1 @@
-<!-- Samen Thuis v23.3 2026-09-18 07:18:05 +0000 -->
-<!-- v23.2 2026-09-18 06:17:59 +0000 -->
-<!-- Samen Thuis v23.1 DATA-VEILIG 2026-09-18 06:00:01 +0000 -->
-<!-- Samen Thuis v23 2026-09-17 07:16:46 +0000 -->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="112" fill="#17243a"/>
-  <path d="M103 242 256 112l153 130v156a28 28 0 0 1-28 28h-250a28 28 0 0 1-28-28z" fill="#fff"/>
-  <path d="M256 344c-17-22-66-49-66-91 0-48 59-64 66-24 7-40 66-24 66 24 0 42-49 69-66 91z" fill="#e98248"/>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#9487f0"/><stop offset="1" stop-color="#6556c3"/></linearGradient></defs><rect width="64" height="64" rx="20" fill="#0d273e"/><rect x="8" y="8" width="48" height="48" rx="16" fill="url(#g)"/><text x="32" y="41" font-family="Arial,sans-serif" font-size="24" font-weight="700" letter-spacing="-2" text-anchor="middle" fill="#fff">st</text></svg>

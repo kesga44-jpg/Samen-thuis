@@ -11,7 +11,6 @@
     halfjaarlijks: 6,
     jaarlijks: 12
   };
-  // Multiple-times-weekly schedules use the same flexible gaps as the household planner.
   const DAY_INTERVALS = {
     dagelijks: 1,
     'om de dag': 2,
@@ -37,14 +36,6 @@
     return stableStringify(left) === stableStringify(right);
   }
 
-  function remoteChangedSinceChoice(expectedRemote, currentRemote) {
-    return Boolean(expectedRemote && currentRemote && !sameData(expectedRemote, currentRemote));
-  }
-
-  function conditionalUpdateSucceeded(rows) {
-    return Array.isArray(rows) && rows.length > 0;
-  }
-
   function hasConcurrentChanges(localUpdatedAt, remoteUpdatedAt, lastSyncedAt, localData, remoteData) {
     const local = Date.parse(localUpdatedAt || '');
     const remote = Date.parse(remoteUpdatedAt || '');
@@ -53,6 +44,14 @@
       || local <= baseline || remote <= baseline) return false;
     if (localData !== undefined) return !sameData(localData, remoteData);
     return local !== remote;
+  }
+
+  function conditionalUpdateSucceeded(rows) {
+    return Array.isArray(rows) && rows.length > 0;
+  }
+
+  function remoteChangedSinceChoice(expectedRemote, currentRemote) {
+    return Boolean(expectedRemote && currentRemote && !sameData(expectedRemote, currentRemote));
   }
 
   function preserveUnknownFields(raw, target, cloneValue) {
@@ -149,11 +148,15 @@
       const lastDay = new Date(date.getFullYear(), date.getMonth() + 1, 0, 12).getDate();
       date.setDate(Math.min(day, lastDay));
     } else {
-      const days = DAY_INTERVALS[normalized] || 7; // Unknown repeat values retain the legacy weekly default.
+      const days = DAY_INTERVALS[normalized] || 7;
       date.setDate(date.getDate() + days);
     }
     return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
   }
 
-  return { hasConcurrentChanges, mergeUnique, nextDue, normalizeFuelMateFill, preserveUnknownFields, resolveSyncConflict, createConflictStore, sameData, remoteChangedSinceChoice, conditionalUpdateSucceeded };
+  return {
+    stableStringify, sameData, hasConcurrentChanges, conditionalUpdateSucceeded, remoteChangedSinceChoice,
+    preserveUnknownFields, mergeUnique, normalizeFuelMateFill, resolveSyncConflict, createConflictStore,
+    nextDue, MONTH_INTERVALS, DAY_INTERVALS
+  };
 });

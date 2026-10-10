@@ -1,0 +1,18 @@
+{
+  "name": "samen-thuis-test",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "lint:html": "html-validate index.html",
+    "lint:css": "prettier --check \"*.css\"",
+    "lint:js": "eslint \"*.js\" \"test/**/*.js\"",
+    "check:links": "linkinator . --recurse --check-css --skip www.brainyquote.com && linkinator README.md --markdown && linkinator ROADMAP.md --markdown && linkinator TESTCHECKLIST.md --markdown && linkinator ARCHITECTURE.md --markdown"
+  },
+  "devDependencies": {
+    "eslint": "10.12.0",
+    "html-validate": "10.11.2",
+    "linkinator": "8.1.0",
+    "prettier": "3.9.9"
+  }
+}

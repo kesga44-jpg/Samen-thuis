@@ -1,32 +1,36 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="nl">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#17243a">
+  <meta name="theme-color" content="#315f86">
+  <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="format-detection" content="telephone=no">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Samen Thuis">
-  <meta name="description" content="Het gezamenlijke thuisdashboard van Kees en Daphne.">
+  <meta name="description" content="Het gezamenlijke thuisdashboard voor Kees en Daphne.">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="apple-touch-icon" href="icon.svg">
-  <link rel="stylesheet" href="styles.css?v=249">
+  <link rel="stylesheet" href="tokens.css">
+  <link rel="stylesheet" href="base.css">
+  <link rel="stylesheet" href="layout.css">
+  <link rel="stylesheet" href="components.css">
   <title>Samen Thuis</title>
-  <meta name="application-version" content="24.8">
+  <meta name="application-version" content="2.0">
 </head>
 <body>
   <div class="app-shell">
     <aside class="sidebar" aria-label="Hoofdnavigatie">
-      <div class="brand"><span class="brand-mark">S</span><div><strong>Samen Thuis</strong><small>Kees & Daphne</small></div></div>
+      <div class="brand"><span class="brand-mark">S</span><div><strong>Samen Thuis</strong><small>Kees &amp; Daphne</small></div></div>
       <nav id="nav"></nav>
       <div class="sidebar-footer">
-        <button class="nav-item" data-action="backup"><span>↥</span> Back-up maken</button>
-        <button class="nav-item" data-action="restore"><span>↧</span> Back-up laden</button>
+        <button type="button" class="nav-item" data-action="backup"><span>↥</span> Back-up maken</button>
+        <button type="button" class="nav-item" data-action="restore"><span>↧</span> Back-up laden</button>
+        <button type="button" class="nav-item" data-action="import-prices"><span>💰</span> Prijzen importeren</button>
+        <button type="button" class="nav-item" data-action="export-prices"><span>💰</span> Prijzen exporteren</button>
         <input id="restoreInput" type="file" accept="application/json" hidden>
-        <input id="groceryImportFile" type="file" accept=".txt,.csv,.json,text/plain,text/csv,application/json" hidden>
-        <input id="ostaImportFile" type="file" accept=".txt,.csv,.json,text/plain,text/csv,application/json" hidden>
-        <input id="calendarImportFile" type="file" accept=".txt,.csv,.json,text/plain,text/csv,application/json" hidden>
-        <input id="travelImportFile" type="file" accept=".pdf,.txt,text/plain,application/pdf" hidden>
+        <input id="priceFileInput" type="file" accept=".txt,.csv,.json,text/plain,text/csv,application/json" hidden>
       </div>
     </aside>
 
@@ -36,10 +40,7 @@
         <div class="top-actions">
           <span id="syncState" class="sync-state" title="Synchronisatiestatus">Alleen dit apparaat</span>
           <span id="saveState" class="save-state">Lokaal bewaard</span>
-          <button id="laptopSaveBtn" class="secondary laptop-save" aria-label="Back-up opslaan voor laptop">
-            <span class="full-label">⇩ Opslaan voor laptop</span><span class="short-label">⇩ Laptop</span>
-          </button>
-          <button id="addBtn" class="primary">＋ Toevoegen</button>
+          <button id="addBtn" type="button" class="primary">＋ Toevoegen</button>
         </div>
       </header>
       <div id="view" class="view" aria-live="polite"></div>
@@ -79,14 +80,14 @@
     </form>
   </dialog>
 
-  <div id="toast" class="toast" role="status"></div>
+  <div id="toast" class="toast" role="status" hidden></div>
 
-  <div id="brainyQuoteSource" class="brainy-source" aria-hidden="true">
+  <div id="brainyQuoteSource" class="brainy-source" hidden>
     <script src="https://www.brainyquote.com/link/quotebr.js"></script>
     <a href="https://www.brainyquote.com/quote_of_the_day" target="_blank" rel="nofollow noopener">more Quotes</a>
   </div>
 
-  <script src="data-core.js?v=249"></script>
-  <script src="app.js?v=249"></script>
+  <script src="data-core.js?v=3"></script>
+  <script type="module" src="app.js?v=4"></script>
 </body>
 </html>
