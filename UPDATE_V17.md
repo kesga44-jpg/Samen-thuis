@@ -1,0 +1,1 @@
+Samen Thuis β v1.7 — complete Auto-update met Tankbeurten, Auto's, Statistieken en Brandstofradar. Cachebestanden staan op v1.7.0.
