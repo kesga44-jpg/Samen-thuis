@@ -1,0 +1,10 @@
+/* Herbruikbare componenten uit de modulaire variant; geen overlap met bestaande klassen */
+.weather-chart-panel { overflow: hidden; }
+.weather-svg-chart { height: 340px; margin-top: 10px; }
+.weather-svg-chart svg { width: 100%; height: 100%; display: block; overflow: visible; }
+.weather-grid-line { stroke: var(--line); stroke-width: 1; }
+.weather-axis, .weather-legend { fill: var(--muted); font: 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+.weather-temp-line { fill: none; stroke: var(--blue); stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
+.weather-min-line { fill: none; stroke: var(--muted); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.weather-temp-dot { fill: var(--paper); stroke: var(--blue); stroke-width: 3; }
+@media (max-width: 760px) { .weather-svg-chart { height: 260px; } }
