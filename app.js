@@ -84,6 +84,7 @@ const initialData = {
     { id: 'g2', title: 'Basilicum', category: 'Groente', done: false },
     { id: 'g3', title: 'Havermelk', category: 'Zuivel & vega', done: true }
   ],
+  freezer: [],
   chores: [
     { id: 'c1', title: 'Keuken opruimen', person: 'Samen', due: todayISO(), repeat: 'Dagelijks', secondWeekday: '', notes: '', completedDates: [] },
     { id: 'c2', title: 'Bed verschonen', person: 'Kees', due: addDays(todayISO(), 2), repeat: 'Wekelijks', secondWeekday: '', notes: '', completedDates: [] },
@@ -122,6 +123,15 @@ const syncConflictStore = SamenThuisCore.createConflictStore(localStorage, SYNC_
 const id = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const esc = (value = '') => String(value).replace(/[&<>'"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[character]));
 const fmtDate = (value, options = { weekday: 'short', day: 'numeric', month: 'short' }) => value ? new Intl.DateTimeFormat('nl-NL', options).format(parseDate(value)) : 'Geen datum';
+function migrateLegacyFreezerStock(target) {
+  const freezerCore = window.FreezerCore;
+  if (!freezerCore?.migrateLegacyStock) return;
+  const result = freezerCore.migrateLegacyStock(target.stock, target.freezer, todayISO());
+  target.stock = result.stock;
+  target.freezer = result.freezer.map(item => item && typeof item === 'object'
+    ? freezerCore.normalize(item, todayISO())
+    : item);
+}
 const groupBy = (items, keyFn) => items.reduce((groups, item) => {
   const key = keyFn(item);
   (groups[key] ||= []).push(item);
@@ -135,9 +145,10 @@ function migrateData(raw) {
   // Bekende structuren worden hieronder nog genormaliseerd, onbekende structuren
   // worden één-op-één meegenomen zodat een update ze niet stilzwijgend verwijdert.
   SamenThuisCore.preserveUnknownFields(raw, migrated, clone);
-  ['planning', 'meals', 'groceries', 'chores', 'stock', 'ideas', 'home', 'trips'].forEach(key => {
+  ['planning', 'meals', 'groceries', 'chores', 'stock', 'ideas', 'home', 'trips', 'freezer'].forEach(key => {
     if (Array.isArray(raw[key])) migrated[key] = raw[key];
   });
+  migrateLegacyFreezerStock(migrated);
   if (Array.isArray(raw.tripFolders)) {
     migrated.tripFolders = raw.tripFolders.filter(folder => folder && folder.id && folder.name).map(folder => ({ endDate: '', note: '', ...folder }));
   } else {
@@ -205,31 +216,42 @@ function migrateData(raw) {
   return migrated;
 }
 
+const RECOVERY_KEYS = {
+  storageKey: STORAGE_KEY, legacyKey: LEGACY_STORAGE_KEY,
+  backupKey: 'samenThuisPreV23Backup', backupAtKey: 'samenThuisPreV23BackupAt',
+  corruptKey: 'samenThuisCorruptBackup', preRestoreKey: 'samenThuisPreRestoreBackup'
+};
+
+function recoveryOptions() {
+  return { ...RECOVERY_KEYS, migrate: migrateData, fresh: freshLocalData, now: () => new Date().toISOString() };
+}
+
+let storageProtected = false;
+const RESTORE_HOLD_KEY = 'samenThuisRestoreHold';
+
 function loadData() {
   try {
-    const stored = localStorage.getItem(STORAGE_KEY) || localStorage.getItem(LEGACY_STORAGE_KEY);
-    if (!stored) return clone(initialData);
-
-    // v23.1 DATA-VEILIG: maak vóór migratie automatisch een ongewijzigde snapshot.
-    // De normale opslagkey blijft samenThuisDataV2, dus bestaande Voorraad,
-    // Boodschappen, Huishouden, Reizen enz. blijven op dezelfde plek staan.
-    try {
-      if (!localStorage.getItem('samenThuisPreV23Backup')) {
-        localStorage.setItem('samenThuisPreV23Backup', stored);
-        localStorage.setItem('samenThuisPreV23BackupAt', new Date().toISOString());
-      }
-    } catch {}
-
-    return migrateData(JSON.parse(stored));
+    const result = SamenThuisCore.loadWithRecovery(localStorage, recoveryOptions());
+    // Kon de beschadigde bron niet veilig bewaard worden, dan blokkeren we opslaan zodat die bron niet wordt overschreven.
+    if (result.status !== 'ok' && result.status !== 'empty' && !result.preserved) storageProtected = true;
+    return result.data;
   } catch {
-    // Bij een parse/migratiefout proberen we de safety snapshot terug te lezen
-    // in plaats van direct met voorbeelddata te starten.
-    try {
-      const backup = localStorage.getItem('samenThuisPreV23Backup');
-      if (backup) return migrateData(JSON.parse(backup));
-    } catch {}
-    return clone(initialData);
+    return freshLocalData();
   }
+}
+
+function recoveryCard() {
+  const items = SamenThuisCore.listCorruptBackups(localStorage, RECOVERY_KEYS.corruptKey, migrateData);
+  if (!items.length) return '';
+  return `<section class="card settings-card"><div class="card-head"><div><p class="eyebrow">Gegevens</p><h2>Beschadigde gegevens herstellen</h2></div></div><p>Onleesbare gegevens zijn veilig bewaard. Herstellen kan alleen als de gegevens geldig zijn; je huidige gegevens worden eerst apart bewaard.</p>${items.map(item => `<div class="button-row"><span>${esc(item.at ? new Date(item.at).toLocaleString('nl-NL') : 'Onbekende datum')} · ${item.size} tekens · ${item.valid ? 'geldig' : 'niet herstelbaar'}</span><button class="secondary" data-restore-corrupt="${item.index}" ${item.valid ? '' : 'disabled'}>Herstellen</button></div>`).join('')}</section>`;
+}
+
+// Een leeg/nieuw apparaat krijgt een tijdstempel van 1970, zodat synchronisatie
+// de bestaande cloudgegevens laadt in plaats van ze te overschrijven met voorbeelddata.
+function freshLocalData() {
+  const fresh = clone(initialData);
+  fresh.meta = { ...fresh.meta, updatedAt: new Date(0).toISOString() };
+  return fresh;
 }
 
 function loadSyncConfig() {
@@ -259,12 +281,17 @@ let calendarOperation = null;
 let addMode = 'item';
 
 const sections = {
-  today: { label: 'Vandaag', icon: '⌂' },
+  today: { label: 'Dashboard', icon: '⌂' },
   planning: { label: 'Agenda', icon: '▦' },
   meals: { label: 'Weekmenu', icon: '♨' },
   groceries: { label: 'Boodschappen', icon: '✓' },
+  offers: { label: 'Aanbiedingen', icon: '％' },
+  tasks: { label: 'Taken', icon: '☑' },
   chores: { label: 'Huishouden', icon: '⌁' },
   stock: { label: 'Voorraad', icon: '▤' },
+  weather: { label: 'Weer', icon: '☀' },
+  challenges: { label: 'Challenges', icon: '✦' },
+  programs: { label: "Programma's", icon: '▶' },
   ideas: { label: 'Samen doen', icon: '♡' },
   home: { label: 'Woning', icon: '⌂' },
   trips: { label: 'Reizen', icon: '✈' },
@@ -301,6 +328,11 @@ function formConfig(view) {
 }
 
 function save({ touch = true, sync = true } = {}) {
+  migrateLegacyFreezerStock(data);
+  if (storageProtected) {
+    toast('Opslaan is geblokkeerd: beschadigde gegevens konden niet veilig worden bewaard. Maak een back-up en maak ruimte vrij.');
+    return false;
+  }
   if (touch) data.meta.updatedAt = new Date().toISOString();
   localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   const saveState = document.querySelector('#saveState');
@@ -309,6 +341,7 @@ function save({ touch = true, sync = true } = {}) {
     setTimeout(() => { saveState.textContent = 'Lokaal bewaard'; }, 1200);
   }
   if (sync && syncConfigured()) scheduleSync();
+  return true;
 }
 
 function toast(message) {
@@ -363,7 +396,7 @@ function renderDailyQuestion() {
   const personButton = person => answers[person]
     ? `<button class="secondary" disabled>${bothAnswered ? `${person}: antwoord staat vast` : `${person} heeft geantwoord`}</button>`
     : `<button class="primary" data-answer-person="${person}">${person} beantwoordt</button>`;
-  return `<section class="card daily-question">
+  return `<section class="card daily-question" data-widget18="dailyQuestion">
     <div class="card-head"><div><p class="eyebrow">Vraag van vandaag</p><h2>${esc(questionForDate(todayISO()))}</h2></div><span class="daily-icon">?</span></div>
     ${bothAnswered ? `<div class="answer-grid"><article><span>Kees</span><p>${esc(answers.Kees.answer)}</p></article><article><span>Daphne</span><p>${esc(answers.Daphne.answer)}</p></article></div>` : `<p class="question-hint">Antwoorden blijven verborgen tot jullie allebei hebben geantwoord. ${answers.Kees || answers.Daphne ? 'Eén antwoord is binnen.' : ''}</p>`}
     <div class="button-row">${personButton('Kees')}${personButton('Daphne')}</div>${bothAnswered ? '<p class="answer-locked">Beide antwoorden zijn definitief en kunnen niet meer worden gewijzigd.</p>' : ''}
@@ -387,6 +420,9 @@ function captureBrainyQuote() {
 }
 
 async function refreshBrainyQuoteRSS() {
+  let cached;
+  try { cached = JSON.parse(localStorage.getItem(QUOTE_KEY) || 'null'); } catch { cached = null; }
+  if (window.SamenThuisQuotes && !window.SamenThuisQuotes.shouldRefresh(cached?.checkedAt)) return;
   try {
     const response = await fetch('https://www.brainyquote.com/link/quotebr.rss', { cache: 'no-store' });
     if (!response.ok) return;
@@ -401,7 +437,7 @@ async function refreshBrainyQuoteRSS() {
     const quote = genericTitle ? description : title;
     const author = genericTitle || description === title ? '' : description;
     const markup = `<blockquote>${esc(quote)}</blockquote>${author ? `<p>${esc(author)}</p>` : ''}`;
-    localStorage.setItem(QUOTE_KEY, JSON.stringify({ date: todayISO(), markup }));
+    localStorage.setItem(QUOTE_KEY, JSON.stringify({ date: todayISO(), checkedAt: new Date().toISOString(), markup }));
     if (current === 'today') render();
   } catch {
     // De officiële Javascript-feed en de laatst bewaarde quote blijven als fallback werken.
@@ -434,7 +470,7 @@ function openTravelActions() {
 
 function renderTravelActions() {
   const actions = openTravelActions().slice(0, 10);
-  return `<section class="card travel-actions"><div class="card-head"><div><p class="eyebrow">Belangrijkste reisacties</p><h2>Nog te doen</h2></div><button class="text-btn" data-view="trips">Alle reizen</button></div><div class="list">${actions.length ? actions.map(item => {
+  return `<section class="card travel-actions" data-widget18="travelActions"><div class="card-head"><div><p class="eyebrow">Belangrijkste reisacties</p><h2>Nog te doen</h2></div><button class="text-btn" data-view="trips">Alle reizen</button></div><div class="list">${actions.length ? actions.map(item => {
     const folder = tripFolderById(item.tripFolderId);
     const section = tripSectionById(item.tripSectionId);
     const overdue = item.date && item.date < todayISO();
@@ -452,13 +488,13 @@ function renderToday() {
   const todayPlanning = data.planning.filter(item => item.date === todayISO() && calendarById(item.calendarId).visible !== false);
   return `<section class="card welcome"><div><p class="eyebrow welcome-eyebrow">Jullie thuis, in één oogopslag</p><h2>Fijn dat jullie er zijn.</h2><p>${meal ? `Vanavond staat <strong>${esc(meal.title)}</strong> op het menu.` : 'Plan samen wat er vanavond op tafel komt.'}</p></div><div class="date-chip">${fmtDate(todayISO(), { weekday: 'long', day: 'numeric', month: 'long' })}</div></section>
     ${renderTravelActions()}
-    <div class="today-dailies">${renderDailyQuestion()}${renderQuote()}</div>
-    <div class="stat-row"><div class="stat"><strong>${pending.length}</strong><span>huishoudtaken vandaag</span></div><div class="stat"><strong>${unbought.length}</strong><span>boodschappen open</span></div><div class="stat"><strong>${low.length}</strong><span>producten bijna op</span></div><div class="stat"><strong>${todayPlanning.length}</strong><span>agenda-items vandaag</span></div></div>
-    <div class="grid two">
-      <section class="card"><div class="card-head"><h2>Vandaag in huis</h2><button class="text-btn" data-view="chores">Hele week</button></div><div class="list">${todayChores.length ? todayChores.map(({ chore }) => choreOccurrenceRow(chore, todayISO())).join('') : empty('Vandaag geen huishoudtaken')}</div></section>
-      <section class="card"><div class="card-head"><h2>Op de agenda</h2><button class="text-btn" data-view="planning">Week bekijken</button></div><div class="list">${data.planning.filter(item => item.date >= todayISO() && calendarById(item.calendarId).visible !== false).sort(sortPlanning).slice(0, 5).map(item => basicRow(item.title, `${fmtDate(item.date)} · ${item.time || 'Hele dag'}`, calendarById(item.calendarId).name)).join('') || empty('Nog niets gepland')}</div></section>
-      <section class="card"><div class="card-head"><h2>Boodschappen</h2><button class="text-btn" data-view="groceries">Open lijst</button></div><div class="list">${unbought.slice(0, 5).map(groceryRow).join('') || empty('De lijst is leeg')}</div></section>
-      <section class="card"><div class="card-head"><h2>Bijna op</h2><button class="text-btn" data-view="stock">Voorraad bekijken</button></div><div class="list">${low.slice(0, 5).map(item => basicRow(item.title, `${item.amount} ${esc(item.unit)} in huis`, 'Aanvullen', 'red')).join('') || empty('Voorraad is op peil')}</div></section>
+    <div class="today-dailies single" data-dashboard-group>${renderDailyQuestion()}</div>
+    <div class="stat-row" data-widget18="todayStats"><div class="stat"><strong>${pending.length}</strong><span>huishoudtaken vandaag</span></div><div class="stat"><strong>${unbought.length}</strong><span>boodschappen open</span></div><div class="stat"><strong>${low.length}</strong><span>producten bijna op</span></div><div class="stat"><strong>${todayPlanning.length}</strong><span>agenda-items vandaag</span></div></div>
+    <div class="grid two" data-dashboard-group>
+      <section class="card" data-widget18="todayChores"><div class="card-head"><h2>Vandaag in huis</h2><button class="text-btn" data-view="chores">Hele week</button></div><div class="list">${todayChores.length ? todayChores.map(({ chore }) => choreOccurrenceRow(chore, todayISO())).join('') : empty('Vandaag geen huishoudtaken')}</div></section>
+      <section class="card" data-widget18="todayAgenda"><div class="card-head"><h2>Op de agenda</h2><button class="text-btn" data-view="planning">Week bekijken</button></div><div class="list">${data.planning.filter(item => item.date >= todayISO() && calendarById(item.calendarId).visible !== false).sort(sortPlanning).slice(0, 5).map(item => basicRow(item.title, `${fmtDate(item.date)} · ${item.time || 'Hele dag'}`, calendarById(item.calendarId).name)).join('') || empty('Nog niets gepland')}</div></section>
+      <section class="card" data-widget18="todayGroceries"><div class="card-head"><h2>Boodschappen</h2><button class="text-btn" data-view="groceries">Open lijst</button></div><div class="list">${unbought.slice(0, 5).map(groceryRow).join('') || empty('De lijst is leeg')}</div></section>
+      <section class="card" data-widget18="lowStock"><div class="card-head"><h2>Bijna op</h2><button class="text-btn" data-view="stock">Voorraad bekijken</button></div><div class="list">${low.slice(0, 5).map(item => basicRow(item.title, `${item.amount} ${esc(item.unit)} in huis`, 'Aanvullen', 'red')).join('') || empty('Voorraad is op peil')}</div></section>
     </div>`;
 }
 
@@ -498,8 +534,9 @@ function renderMeals() {
 
 function renderGroceries() {
   const groups = groupBy(data.groceries, item => item.category || 'Overig');
+  const categories = [...new Set([...GROCERY_CATEGORIES, ...Object.keys(groups)])];
   return `<section class="card import-card grocery-import"><div><p class="eyebrow">Lijst verdelen</p><h2>Plakken of uploaden</h2><p>Hoeveelheden blijven staan. De app deelt producten automatisch in; regels met ✓ worden als gekocht gemarkeerd.</p></div><textarea id="groceryImportText" placeholder="250 g spinazie\n1 teentje knoflook\n✓ Zout"></textarea><div class="button-row"><button class="primary" data-import-groceries>Verdelen over categorieën</button><button class="secondary" data-pick-file="groceryImportFile">TXT, CSV of JSON kiezen</button></div></section>
-    <div class="grid three grocery-groups">${GROCERY_CATEGORIES.map(category => {
+    <div class="grid three grocery-groups">${categories.map(category => {
       const items = groups[category] || [];
       if (!items.length) return '';
       return `<section class="card"><div class="card-head"><h2>${esc(category)}</h2><span class="tag">${items.filter(item => !item.done).length} open</span></div><div class="list">${items.map(groceryRow).join('')}</div></section>`;
@@ -628,6 +665,7 @@ function renderSettings() {
     ${renderCalendarSettings()}
     ${renderSyncConflictCard()}
     <section class="card settings-card"><div class="card-head"><div><p class="eyebrow">Gegevens</p><h2>Back-up</h2></div></div><p>Maak een los JSON-bestand of herstel een eerdere back-up. Herstellen vervangt alle huidige gegevens op dit apparaat; Importeren voegt gegevens samen. De synchronisatiecode en sleutel worden niet in de back-up gezet.</p><div class="button-row"><button class="secondary" data-action="backup">Back-up maken</button><button class="secondary" data-action="restore">Back-up herstellen (vervangen)</button></div></section>
+    ${recoveryCard()}
     <section class="card settings-card"><div class="card-head"><div><p class="eyebrow">Apple Opdracht</p><h2>Eenvoudig tekstformaat</h2></div></div><p>Laat de Opdracht per afspraak één regel maken:</p><pre><code>Agendanaam | 2026-09-04 | 09:00 | Titel</code></pre><p>De persoon volgt uit de agenda. Een vijfde veld met Kees, Daphne of Samen is optioneel en gaat voor de agendakeuze. Een zesde veld mag de eindtijd bevatten. Bij onbekende namen kies je de persoon één keer.</p><p>Dit is een import, geen tweerichtingskoppeling. Verplaatsen of verwijderen in Apple Agenda wordt niet automatisch overgenomen.</p></section>
   </div>`;
 }
@@ -1325,11 +1363,20 @@ async function exportBackup() {
 
 async function importBackup(file) {
   try {
-    const parsed = JSON.parse(await file.text());
-    data = migrateData(parsed);
-    save();
+    const text = await file.text();
+    try { SamenThuisCore.restoreBackupText({ getItem: () => null, setItem() {}, removeItem() {} }, recoveryOptions(), text); }
+    catch { toast('Dit bestand is geen geldige back-up'); return; }
+    if (storageProtected) { toast('Opslaan is geblokkeerd; back-up niet geladen. Maak ruimte vrij.'); return; }
+    // Herstelvlag en kopie van de huidige gegevens worden vóór het overschrijven vastgelegd.
+    try {
+      data = SamenThuisCore.restoreBackupText(localStorage, { ...recoveryOptions(), holdKey: RESTORE_HOLD_KEY }, text);
+    } catch {
+      toast('Back-up laden mislukt; je huidige gegevens zijn ongewijzigd');
+      return;
+    }
+    save({ touch: false, sync: false });
     render();
-    toast('Back-up hersteld');
+    toast(syncConfigured() ? 'Back-up hersteld · bij de volgende synchronisatie kies je zelf welke versie geldt' : 'Back-up hersteld');
   } catch {
     toast('Dit bestand is geen geldige back-up');
   }
@@ -1522,7 +1569,11 @@ document.addEventListener('click', event => {
   const deleteButton = event.target.closest('[data-delete]');
   if (deleteButton) {
     const [type, itemId] = deleteButton.dataset.delete.split(':');
-    data[type] = data[type].filter(item => item.id !== itemId);
+    if (type === 'meals' && window.FreezerCore?.cancelMeal) {
+      data.meals = window.FreezerCore.cancelMeal(data.meals, itemId).meals;
+    } else {
+      data[type] = data[type].filter(item => item.id !== itemId);
+    }
     save(); render(); return;
   }
   const toggle = event.target.closest('[data-toggle]');
@@ -1574,6 +1625,18 @@ document.addEventListener('click', event => {
   if (picker) { document.querySelector(`#${picker.dataset.pickFile}`).click(); return; }
   if (event.target.closest('[data-sync-now]')) { syncNow({ manual: true }); return; }
   const action = event.target.closest('[data-action]')?.dataset.action;
+  const corruptBtn = event.target.closest('[data-restore-corrupt]');
+  if (corruptBtn) {
+    if (confirm('Deze bewaarde gegevens herstellen? Je huidige gegevens worden eerst apart bewaard.')) {
+      try {
+        data = SamenThuisCore.restoreCorruptBackup(localStorage, { ...recoveryOptions(), holdKey: RESTORE_HOLD_KEY }, Number(corruptBtn.dataset.restoreCorrupt));
+        save({ touch: false, sync: false });
+        render();
+        toast(syncConfigured() ? 'Gegevens hersteld · bij de volgende synchronisatie kies je zelf welke versie geldt' : 'Gegevens hersteld');
+      } catch (error) { toast(error.message || 'Herstellen mislukt'); }
+    }
+    return;
+  }
   if (action === 'backup') exportBackup();
   if (action === 'restore') {
     if (confirm('Back-up herstellen vervangt alle huidige gegevens op dit apparaat. Gebruik Importeren als je gegevens wilt samenvoegen. Doorgaan?')) {
@@ -1647,6 +1710,9 @@ render();
 handleInitialAgendaImport();
 setTimeout(captureBrainyQuote, 600);
 refreshBrainyQuoteRSS();
+setInterval(() => {
+  if (document.visibilityState === 'visible') refreshBrainyQuoteRSS();
+}, 24 * 60 * 60 * 1000);
 if (syncConfigured()) syncNow();
 
 ;
@@ -1762,7 +1828,7 @@ if (syncConfigured()) syncNow();
 
   renderTravelActions = function renderTravelActionsV11() {
     const actions = openTravelActions().slice(0, 10);
-    return `<section class="card travel-actions"><div class="card-head"><div><p class="eyebrow">Belangrijkste reisacties</p><h2>Prioriteiten & deadlines</h2></div><button class="text-btn" data-view="trips">Alle reizen</button></div><div class="list">${actions.length ? actions.map(item => {
+    return `<section class="card travel-actions" data-widget18="travelActions"><div class="card-head"><div><p class="eyebrow">Belangrijkste reisacties</p><h2>Prioriteiten & deadlines</h2></div><button class="text-btn" data-view="trips">Alle reizen</button></div><div class="list">${actions.length ? actions.map(item => {
       const folder = tripFolderById(item.tripFolderId);
       const section = tripSectionById(item.tripSectionId);
       const overdue = item.date && item.date < todayISO();
@@ -2158,11 +2224,13 @@ if (syncConfigured()) syncNow();
       const remoteTime = new Date(remoteData?.meta?.updatedAt || 0).getTime();
       let remoteLoaded = false;
 
+      const plan = SamenThuisCore.planSync({
+        local: data, remote: remoteData, hold: !!localStorage.getItem(RESTORE_HOLD_KEY),
+        resolution: syncConflictResolution, lastSyncedAt: syncConfig.lastSyncedAt
+      });
       if (!remoteData) {
         await uploadSyncData(baseUrl, householdId, rows[0]);
-      } else if (!syncConflictResolution && SamenThuisCore.hasConcurrentChanges(
-        data.meta?.updatedAt, remoteData.meta?.updatedAt, syncConfig.lastSyncedAt, data, remoteData
-      )) {
+      } else if (plan === 'conflict') {
         const conflict = {
           localData: clone(data),
           remoteData: clone(remoteData),
@@ -2183,7 +2251,7 @@ if (syncConfigured()) syncNow();
       } else if (syncConflictResolution === 'remote') {
         data = clone(pendingConflict?.selectedData || remoteData);
         normaliseTravelData();
-        save({ touch: false, sync: false });
+        if (save({ touch: false, sync: false }) === false) throw new Error('Lokaal opslaan is geblokkeerd; synchronisatie niet afgerond');
         remoteLoaded = true;
       } else if (syncConflictResolution === 'local') {
         data = clone(pendingConflict?.selectedData || data);
@@ -2191,7 +2259,7 @@ if (syncConfigured()) syncNow();
       } else if (remoteTime > localTime) {
         data = remoteData;
         normaliseTravelData();
-        save({ touch: false, sync: false });
+        if (save({ touch: false, sync: false }) === false) throw new Error('Lokaal opslaan is geblokkeerd; synchronisatie niet afgerond');
         remoteLoaded = true;
       } else if (localTime > remoteTime) {
         await uploadSyncData(baseUrl, householdId, rows[0]);
@@ -2199,6 +2267,7 @@ if (syncConfigured()) syncNow();
 
       syncConfig.lastSyncedAt = nowIso();
       localStorage.setItem(SYNC_KEY, JSON.stringify(syncConfig));
+      try { localStorage.removeItem(RESTORE_HOLD_KEY); } catch {}
       if (syncConflictResolution) {
         if (syncConflictStore.clear()) syncConflictResolution = '';
       }
@@ -3598,7 +3667,6 @@ console.info('Samen Thuis update 13.1 geladen');
   });
 
   save({touch:false});
-  toast('Samen Thuis v13.1 geladen');
 })();
 
 ;
@@ -4115,7 +4183,6 @@ Reizen: [reizen] | [reis] | [map/onderdeel] | [titel] | [type] | [omschrijving] 
   },true);
 
   save({touch:false});
-  toast('Samen Thuis v14.1 geladen');
 })();
 
 ;
@@ -4398,7 +4465,6 @@ console.info('Samen Thuis update 15.0 geladen');
   },true);
 
   save({touch:false});
-  toast('Samen Thuis v15 geladen');
 })();
 
 ;
@@ -4712,7 +4778,7 @@ console.info('Samen Thuis update 16.0 geladen');
 
     if(!soon.length) return;
 
-    const html=`<section class="card" data-v16-today-chores>
+    const html=`<section class="card" data-v16-today-chores data-widget18="upcomingChores">
       <div class="card-head">
         <div><p class="eyebrow">HUISHOUDEN · BINNENKORT</p><h2>${soon.length} ${soon.length===1?'taak':'taken'} in beeld</h2></div>
         <span class="tag">Flexibel</span>
@@ -4781,7 +4847,6 @@ console.info('Samen Thuis update 16.0 geladen');
 
   // One initial render is needed so existing screens immediately use the new logic.
   render();
-  toast('Samen Thuis v16 geladen');
 })();
 
 ;
@@ -4805,17 +4870,18 @@ function data18(){
 function html18(){
  const s=data18(),date=new Intl.DateTimeFormat('nl-NL',{weekday:'long',day:'numeric',month:'long'}).format(new Date());
  return `<section class="dash18" data-dash18><header class="dh18"><div><p class="eyebrow">Jullie thuis, in één oogopslag</p><h2>Vandaag</h2><p>${date}</p></div><div class="people18"><span>K</span><span>D</span></div></header><div class="dg18">
- <section class="weather18" data-weather18>Weer ophalen…</section>
- <section class="today18"><div class="ct18"><strong>Vandaag</strong><span>${s.chores} taken</span></div><div class="stats18"><button data-view="chores"><b>${s.chores}</b><small>Huishouden</small></button><button data-view="groceries"><b>${s.groceries}</b><small>Boodschappen</small></button><button data-view="stock"><b>${s.low}</b><small>Bijna op</small></button></div><div class="meal18"><small>🍽️ VANAVOND</small><strong>${esc(s.dinner?.title||'Nog geen avondeten gepland')}</strong></div></section>
- <section class="agenda18"><div class="ct18"><strong>Komende afspraken</strong><button class="text-btn" data-view="planning">Alles →</button></div>${s.agenda.length?s.agenda.map(x=>`<div class="ar18"><time>${esc(x.date===todayISO()?(x.time||'Hele dag'):new Intl.DateTimeFormat('nl-NL',{weekday:'short',day:'numeric'}).format(parseDate(x.date)))}</time><div><strong>${esc(x.title)}</strong><small>${esc(x.person||'')}</small></div></div>`).join(''):'<p class="muted">Geen komende afspraken.</p>'}</section>
- <section class="outfit18" data-outfit18><span>👕</span><div><strong>Wat trek je aan?</strong><p>Weeradvies laden…</p></div></section></div></section>`
+ <section class="weather18" data-weather18 data-widget18="weather">Weer ophalen…</section>
+ <section class="today18" data-widget18="household"><div class="ct18"><strong>Vandaag</strong><span>${s.chores} taken</span></div><div class="stats18"><button data-view="chores"><b>${s.chores}</b><small>Huishouden</small></button><button data-view="groceries"><b>${s.groceries}</b><small>Boodschappen</small></button><button data-view="stock"><b>${s.low}</b><small>Bijna op</small></button></div><div class="meal18"><small>🍽️ VANAVOND</small><strong>${esc(s.dinner?.title||'Nog geen avondeten gepland')}</strong></div></section>
+ <section class="agenda18" data-widget18="agenda"><div class="ct18"><strong>Komende afspraken</strong><button class="text-btn" data-view="planning">Alles →</button></div>${s.agenda.length?s.agenda.map(x=>`<div class="ar18"><time>${esc(x.date===todayISO()?(x.time||'Hele dag'):new Intl.DateTimeFormat('nl-NL',{weekday:'short',day:'numeric'}).format(parseDate(x.date)))}</time><div><strong>${esc(x.title)}</strong><small>${esc(x.person||'')}</small></div></div>`).join(''):'<p class="muted">Geen komende afspraken.</p>'}</section>
+ <section class="outfit18" data-outfit18 data-widget18="outfit"><span>👕</span><div><strong>Wat trek je aan?</strong><p>Weeradvies laden…</p></div></section></div></section>`
 }
 async function weather18(force=false){
  const box=document.querySelector('[data-weather18]');if(!box)return;
- try{let w=null;if(!force)try{let c=JSON.parse(localStorage.getItem(WC)||'null');if(c&&Date.now()-c.t<1800000)w=c.w}catch(_){}
- if(!w){let q=new URLSearchParams({latitude:LOC.lat,longitude:LOC.lon,current:'temperature_2m,apparent_temperature,weather_code,precipitation,wind_speed_10m',hourly:'temperature_2m,weather_code,precipitation_probability',daily:'temperature_2m_max,temperature_2m_min,precipitation_probability_max',timezone:'Europe/Amsterdam',forecast_days:'5'});let r=await fetch('https://api.open-meteo.com/v1/forecast?'+q,{cache:'no-store'});if(!r.ok)throw 0;w=await r.json();localStorage.setItem(WC,JSON.stringify({t:Date.now(),w}))}
+ const settings=data.settings||{},savedLat=settings.weatherLat===''||settings.weatherLat==null?NaN:Number(settings.weatherLat),savedLon=settings.weatherLon===''||settings.weatherLon==null?NaN:Number(settings.weatherLon),loc={name:settings.weatherPlace||LOC.name,lat:Number.isFinite(savedLat)&&savedLat>=-90&&savedLat<=90?savedLat:LOC.lat,lon:Number.isFinite(savedLon)&&savedLon>=-180&&savedLon<=180?savedLon:LOC.lon},key=`${loc.lat},${loc.lon}`;
+ try{let w=null;if(!force)try{let c=JSON.parse(localStorage.getItem(WC)||'null');if(c&&c.key===key&&Date.now()-c.t<1800000)w=c.w}catch(_){}
+ if(!w){let q=new URLSearchParams({latitude:loc.lat,longitude:loc.lon,current:'temperature_2m,apparent_temperature,weather_code,precipitation,wind_speed_10m',hourly:'temperature_2m,weather_code,precipitation_probability',daily:'temperature_2m_max,temperature_2m_min,precipitation_probability_max',timezone:'Europe/Amsterdam',forecast_days:'5'});let r=await fetch('https://api.open-meteo.com/v1/forecast?'+q,{cache:'no-store'});if(!r.ok)throw 0;w=await r.json();localStorage.setItem(WC,JSON.stringify({t:Date.now(),key,w}))}
  let c=w.current,d=w.daily,h=w.hourly,n=new Date(),i=h.time.findIndex(t=>new Date(t)>=new Date(n.getFullYear(),n.getMonth(),n.getDate(),n.getHours()));if(i<0)i=0;let ids=Array.from({length:6},(_,k)=>i+k).filter(k=>k<h.time.length);
- box.innerHTML=`<div class="wm18"><div><small>⌖ ${LOC.name}</small><div class="temp18"><span>${wi(c.weather_code)}</span><strong>${Math.round(c.temperature_2m)}°</strong></div><p>${wt(c.weather_code)} · voelt als ${Math.round(c.apparent_temperature)}°</p></div><div class="wf18"><b>${Math.round(d.temperature_2m_max[0])}° / ${Math.round(d.temperature_2m_min[0])}°</b><span>☂ ${Math.round(d.precipitation_probability_max[0]||0)}%</span><span>↗ ${Math.round(c.wind_speed_10m||0)} km/u</span></div></div><div class="hours18">${ids.map(k=>`<div><small>${h.time[k].slice(11,16)}</small><b>${wi(h.weather_code[k])}</b><strong>${Math.round(h.temperature_2m[k])}°</strong><small>${Math.round(h.precipitation_probability[k]||0)}%</small></div>`).join('')}</div><button class="wr18" data-wr18>↻</button>`;
+ box.innerHTML=`<div class="wm18"><div><small>⌖ ${esc(loc.name)}</small><div class="temp18"><span>${wi(c.weather_code)}</span><strong>${Math.round(c.temperature_2m)}°</strong></div><p>${wt(c.weather_code)} · voelt als ${Math.round(c.apparent_temperature)}°</p></div><div class="wf18"><b>${Math.round(d.temperature_2m_max[0])}° / ${Math.round(d.temperature_2m_min[0])}°</b><span>☂ ${Math.round(d.precipitation_probability_max[0]||0)}%</span><span>↗ ${Math.round(c.wind_speed_10m||0)} km/u</span></div></div><div class="hours18">${ids.map(k=>`<div><small>${h.time[k].slice(11,16)}</small><b>${wi(h.weather_code[k])}</b><strong>${Math.round(h.temperature_2m[k])}°</strong><small>${Math.round(h.precipitation_probability[k]||0)}%</small></div>`).join('')}</div><button class="wr18" data-wr18>↻</button>`;
  let o=document.querySelector('[data-outfit18]');if(o)o.innerHTML=`<span>👕</span><div><strong>Wat trek je aan?</strong><p>${outfit(w).map(esc).join(' · ')}</p><small>Gebaseerd op temperatuur, regen en wind.</small></div>`
  }catch(_){box.innerHTML='<strong>Weer tijdelijk niet beschikbaar</strong><p><button class="text-btn" data-wr18>Opnieuw proberen</button></p>'}
 }
@@ -4848,12 +4914,12 @@ applyUi19();
 try{matchMedia('(prefers-color-scheme:dark)').addEventListener('change',()=>ui19.theme==='system'&&applyUi19())}catch(_){}
 
 const pages19=[
- ['today','Today','⌂'],['planning','Agenda','▦'],['meals','Weekmenu','♨'],['groceries','Boodschappen','✓'],
- ['chores','Huishouden','⌁'],['stock','Voorraad','▤'],['trips','Reizen','✈'],['ideas','Date ideeën','♡'],
- ['home','Woning','⌂'],['budget19','Budget','€'],['extra19','Extra','＋'],['settings','Instellingen','⚙']
+ ['today','Dashboard','⌂'],['planning','Agenda','▦'],['tasks','Taken','☑'],['groceries','Boodschappen','✓'],['stock','Voorraad','▤'],['offers','Aanbiedingen','％'],['budget19','Budget','€'],
+ ['meals','Weekmenu','♨'],['chores','Huishouden','⌁'],['challenges','Challenges','✦'],['weather','Weer','☀'],['programs',"Programma's",'▶'],['ideas','Date ideeën','♡'],
+ ['home','Woning','⌂'],['trips','Reizen','✈'],['extra19','Extra','＋'],['settings','Instellingen','⚙']
 ];
 try{
-  sections.today={label:'Today',icon:'⌂'};
+  sections.today={label:'Dashboard',icon:'⌂'};
   sections.ideas={label:'Date ideeën',icon:'♡'};
   sections.budget19={label:'Budget',icon:'€'};
   sections.extra19={label:'Extra',icon:'＋'};
@@ -4872,19 +4938,19 @@ window.SamenThuisGo=go19;
 function nav19(){
   const desktop=document.querySelector('.sidebar nav,.side-nav,.nav-list');
   if(desktop){
-    desktop.innerHTML=pages19.map(([id,label,icon])=>`<button class="${current===id?'active':''}" data-v19-go="${id}"><span>${icon}</span>${label}</button>`).join('');
+    desktop.innerHTML=pages19.map(([id,label,icon])=>`<button class="${current===id?'active':''}" data-v19-go="${esc(id)}"><span>${esc(icon)}</span>${esc(label)}</button>`).join('');
   }
   const mobile=document.querySelector('.mobile-nav,.bottom-nav');
   if(mobile){
     const direct=(ui19.mobileNav||DEFAULTUI19.mobileNav).slice(0,4);
-    mobile.innerHTML=direct.map(id=>{const p=pages19.find(x=>x[0]===id)||pages19[0];return `<button class="${current===id?'active':''}" data-v19-go="${id}"><span>${p[2]}</span><small>${p[1]}</small></button>`}).join('')+
+    mobile.innerHTML=direct.map(id=>{const p=pages19.find(x=>x[0]===id)||pages19[0];return `<button class="${current===id?'active':''}" data-v19-go="${esc(p[0])}"><span>${esc(p[2])}</span><small>${esc(p[1])}</small></button>`}).join('')+
       `<button data-v19-more><span>•••</span><small>Meer</small></button>`;
   }
 }
 function more19(){
   let old=document.querySelector('[data-v19-moremenu]');if(old){old.remove();return}
   const direct=new Set(ui19.mobileNav||DEFAULTUI19.mobileNav);
-  document.body.insertAdjacentHTML('beforeend',`<div class="more19" data-v19-moremenu><div class="more19-sheet"><div class="more19-head"><strong>Alle pagina's</strong><button data-v19-more>×</button></div>${pages19.filter(p=>!direct.has(p[0])).map(p=>`<button data-v19-go="${p[0]}"><span>${p[2]}</span><b>${p[1]}</b></button>`).join('')}</div></div>`);
+  document.body.insertAdjacentHTML('beforeend',`<div class="more19" data-v19-moremenu><div class="more19-sheet"><div class="more19-head"><strong>Alle pagina's</strong><button data-v19-more>×</button></div>${pages19.filter(p=>!direct.has(p[0])).map(p=>`<button data-v19-go="${esc(p[0])}"><span>${esc(p[2])}</span><b>${esc(p[1])}</b></button>`).join('')}</div></div>`);
 }
 function budgetPage19(){
   const b=data.budget||data.budget19||{income:0,expenses:[]};
@@ -4906,11 +4972,11 @@ function extraPage19(){
 function settingsPanel19(){
  if(current!=='settings')return;
  const v=document.querySelector('#view');if(!v||v.querySelector('[data-v19-device-settings]'))return;
- v.insertAdjacentHTML('afterbegin',`<section class="card device-settings19" data-v19-device-settings><div class="card-head"><div><p class="eyebrow">DIT APPARAAT</p><h2>Thema & weergave</h2></div><span class="tag">Niet gedeeld</span></div><p class="muted">Deze instellingen blijven alleen op dit apparaat. Daphne kan op haar telefoon dus een ander thema gebruiken.</p>
+ v.insertAdjacentHTML('afterbegin',`<section class="card device-settings19" data-v19-device-settings><div class="card-head"><div><p class="eyebrow">WEERGAVEVOORKEUREN</p><h2>Thema & weergave</h2></div><span class="tag">Persoonlijk</span></div><p class="muted">Zonder persoonlijk account worden voorkeuren op dit apparaat bewaard. Meld je aan om ze per account tussen apparaten te synchroniseren.</p>
  <div class="settings-grid19"><label>Thema<select data-v19-theme><option value="system">Systeem</option><option value="light">Licht</option><option value="dark">Donker</option></select></label>
- <label>Accent<select data-v19-accent><option value="bluePurple">Blauw / paars</option><option value="blue">Blauw</option><option value="purple">Paars</option><option value="orange">Oranje</option></select></label>
+ <label class="accent-control20">Accentkleur <input type="color" data-accent-color aria-label="Kies je eigen accentkleur"><span class="accent-preview20" data-accent-preview aria-live="polite"></span></label>
  <label>Weergave<select data-v19-density><option value="comfortable">Ruim</option><option value="compact">Compact</option></select></label></div></section>`);
- v.querySelector('[data-v19-theme]').value=ui19.theme;v.querySelector('[data-v19-accent]').value=ui19.accent;v.querySelector('[data-v19-density]').value=ui19.density;
+ v.querySelector('[data-v19-theme]').value=ui19.theme;v.querySelector('[data-v19-density]').value=ui19.density;
 }
 function editBudget19(index=null){
  data.budget ||= {income:0,expenses:[]}; data.budget.expenses ||= [];
@@ -4951,7 +5017,6 @@ document.addEventListener('click',e=>{
 });
 document.addEventListener('change',e=>{
  if(e.target.matches('[data-v19-theme]')){ui19.theme=e.target.value;saveUi19()}
- if(e.target.matches('[data-v19-accent]')){ui19.accent=e.target.value;saveUi19()}
  if(e.target.matches('[data-v19-density]')){ui19.density=e.target.value;saveUi19()}
 });
 requestAnimationFrame(()=>{nav19();settingsPanel19();applyUi19()});
@@ -4967,13 +5032,16 @@ if (window.__ST_V20__) return;
 window.__ST_V20__ = true;
 
 const KEY20 = 'samenThuisDeviceUiV20';
-const FALLBACK20 = { theme:'system', accent:'purple', density:'comfortable' };
+const FALLBACK20 = { theme:'system', accent:'purple', accentColor:'#7057d9', density:'comfortable' };
+const ACCENT_PRESETS20 = { bluePurple:'#5f63d8', blue:'#315f86', purple:'#7057d9', orange:'#d56e38' };
 
 function get20(){
   try {
     const old = JSON.parse(localStorage.getItem('samenThuisDeviceUiV19') || '{}');
     const now = JSON.parse(localStorage.getItem(KEY20) || '{}');
-    return {...FALLBACK20, ...old, ...now};
+    const saved = {...FALLBACK20, ...old, ...now};
+    if (!/^#[0-9a-f]{6}$/i.test(saved.accentColor || '')) saved.accentColor = ACCENT_PRESETS20[saved.accent] || FALLBACK20.accentColor;
+    return saved;
   } catch (_) { return {...FALLBACK20}; }
 }
 let ui20 = get20();
@@ -4989,15 +5057,59 @@ function apply20(){
   html.dataset.density19 = ui20.density || 'comfortable';
   html.dataset.density20 = ui20.density || 'comfortable';
   html.style.colorScheme = dark ? 'dark' : 'light';
+  const hex = /^#[0-9a-f]{6}$/i.test(ui20.accentColor || '') ? ui20.accentColor : FALLBACK20.accentColor;
+  const channels = value => [1, 3, 5].map(i => parseInt(value.slice(i, i + 2), 16));
+  const mix = (rgb, target, amount) => '#' + rgb.map((c, index) =>
+    Math.round(c + ((Array.isArray(target) ? target[index] : target) - c) * amount).toString(16).padStart(2, '0')).join('');
+  const luminance = value => channels(value).map(c => {
+    const normalized = c / 255;
+    return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+  }).reduce((sum, c, index) => sum + c * [0.2126, 0.7152, 0.0722][index], 0);
+  const baseRgb = channels(hex);
+  const contrast = (foreground, background) => {
+    const [a, b] = [luminance(foreground), luminance(background)].sort((x, y) => y - x);
+    return (a + 0.05) / (b + 0.05);
+  };
+  const readableOn = (background, target) => {
+    for (let amount = 0; amount <= 1; amount += 0.01) {
+      const candidate = mix(baseRgb, target, amount);
+      if (contrast(candidate, background) >= 4.5) return candidate;
+    }
+    return target === 0 ? '#000000' : '#ffffff';
+  };
+  const darkSurface = '#0d273e';
+  const accentText = contrast('#ffffff', hex) >= contrast('#17243a', hex) ? '#ffffff' : '#17243a';
+  html.style.setProperty('--blue', readableOn(dark ? darkSurface : '#ffffff', dark ? 255 : 0));
+  html.style.setProperty('--blue-soft', mix(baseRgb, dark ? channels(darkSurface) : 255, 0.88));
+  html.style.setProperty('--dark-accent-text', readableOn(darkSurface, 255));
+  html.style.setProperty('--dark-muted-text', '#c7d8e8');
+  html.style.setProperty('--accent-button-bg', hex);
+  html.style.setProperty('--accent-button-text', accentText);
+  html.dataset.accent20 = html.dataset.accent19 = 'custom';
   document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#081b2d' : '#eef3f9');
 }
 function save20(){
   localStorage.setItem(KEY20, JSON.stringify(ui20));
   localStorage.setItem('samenThuisDeviceUiV19', JSON.stringify(ui20));
   apply20();
+  window.dispatchEvent(new Event('samenThuisPreferencesChange'));
 }
 apply20();
 try { matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => ui20.theme === 'system' && apply20()); } catch(_){}
+window.SamenThuisPersonalUi20 = {
+  get() { return { ...ui20 }; },
+  set(value) {
+    const next = value && typeof value === 'object' ? value : {};
+    ui20 = {
+      theme: ['system', 'light', 'dark'].includes(next.theme) ? next.theme : 'system',
+      accent: ['bluePurple', 'blue', 'purple', 'orange'].includes(next.accent) ? next.accent : 'purple',
+      density: ['comfortable', 'compact'].includes(next.density) ? next.density : 'comfortable',
+      accentColor: typeof next.accentColor === 'string' && /^#[0-9a-f]{6}$/i.test(next.accentColor)
+        ? next.accentColor : ACCENT_PRESETS20[next.accent] || FALLBACK20.accentColor
+    };
+    save20();
+  }
+};
 
 function beautifySettings20(){
   if (typeof current === 'undefined' || current !== 'settings') return;
@@ -5005,10 +5117,24 @@ function beautifySettings20(){
   if (!box) return;
   box.classList.add('glass20');
   const theme = box.querySelector('[data-v19-theme]');
-  const accent = box.querySelector('[data-v19-accent]');
   const density = box.querySelector('[data-v19-density]');
   if(theme){ theme.value=ui20.theme; theme.onchange=()=>{ui20.theme=theme.value;save20()}; }
-  if(accent){ accent.value=ui20.accent; accent.onchange=()=>{ui20.accent=accent.value;save20()}; }
+  const input = box.querySelector('[data-accent-color]');
+  const preview = box.querySelector('[data-accent-preview]');
+  if(input){
+    input.value = /^#[0-9a-f]{6}$/i.test(ui20.accentColor || '') ? ui20.accentColor : FALLBACK20.accentColor;
+    const updatePreview = () => {
+      if (!preview) return;
+      const channels = [1, 3, 5].map(i => parseInt(input.value.slice(i, i + 2), 16) / 255);
+      const lum = channels.map(c => c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4)
+        .reduce((sum, c, index) => sum + c * [0.2126, 0.7152, 0.0722][index], 0);
+      preview.textContent = input.value.toUpperCase();
+      preview.style.backgroundColor = input.value;
+      preview.style.color = lum > 0.179 ? '#17243a' : '#ffffff';
+    };
+    updatePreview();
+    input.oninput = () => { ui20.accentColor = input.value; save20(); updatePreview(); };
+  }
   if(density){ density.value=ui20.density; density.onchange=()=>{ui20.density=density.value;save20()}; }
 }
 
@@ -5094,10 +5220,11 @@ requestAnimationFrame(dock);
 if(window.__ST_V23__) return; window.__ST_V23__=true;
 
 const NAV23=[
- ['today','⌂','Vandaag'],['planning','▦','Agenda'],['meals','♨','Weekmenu'],
- ['groceries','✓','Boodschappen'],['stock','▤','Voorraad'],['chores','⌁','Huishouden'],
- ['home','⌂','Woning'],['budget19','€','Budget'],['trips','✈','Reizen'],
- ['ideas','♡','Date ideeën'],['extra19','＋','Extra'],['settings','⚙','Instellingen']
+ ['today','⌂','Dashboard'],['planning','▦','Agenda'],['tasks','☑','Taken'],
+ ['groceries','✓','Boodschappen'],['stock','▤','Voorraad'],['offers','％','Aanbiedingen'],['budget19','€','Budget'],
+ ['meals','♨','Weekmenu'],['chores','⌁','Huishouden'],['challenges','✦','Challenges'],['weather','☀','Weer'],['programs','▶',"Programma's"],
+ ['ideas','♡','Date ideeën'],['home','⌂','Woning'],['trips','✈','Reizen'],
+ ['extra19','＋','Extra'],['settings','⚙','Instellingen']
 ];
 
 const DEFAULT_BUDGET23={
@@ -5156,7 +5283,7 @@ function calcBudget23(){
  const saving=b.goals.reduce((s,x)=>s+n23(x.monthly),0);
  const investing=n23(b.investing),house=n23(b.houseBudget),income=K+D,contribution=income*rate;
  const needed=fixed+house+saving+investing,remainder=contribution-needed;
- const saved=b.goals.reduce((s,x)=>s+n23(x.current),0),targets=b.goals.reduce((s,x)=>s+n23(x.target),0);
+ const saved=b.goals.reduce((s,x)=>s+goalBalance23(x),0),targets=b.goals.reduce((s,x)=>s+n23(x.target),0);
  return {b,K,D,rate,fixed,saving,investing,house,income,contribution,needed,remainder,saved,targets,
   kContribution:K*rate,dContribution:D*rate,kPersonal:K*(1-rate),dPersonal:D*(1-rate),
   neededPct:income?needed/income*100:0};
@@ -5167,8 +5294,11 @@ function deadlineMonths23(deadline){
  if(Number.isNaN(d.getTime()))return null;
  return Math.max(0,Math.ceil((d-now)/(30.4375*86400000)));
 }
+const SAV23=()=>globalThis.SamenThuisSavings;
+function goalBalance23(g){return SAV23()?SAV23().balance(g):n23(g.current)}
+function today23(){const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`}
 function goalStatus23(g){
- const left=Math.max(0,n23(g.target)-n23(g.current)),m=n23(g.monthly);
+ const left=Math.max(0,n23(g.target)-goalBalance23(g)),m=n23(g.monthly);
  const months=m>0?Math.ceil(left/m):null,deadline=deadlineMonths23(g.deadline);
  return {left,months,deadline,enough:deadline==null||left===0||(m>0&&months<=deadline)};
 }
@@ -5188,18 +5318,49 @@ function projection23(g){
  const coords=points.map((p,i)=>`${pad+(w-2*pad)*(p.m/months)},${h-pad-(h-2*pad)*(p.v/max)}`).join(' ');
  return `<svg class="projection23" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><line x1="${pad}" y1="${h-pad}" x2="${w-pad}" y2="${h-pad}"/><line x1="${pad}" y1="${pad}" x2="${w-pad}" y2="${pad}" class="target23"/><polyline points="${coords}"/></svg>`;
 }
+const KIND23={fixed:'Vast doelbedrag',recurring:'Terugkerende rekening',buffer:'Noodbuffer'};
+function goalDetail23(g){
+ const S=SAV23();if(!S)return '';
+ const st=S.status(g,today23()),actual=S.actualInPeriod(g,today23(),st.frequency);
+ const diff=S.round(actual-st.planned),label=S.FREQUENCIES[st.frequency].toLowerCase();
+ const dep=(g.deposits||[]).slice(-3).reverse().map(x=>`<li>${esc(x.date)} · ${eur23(x.amount)}${x.note?' · '+esc(x.note):''}</li>`).join('');
+ return `<div class="goal-extra23">
+  <p><small>${esc(KIND23[g.kind]||KIND23.fixed)} · ${g.scope==='personal'?'Persoonlijk':'Gezamenlijk'} · prioriteit ${n23(g.priority)||3}${g.paused?' · gepauzeerd':''}</small></p>
+  <p>Gepland per periode (${label}): <b>${eur23(st.planned)}</b> · Werkelijk deze periode: <b>${eur23(actual)}</b> · Verschil gepland/werkelijk: <b class="${diff<0?'warn23':'ok23'}">${eur23(diff)}</b></p>
+  ${st.required!=null&&st.state!=='reached'?`<p>Benodigd per periode voor de deadline: <b>${eur23(st.required)}</b>${st.moments!=null?` (${st.moments} inlegmomenten)`:''}</p>`:''}
+  ${st.expectedEnd?`<p>Verwachte einddatum bij huidig ritme: <b>${esc(st.expectedEnd)}</b></p>`:''}
+  ${st.state==='expired'?'<p class="warn23">Deadline is verstreken — pas deadline, doelbedrag of prioriteit aan.</p>':''}
+  ${st.state==='behind'?`<p class="warn23">Achterstand ten opzichte van de spaarplanning: ${eur23(st.behind)} (geen schuld en geen negatief banksaldo). ${st.required!=null?`Nodig per periode om de deadline te halen: ${eur23(st.required)}.`:''}</p>`:''}
+  ${st.state==='active'&&!st.feasible&&st.required!=null?`<p class="warn23">Niet haalbaar met huidige inleg; benodigd ${eur23(st.required)} per periode.</p>`:''}
+  <p><button data-sav-deposit="${esc(g.id)}">+ Storting registreren</button> <button data-sav-pause="${esc(g.id)}">${g.paused?'Hervatten':'Pauzeren'}</button></p>
+  ${dep?`<ul class="muted">${dep}</ul>`:''}
+ </div>`;
+}
+function savingsPlan23(c){
+ const S=SAV23();if(!S)return '';
+ const b=c.b,available=c.contribution-c.fixed-c.house-c.investing;
+ const p=S.propose(b.goals,Math.max(0,available),today23());
+ const rows=p.rows.map(r=>`<tr><td>${esc(r.title)}</td><td>${eur23(r.need)}</td><td><input inputmode="decimal" data-sav-prop="${esc(r.id)}" value="${r.proposed}"></td><td>${esc(r.reason)}${r.behind?` · achterstand ${eur23(r.behind)}`:''}</td></tr>`).join('');
+ return `<section class="budget-sheet23"><header><div><small>SLIM SPAREN</small><h2>Verdeling beschikbaar spaarbedrag</h2></div></header>
+  <div class="calc23"><span>Beschikbaar om te sparen (afdracht − vaste lasten − huisbudget − beleggen) <b>${eur23(Math.max(0,available))}</b></span><span>Totaal benodigde inleg actieve doelen (per maand) <b>${eur23(p.totalNeed)}</b></span><span>Ingestelde maandinleg (huidig budget) <b>${eur23(c.saving)}</b></span>
+  <span class="total23">${p.shortfall>0?`Gewenste inleg is ${eur23(p.shortfall)} hoger dan beschikbaar`:`Voldoende beschikbaar, ${eur23(p.leftover)} over`}</span></div>
+  <div style="overflow-x:auto"><table class="sav-table23"><thead><tr><th>Doel</th><th>Nodig/maand</th><th>Voorstel</th><th>Toelichting</th></tr></thead><tbody>${rows}</tbody></table></div>
+  <p><button class="primary" data-sav-apply>Voorstel opslaan als maandinleg</button></p>
+  <p class="muted">Dit is een planning: er worden geen betalingen of overboekingen uitgevoerd en theoretische besparingen tellen niet als ontvangen geld.</p></section>`;
+}
 function renderBudget23(){
  const c=calcBudget23(),b=c.b;
  const goals=b.goals.map((g,i)=>{
   const st=goalStatus23(g);
   return `<article class="light-surface23 goal-card23">
    <header><div><small>SPAARDOEL</small><h3>${esc(g.title)}</h3><p>${esc(g.deadline||'Geen deadline')}</p></div><div><button data-budget23-goal="${i}">Bewerk</button><button class="danger23" data-budget23-delgoal="${i}">×</button></div></header>
-   <div class="goal-visual23">${donut23(g.current,g.target,g.title)}<div><b>${eur23(g.current)} / ${eur23(g.target)}</b><span>Nog nodig ${eur23(st.left)}</span><span>${n23(g.monthly)>0?`${eur23(g.monthly)} per maand`:'Geen maandbedrag'}</span><span class="${st.enough?'ok23':'warn23'}">${st.months===0?'Doel bereikt':st.months?`Verwacht over ${st.months} maanden`:'Geen prognose'}${st.deadline!=null?` · ${st.enough?'op schema':'inleg te laag voor deadline'}`:''}</span></div></div>
+   <div class="goal-visual23">${donut23(goalBalance23(g),g.target,g.title)}<div><b>${eur23(goalBalance23(g))} / ${eur23(g.target)}</b><span>Nog nodig ${eur23(st.left)}</span><span>${n23(g.monthly)>0?`${eur23(g.monthly)} per maand`:'Geen maandbedrag'}</span><span class="${st.enough?'ok23':'warn23'}">${st.months===0?'Doel bereikt':st.months?`Verwacht over ${st.months} maanden`:'Geen prognose'}${st.deadline!=null?` · ${st.enough?'op schema':'inleg te laag voor deadline'}`:''}</span></div></div>
+   ${goalDetail23(g)}
    ${projection23(g)}
   </article>`;
  }).join('');
  const fixed=b.fixed.map((x,i)=>`<div class="light-surface23 fixed-row23"><div><b>${esc(x.title)}</b><small>${x.period==='jaar'?'Jaarlijks':x.period==='kwartaal'?'Per kwartaal':'Maandelijks'} · ${eur23(monthlyFixed23(x))}/mnd</small></div><strong>${eur23(x.amount)}</strong><button data-budget23-fixed="${i}">Bewerk</button><button class="danger23" data-budget23-delfixed="${i}">×</button></div>`).join('');
- const goalBars=b.goals.map(g=>({label:g.title,value:n23(g.current),value2:Math.max(0,n23(g.target)-n23(g.current))}));
+ const goalBars=b.goals.map(g=>({label:g.title,value:goalBalance23(g),value2:Math.max(0,n23(g.target)-goalBalance23(g))}));
  const money=[{label:'Vaste lasten',value:c.fixed},{label:'Huisbudget',value:c.house},{label:'Sparen',value:c.saving},{label:'Beleggen',value:c.investing},{label:'Resterend',value:Math.max(0,c.remainder)}];
  const house=b.houseCategories.map((x,i)=>`<label>${esc(x.title)}<input inputmode="decimal" data-budget23-house="${i}" value="${n23(x.amount)}"></label>`).join('');
  return `<div class="budget23">
@@ -5224,6 +5385,8 @@ function renderBudget23(){
   </section>
 
   <section class="budget-sheet23"><header><div><small>SPAARDOELEN & PROGNOSE</small><h2>Voortgang</h2></div><button class="primary" data-budget23-addgoal>+ Spaardoel</button></header><div class="goals23">${goals}</div></section>
+
+  ${savingsPlan23(c)}
 
   <section class="budget-grid23">
    <article class="budget-sheet23"><header><div><small>SPAARGELD PER DOEL</small><h2>Gespaard versus nog nodig</h2></div></header><div class="legend23"><span><i></i>Gespaard</span><span><em></em>Nog nodig</span></div>${bars23(goalBars,true)}</article>
@@ -5253,8 +5416,33 @@ function editGoal23(i){
  const currentAmount=prompt('Huidig gespaard',g.current);if(currentAmount===null)return;
  const monthly=prompt('Maandelijkse inleg',g.monthly);if(monthly===null)return;
  const deadline=prompt('Deadline (YYYY-MM-DD), "Jaarlijks" of leeg',g.deadline||'');if(deadline===null)return;
- const item={...g,title:title.trim()||'Spaardoel',target:n23(target),current:n23(currentAmount),monthly:n23(monthly),deadline:deadline.trim(),recurring:/jaarlijks/i.test(deadline)};
+ const freq=prompt('Inlegfrequentie: weekly, monthly, quarterly of yearly',g.frequency||'monthly');if(freq===null)return;
+ const prio=prompt('Prioriteit (1 = hoogst, 5 = laagst)',g.priority||3);if(prio===null)return;
+ const scope=prompt('Gezamenlijk of persoonlijk? (gezamenlijk/persoonlijk)',g.scope==='personal'?'persoonlijk':'gezamenlijk');if(scope===null)return;
+ const kind=prompt('Type: fixed (doelbedrag), recurring (terugkerende rekening) of buffer (noodbuffer)',g.kind||'fixed');if(kind===null)return;
+ const dl=deadline.trim();
+ if(dl&&dl!=='Jaarlijks'&&!/^\d{4}-\d{2}-\d{2}$/.test(dl)){alert('Ongeldige deadline; gebruik YYYY-MM-DD.');return}
+ const item={...g,title:title.trim()||'Spaardoel',target:Math.max(0,n23(target)),current:n23(currentAmount),monthly:Math.max(0,n23(monthly)),deadline:dl,recurring:/jaarlijks/i.test(dl),
+  frequency:['weekly','monthly','quarterly','yearly'].includes(freq.trim())?freq.trim():'monthly',priority:Math.min(5,Math.max(1,Math.round(n23(prio))||3)),
+  scope:/pers/i.test(scope)?'personal':'shared',kind:['fixed','recurring','buffer'].includes(kind.trim())?kind.trim():'fixed',
+  startDate:g.startDate||(dl&&dl!=='Jaarlijks'?today23():''),startAmount:g.startAmount??n23(currentAmount),deposits:Array.isArray(g.deposits)?g.deposits:[]};
  if(i==null)b.goals.push(item);else b.goals[i]=item;save();render();
+}
+function addSavingsDeposit23(goalId){
+ const g=budget23().goals.find(x=>x.id===goalId);if(!g||!SAV23())return;
+ const amount=prompt(`Bedrag storting in "${g.title}" (negatief = opname)`,'');if(amount===null)return;
+ const date=prompt('Datum (YYYY-MM-DD)',today23());if(date===null)return;
+ const note=prompt('Omschrijving (optioneel)','');if(note===null)return;
+ try{
+  const r=SAV23().addDeposit(g,{amount:n23(amount),date:date.trim(),note});
+  if(!r.added)alert('Deze storting is al geregistreerd.');
+  save();render();
+ }catch(err){alert(err.message)}
+}
+function applySavingsProposal23(){
+ const b=budget23();
+ document.querySelectorAll('[data-sav-prop]').forEach(inp=>{const g=b.goals.find(x=>x.id===inp.dataset.savProp);if(g)g.monthly=Math.max(0,n23(inp.value))});
+ save();render();
 }
 function mobileNav23(){
  document.querySelectorAll('#dock21,#dock219,.dock21,.dock219,[data-v19-moremenu]').forEach(x=>x.remove());
@@ -5284,6 +5472,9 @@ document.addEventListener('click',e=>{
  if(e.target.closest('[data-budget23-addfixed]')){editFixed23(null);return}
  const ef=e.target.closest('[data-budget23-fixed]');if(ef){editFixed23(Number(ef.dataset.budget23Fixed));return}
  const df=e.target.closest('[data-budget23-delfixed]');if(df&&confirm('Deze vaste last verwijderen?')){budget23().fixed.splice(Number(df.dataset.budget23Delfixed),1);save();render();return}
+ const sd=e.target.closest('[data-sav-deposit]');if(sd){addSavingsDeposit23(sd.dataset.savDeposit);return}
+ const sp=e.target.closest('[data-sav-pause]');if(sp){const g=budget23().goals.find(x=>x.id===sp.dataset.savPause);if(g){g.paused=!g.paused;save();render()}return}
+ if(e.target.closest('[data-sav-apply]')){applySavingsProposal23();return}
  if(e.target.closest('[data-budget23-addgoal]')){editGoal23(null);return}
  const eg=e.target.closest('[data-budget23-goal]');if(eg){editGoal23(Number(eg.dataset.budget23Goal));return}
  const dg=e.target.closest('[data-budget23-delgoal]');if(dg&&confirm('Dit spaardoel verwijderen?')){budget23().goals.splice(Number(dg.dataset.budget23Delgoal),1);save();render();return}
@@ -5485,7 +5676,7 @@ function nav24(){const desktop=document.querySelector('.sidebar nav');if(desktop
 const AQ24='stAirQualityV24';
 function level24(v){v=num24(v);return v>=50?'Hoog':v>=10?'Verhoogd':v>0?'Laag':'Zeer laag'}
 function aqiText24(v){v=num24(v);return v<=20?'Goed':v<=40?'Redelijk':v<=60?'Matig':v<=80?'Slecht':'Zeer slecht'}
-async function air24(force=false){if(current!=='today')return;const dash=document.querySelector('[data-dash18]');if(!dash)return;let card=dash.querySelector('[data-air24]');if(!card){card=document.createElement('section');card.className='air24';card.dataset.air24='';const grid=dash.querySelector('.dg18');grid?.append(card)}if(!card)return;card.innerHTML='<strong>Pollen & luchtkwaliteit</strong><p class="muted">Open-Meteo ophalen…</p>';try{let q=null;if(!force)try{const c=JSON.parse(localStorage.getItem(AQ24)||'null');if(c&&Date.now()-c.t<1800000)q=c.q}catch(_){}if(!q){const u=new URL('https://air-quality-api.open-meteo.com/v1/air-quality');u.searchParams.set('latitude','51.9225');u.searchParams.set('longitude','4.47917');u.searchParams.set('current','european_aqi,pm2_5,pm10,nitrogen_dioxide,ozone,alder_pollen,birch_pollen,grass_pollen,mugwort_pollen,ragweed_pollen');u.searchParams.set('timezone','Europe/Amsterdam');const r=await fetch(u,{cache:'no-store'});if(!r.ok)throw 0;q=await r.json();localStorage.setItem(AQ24,JSON.stringify({t:Date.now(),q}))}const c=q.current||{};const pol=[['Gras',c.grass_pollen],['Berk',c.birch_pollen],['Els',c.alder_pollen],['Bijvoet',c.mugwort_pollen],['Ambrosia',c.ragweed_pollen]].sort((a,b)=>num24(b[1])-num24(a[1]));card.innerHTML=`<div class="air-head24"><div><small>OPEN-METEO · ROTTERDAM</small><h3>Pollen & luchtkwaliteit</h3></div><button data-air24-refresh>↻</button></div><div class="aqi24"><span class="aqi-badge24">AQI ${Math.round(num24(c.european_aqi))}</span><div><strong>${aqiText24(c.european_aqi)}</strong><small>PM2.5 ${num24(c.pm2_5).toFixed(1)} · PM10 ${num24(c.pm10).toFixed(1)} µg/m³</small></div></div><div class="pollen-grid24">${pol.map(([n,v])=>`<div><span>${n}</span><b>${level24(v)}</b><small>${num24(v).toFixed(1)} gr/m³</small></div>`).join('')}</div><p class="air-note24">Indicatie van omgevingswaarden; geen persoonlijk medisch advies.</p>`}catch(_){card.innerHTML='<strong>Pollen & luchtkwaliteit</strong><p>Gegevens tijdelijk niet beschikbaar. <button class="text-btn" data-air24-refresh>Opnieuw</button></p>'}}
+async function air24(force=false){if(current!=='today')return;const dash=document.querySelector('[data-dash18]');if(!dash)return;let card=dash.querySelector('[data-air24]');if(!card){card=document.createElement('section');card.className='air24';card.dataset.air24='';card.dataset.widget18='air';const grid=dash.querySelector('.dg18');grid?.append(card)}if(!card)return;card.innerHTML='<strong>Pollen & luchtkwaliteit</strong><p class="muted">Open-Meteo ophalen…</p>';try{const loc=window.SamenThuisWeatherLocation25?.()||{place:'Rotterdam',lat:51.9225,lon:4.47917},key=`${loc.lat},${loc.lon}`;let q=null;if(!force)try{const c=JSON.parse(localStorage.getItem(AQ24)||'null');if(c&&c.key===key&&Date.now()-c.t<1800000)q=c.q}catch(_){}if(!q){const u=new URL('https://air-quality-api.open-meteo.com/v1/air-quality');u.searchParams.set('latitude',String(loc.lat));u.searchParams.set('longitude',String(loc.lon));u.searchParams.set('current','european_aqi,pm2_5,pm10,nitrogen_dioxide,ozone,alder_pollen,birch_pollen,grass_pollen,mugwort_pollen,ragweed_pollen');u.searchParams.set('timezone','Europe/Amsterdam');const r=await fetch(u,{cache:'no-store'});if(!r.ok)throw 0;q=await r.json();localStorage.setItem(AQ24,JSON.stringify({t:Date.now(),key,q}))}const c=q.current||{};const pol=[['Gras',c.grass_pollen],['Berk',c.birch_pollen],['Els',c.alder_pollen],['Bijvoet',c.mugwort_pollen],['Ambrosia',c.ragweed_pollen]].sort((a,b)=>num24(b[1])-num24(a[1]));card.innerHTML=`<div class="air-head24"><div><small>OPEN-METEO · ${esc(loc.place.toUpperCase())}</small><h3>Pollen & luchtkwaliteit</h3></div><button data-air24-refresh>↻</button></div><div class="aqi24"><span class="aqi-badge24">AQI ${Math.round(num24(c.european_aqi))}</span><div><strong>${aqiText24(c.european_aqi)}</strong><small>PM2.5 ${num24(c.pm2_5).toFixed(1)} · PM10 ${num24(c.pm10).toFixed(1)} µg/m³</small></div></div><div class="pollen-grid24">${pol.map(([n,v])=>`<div><span>${n}</span><b>${level24(v)}</b><small>${num24(v).toFixed(1)} gr/m³</small></div>`).join('')}</div><p class="air-note24">Indicatie van omgevingswaarden; geen persoonlijk medisch advies.</p>`}catch(_){card.innerHTML='<strong>Pollen & luchtkwaliteit</strong><p>Gegevens tijdelijk niet beschikbaar. <button class="text-btn" data-air24-refresh>Opnieuw</button></p>'}}
 const baseRender24=render;render=function(...args){if(current==='auto24'){document.querySelector('#view').innerHTML=autoPage24();updateSyncBadge();requestAnimationFrame(nav24);return}const r=baseRender24(...args);requestAnimationFrame(()=>{nav24();air24()});return r};
 document.addEventListener('click',e=>{if(e.target.closest('[data-v24-auto]')){current='auto24';render();return}const t=e.target.closest('[data-auto24-tab]');if(t){autoTab24=t.dataset.auto24Tab;render();return}const ed=e.target.closest('[data-auto24-edit]');if(ed){autoTab24='add';document.querySelector('#view').innerHTML=`<div class="auto24"><header class="auto-head24"><div><p class="eyebrow">AUTO & BRANDSTOF</p><h1>Tankbeurt bewerken</h1></div></header>${tabs24()}<section class="auto-body24">${fillForm24(data.fuelEntries.find(x=>x.id===ed.dataset.auto24Edit))}</section></div>`;return}const del=e.target.closest('[data-auto24-delete]');if(del&&confirm('Tankbeurt verwijderen?')){data.fuelEntries=data.fuelEntries.filter(x=>x.id!==del.dataset.auto24Delete);save();autoTab24='fills';render();return}const ca=e.target.closest('[data-auto24-car]');if(ca){editCar24(ca.dataset.auto24Car);return}if(e.target.closest('[data-auto24-newcar]')){editCar24();return}const dc=e.target.closest('[data-auto24-deletecar]');if(dc){deleteCar24(dc.dataset.auto24Deletecar);return}const p=e.target.closest('[data-auto24-period]');if(p){statsPeriod24=p.dataset.auto24Period;render();return}if(e.target.closest('[data-auto24-allcars]')){statsCars24=[];render();return}const sc=e.target.closest('[data-auto24-statcar]');if(sc){const id=sc.dataset.auto24Statcar;const currentIds=selectedCars24();if(sc.checked){statsCars24=[...new Set([...currentIds,id])]}else{statsCars24=currentIds.filter(x=>x!==id);if(!statsCars24.length){sc.checked=true;toast('Selecteer minimaal één auto');return}}render();return}if(e.target.closest('[data-air24-refresh]'))air24(true)});
 document.addEventListener('submit',e=>{const f=e.target.closest('[data-fuel24-form]');if(!f)return;e.preventDefault();const fd=new FormData(f),lit=num24(fd.get('liters'));let total=num24(fd.get('total')),price=num24(fd.get('pricePerLiter'));if(!total&&price&&lit)total=price*lit;if(!price&&total&&lit)price=total/lit;const old=data.fuelEntries.find(x=>x.id===f.dataset.editId)||{};const item={...old,id:old.id||id24(),carId:String(fd.get('carId')),date:String(fd.get('date')),odometer:num24(fd.get('odometer')),liters:lit,total,pricePerLiter:price,fuelGrade:String(fd.get('fuelGrade')),station:String(fd.get('station')||''),partialFill:fd.has('partialFill'),missedPrevious:fd.has('missedPrevious'),note:String(fd.get('note')||'')};if(old.id)Object.assign(old,item);else data.fuelEntries.push(item);save();autoTab24='fills';render();toast('Tankbeurt opgeslagen')});
@@ -5576,7 +5767,7 @@ function fuelMate243(obj){
 }
 function sigImport246(x,kind=''){if(!x||typeof x!=='object')return String(x);if(kind==='cars')return plateImport243(x.plate||'')||String(x.id||'');if(kind==='fuelEntries')return [x.carId||'',String(x.date||'').slice(0,10),num243(x.odometer),num243(x.liters||x.volume),num243(x.total||x.totalCost)].join('|');if(kind==='planning')return [x.title||'',x.date||'',x.time||'',x.person||''].join('|').toLowerCase();return String(x.id||[x.title||x.name||'',x.date||x.due||'',x.category||''].join('|')).toLowerCase()}
 function mergeArray246(a,b,kind=''){return SamenThuisCore.mergeUnique(a,b,x=>sigImport246(x,kind))}
-function mergeBackup246(raw){const incoming=typeof migrateData==='function'?migrateData(raw):raw;if(!incoming||typeof incoming!=='object')throw new Error('Ongeldige Samen Thuis back-up');const keys=['planning','meals','groceries','chores','stock','trips','ideas','home','cars','fuelEntries'];keys.forEach(k=>{if(Array.isArray(incoming[k]))data[k]=mergeArray246(data[k],incoming[k],k)});Object.entries(incoming).forEach(([k,v])=>{if(keys.includes(k)||v==null)return;if(v&&typeof v==='object'&&!Array.isArray(v)){data[k]={...v,...((data[k]&&typeof data[k]==='object'&&!Array.isArray(data[k]))?data[k]:{})}}else if(data[k]===undefined||data[k]===null||data[k]==='')data[k]=v})}
+function mergeBackup246(raw){const incoming=typeof migrateData==='function'?migrateData(raw):raw;if(!incoming||typeof incoming!=='object')throw new Error('Ongeldige Samen Thuis back-up');const keys=['planning','meals','groceries','chores','stock','trips','ideas','home','freezer','cars','fuelEntries'];keys.forEach(k=>{if(Array.isArray(incoming[k]))data[k]=mergeArray246(data[k],incoming[k],k)});Object.entries(incoming).forEach(([k,v])=>{if(keys.includes(k)||v==null)return;if(v&&typeof v==='object'&&!Array.isArray(v)){data[k]={...v,...((data[k]&&typeof data[k]==='object'&&!Array.isArray(data[k]))?data[k]:{})}}else if(data[k]===undefined||data[k]===null||data[k]==='')data[k]=v})}
 async function runImport243(){
  if(!importFile243)return toast('Kies eerst een bestand');
  try{
@@ -5597,7 +5788,7 @@ async function runImport243(){
 function template243(){
  const x=IMPORT243[importTarget243],isJson=['backup','budget','auto'].includes(importTarget243);
  let content=x.example,name=`samen-thuis-${importTarget243}-voorbeeld.${isJson?'json':'csv'}`;
- if(importTarget243==='backup')content=JSON.stringify({planning:[],meals:[],groceries:[],chores:[],stock:[],trips:[],ideas:[],home:[],cars:[],fuelEntries:[],budgetV23:{}},null,2);
+ if(importTarget243==='backup')content=JSON.stringify({planning:[],meals:[],groceries:[],chores:[],stock:[],trips:[],ideas:[],home:[],freezer:[],cars:[],fuelEntries:[],budgetV23:{}},null,2);
  if(importTarget243==='auto')content=JSON.stringify({app:'fuelmate',version:1,vehicles:[{id:1,name:'Kees',makeModel:'Seat Ibiza',year:2012,plate:'JB796D',tankLiters:45,isDefault:1}],fillups:[{id:1,vehicleId:1,date:'2026-09-19T11:43:00',odometer:165275,volume:46.4,totalCost:108.44,partial:0,missedFill:0,station:'',grade:0,note:''}]},null,2);
  const blob=new Blob([content],{type:isJson?'application/json':'text/csv'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)
 }
@@ -5635,21 +5826,27 @@ requestAnimationFrame(navImport243);
    ========================================================= */
 (()=>{'use strict';
  if(window.__ST248_DOCK__)return;window.__ST248_DOCK__=true;
- const ORDER248=['today','planning','meals','groceries','stock','chores','home','budget19','auto24','trips','ideas','extra19','imports243','settings'];
- const LABEL248={today:'Vandaag',planning:'Agenda',meals:'Weekmenu',groceries:'Boodschappen',stock:'Voorraad',chores:'Huishouden',home:'Woning',budget19:'Budget',auto24:'Auto',trips:'Reizen',ideas:'Date ideeën',extra19:'Extra',imports243:'Import',settings:'Instellingen'};
+ const ORDER248=['today','planning','tasks','groceries','stock','offers','budget19','meals','chores','challenges','weather','programs','ideas','home','trips','auto24','extra19','imports243','settings'];
+ const LABEL248={today:'Dashboard',planning:'Agenda',tasks:'Taken',groceries:'Boodschappen',stock:'Voorraad',offers:'Aanbiedingen',budget19:'Budget',meals:'Weekmenu',chores:'Huishouden',challenges:'Challenges',weather:'Weer',programs:"Programma's",ideas:'Date ideeën',home:'Woning',trips:'Reizen',auto24:'Auto',extra19:'Extra',imports243:'Importeren',settings:'Instellingen'};
  function actualKey248(b){if(b.dataset.nav23)return b.dataset.nav23;if(b.hasAttribute('data-v24-auto'))return 'auto24';if(b.hasAttribute('data-import243-go'))return 'imports243';return ''}
+ function arrangeDesktop248(){
+   const nav=document.querySelector('.sidebar nav');if(!nav)return;
+   const buttons=[...nav.querySelectorAll(':scope > button')],map=new Map(buttons.map(b=>[b.dataset.v19Go||(b.hasAttribute('data-v24-auto')?'auto24':b.hasAttribute('data-import243-go')?'imports243':''),b]));
+   ORDER248.forEach(k=>{const b=map.get(k);if(!b)return;b.classList.toggle('active',current===k);nav.appendChild(b)});
+ }
  function arrange248(){
-   const sc=document.querySelector('.mobile-nav-scroll23');if(!sc)return;
+   const sc=document.querySelector('.mobile-nav-scroll23');if(!sc){arrangeDesktop248();return}
    const buttons=[...sc.querySelectorAll(':scope > button')],map=new Map(buttons.map(b=>[actualKey248(b),b]));
    ORDER248.forEach(k=>{const b=map.get(k);if(!b)return;b.classList.toggle('active',current===k);const small=b.querySelector('small');if(small)small.textContent=LABEL248[k]||small.textContent;sc.appendChild(b)});
    sc.dataset.glass248='true';
+   arrangeDesktop248();
  }
  const base248=render;
  render=function(...args){const r=base248(...args);requestAnimationFrame(()=>requestAnimationFrame(arrange248));return r};
- const observer248=new MutationObserver(()=>requestAnimationFrame(arrange248));
+ const observer248=new MutationObserver(()=>requestAnimationFrame(()=>{arrange248();arrangeDesktop248()}));
  const start248=()=>{const n=document.querySelector('#mobileNav23');if(n)observer248.observe(n,{childList:true,subtree:true});arrange248()};
  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',start248,{once:true});else start248();
- requestAnimationFrame(()=>requestAnimationFrame(arrange248));
+ requestAnimationFrame(()=>requestAnimationFrame(()=>{arrange248();arrangeDesktop248()}));
 })();
 /* build v24.8 · liquid glass dock + logical navigation order */
 
@@ -5723,3 +5920,1880 @@ document.addEventListener('click', event => {
   render();
   syncNow({ manual: true });
 });
+
+/* v25 · standalone forecast page and device-local dashboard editor */
+(() => {
+  'use strict';
+  if (window.__ST_V25_INTEGRATION__) return;
+  window.__ST_V25_INTEGRATION__ = true;
+
+  const DASH_KEY = 'samenThuisDashboardWidgetsV25';
+  const DASH_WIDGETS = window.SamenThuisDashboard.CATALOG.map(([id, label]) => [id, label]);
+  const DASH_DEFAULTS = DASH_WIDGETS.map(([id]) => id);
+  const DASH_DEFAULT_VISIBLE = window.SamenThuisDashboard.CATALOG.filter(([, , visible]) => visible).map(([id]) => id);
+  const dashboardCore = window.SamenThuisDashboard;
+  const WEATHER_KEY = 'samenThuisWeatherForecastV25';
+  const DEFAULT_LOCATION = { place: 'Rotterdam', lat: 51.9225, lon: 4.47917 };
+  const weatherCode25 = {
+    0: 'Helder', 1: 'Overwegend helder', 2: 'Half bewolkt', 3: 'Bewolkt',
+    45: 'Mist', 48: 'Rijpmist', 51: 'Lichte motregen', 53: 'Motregen',
+    55: 'Zware motregen', 61: 'Lichte regen', 63: 'Regen', 65: 'Zware regen',
+    71: 'Lichte sneeuw', 73: 'Sneeuw', 75: 'Zware sneeuw', 80: 'Lichte buien',
+    81: 'Buien', 82: 'Zware buien', 95: 'Onweer', 96: 'Onweer met hagel',
+    99: 'Zwaar onweer met hagel'
+  };
+  let dashboard25 = loadDashboard25();
+
+  function normalizeDashboard25(saved) {
+    if (dashboardCore) return dashboardCore.normalize(saved, DASH_DEFAULTS, DASH_DEFAULT_VISIBLE);
+    const base = saved && typeof saved === 'object' ? saved : {};
+    const order = Array.isArray(base.order) ? base.order.filter(id => DASH_DEFAULTS.includes(id)) : [];
+    return {
+      order: [...new Set([...order, ...DASH_DEFAULTS])],
+      visible: Object.fromEntries(DASH_DEFAULTS.map(id => [id,
+        Object.hasOwn(base.visible || {}, id) ? base.visible[id] !== false : DASH_DEFAULT_VISIBLE.includes(id)]))
+    };
+  }
+
+  function loadDashboard25() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(DASH_KEY) || 'null');
+      return normalizeDashboard25(saved);
+    } catch (_) { return normalizeDashboard25(null); }
+  }
+
+  function saveDashboard25() {
+    try { localStorage.setItem(DASH_KEY, JSON.stringify(dashboard25)); } catch (_) {}
+    window.dispatchEvent(new Event('samenThuisPreferencesChange'));
+  }
+
+  window.SamenThuisDashboardPreferences25 = {
+    get() { return JSON.parse(JSON.stringify(dashboard25)); },
+    set(value) {
+      dashboard25 = normalizeDashboard25(value);
+      saveDashboard25();
+      applyDashboard25();
+    }
+  };
+
+  function dashboardEditor25() {
+    const rows = dashboard25.order.map((id, index) => {
+      const label = DASH_WIDGETS.find(([widget]) => widget === id)?.[1] || id;
+      return `<div class="setting-row dashboard-setting-row25"><label><input type="checkbox" data-dashboard-visible="${id}" ${dashboard25.visible[id] ? 'checked' : ''}> ${esc(label)}</label><span><button type="button" class="secondary" data-dashboard-move="${id}" data-direction="-1" aria-label="${esc(label)} omhoog" ${index === 0 ? 'disabled' : ''}>↑</button> <button type="button" class="secondary" data-dashboard-move="${id}" data-direction="1" aria-label="${esc(label)} omlaag" ${index === dashboard25.order.length - 1 ? 'disabled' : ''}>↓</button></span></div>`;
+    }).join('');
+    const preview = dashboard25.order.filter(id => dashboard25.visible[id]).map(id =>
+      `<li>${esc(DASH_WIDGETS.find(([widget]) => widget === id)?.[1] || id)}</li>`).join('');
+    return `<section class="card settings-card dashboard-editor25"><div class="card-head"><div><p class="eyebrow">DASHBOARD AANPASSEN</p><h2>Dashboardonderdelen</h2></div></div><p class="muted">Zet dashboardonderdelen aan of uit en verplaats ze. Verborgen onderdelen blijven bestaan en pagina's en navigatie veranderen niet. Zonder account worden voorkeuren alleen op dit apparaat bewaard.</p><div class="dashboard-preview25"><strong>Voorbeeld van je dashboard (${dashboard25.order.filter(id => dashboard25.visible[id]).length} onderdelen)</strong><ol>${preview || '<li>Geen onderdelen geselecteerd</li>'}</ol></div>${rows}<div class="button-row"><button type="button" class="secondary" data-dashboard-reset>Standaardindeling herstellen</button></div></section>`;
+  }
+
+  function dashboardCard25(id, eyebrow, title, detail, page) {
+    return `<section class="dashboard-page-widget25 card" data-widget18="${id}"><div><p class="eyebrow">${esc(eyebrow)}</p><h3>${esc(title)}</h3>${detail ? `<p>${esc(detail)}</p>` : ''}</div><a class="secondary" href="#/${page}" data-v19-go="${page}" aria-label="Open ${esc(title)}">Open →</a></section>`;
+  }
+
+  function dashboardListCard25(id, eyebrow, title, page, rows, emptyText) {
+    const list = rows.length ? `<ul class="dashboard-mini-list25">${rows.map(row => `<li>${esc(row)}</li>`).join('')}</ul>` : `<p>${esc(emptyText)}</p>`;
+    return `<section class="dashboard-page-widget25 card" data-widget18="${id}"><div><p class="eyebrow">${esc(eyebrow)}</p><h3>${esc(title)}</h3>${list}</div><a class="secondary" href="#/${page}" data-v19-go="${page}" aria-label="Open ${esc(title)}">Open →</a></section>`;
+  }
+
+  const dashboardBuilders25 = {
+    quote: () => `<div class="dashboard-quote25" data-widget18="quote">${renderQuote()}</div>`,
+    chalkboard: () => chalkboardMarkup25(),
+    budget: () => dashboardCard25('budget', 'BUDGET', 'Budgetoverzicht', data.budgetV23?.financialLedger
+      ? `Huishoudsaldo ${moneyLedger25(ledgerCore25.availableCashCents(ledgerCore25.normalize(data.budgetV23.financialLedger)))}`
+      : 'Bekijk planning, potjes en spaardoelen', 'budget19'),
+    savings: () => dashboardListCard25('savings', 'SPAREN', 'Spaardoelen en potjes', 'budget19',
+      (data.budgetV23?.goals || []).slice(0, 4).map(goal => {
+        const saved = window.SamenThuisSavings?.balance(goal) ?? Number(goal.current || 0);
+        return `${goal.title || 'Spaardoel'} · ${new Intl.NumberFormat('nl-NL', { style: 'currency', currency: 'EUR' }).format(Number(saved) || 0)}`;
+      }), 'Nog geen spaardoelen'),
+    car: () => dashboardCard25('car', 'AUTO', 'Auto',
+      `${(data.cars || []).length} voertuigen · ${(data.fuelEntries || []).length} tankbeurten`, 'auto24'),
+    tasks: () => dashboardListCard25('tasks', 'TAKEN', 'Taken', 'tasks',
+      (data.tasks || []).filter(item => !item.done).slice(0, 4).map(item => item.title || 'Taak'), 'Geen openstaande taken'),
+    groceries: () => dashboardListCard25('groceries', 'BOODSCHAPPEN', 'Boodschappen', 'groceries',
+      (data.groceries || []).filter(item => !item.done).slice(0, 4).map(item => item.title || 'Boodschap'), 'De lijst is leeg')
+  };
+
+  function applyDashboard25() {
+    const grid = document.querySelector('[data-dash18] .dg18');
+    if (!grid) return;
+    document.querySelectorAll('[data-widget18]').forEach(node => {
+      const id = node.dataset.widget18;
+      if (Object.hasOwn(dashboard25.visible, id)) node.hidden = !dashboard25.visible[id];
+    });
+    document.querySelectorAll('[data-dashboard-group]').forEach(group => {
+      group.hidden = ![...group.querySelectorAll('[data-widget18]')].some(node => !node.hidden);
+    });
+    const nodes = new Map([...grid.children].map(node => {
+      const id = node.dataset.widget18 || (node.matches('[data-air24]') ? 'air' : '');
+      return [id, node];
+    }).filter(([id]) => id));
+    Object.keys(dashboardBuilders25).forEach(id => {
+      if (nodes.has(id) || !dashboard25.visible[id]) return;
+      grid.insertAdjacentHTML('beforeend', dashboardBuilders25[id]());
+      const node = grid.querySelector(`[data-widget18="${id}"]`);
+      if (node) nodes.set(id, node);
+    });
+    dashboard25.order.forEach(id => {
+      const node = nodes.get(id);
+      if (!node) return;
+      node.hidden = !dashboard25.visible[id];
+      grid.append(node);
+    });
+    grid.hidden = ![...grid.children].some(node => !node.hidden);
+    if (dashboard25.visible.chalkboard) refreshChalkboard25(false);
+  }
+
+  let ledgerMonth25 = todayISO().slice(0, 7);
+  let ledgerEdit25 = null;
+  const ledgerCore25 = window.SamenThuisBudgetLedger;
+  const moneyLedger25 = value => new Intl.NumberFormat('nl-NL', { style: 'currency', currency: 'EUR' }).format((Number(value) || 0) / 100);
+  const decimalLedger25 = value => (Number(value || 0) / 100).toFixed(2);
+  const plannedMonthlyLedger25 = item => {
+    const divisor = item.period === 'jaar' || item.period === 'yearly' ? 12
+      : item.period === 'kwartaal' || item.period === 'quarterly' ? 3 : 1;
+    return Math.round((Number(item.amount || 0) / divisor) * 100);
+  };
+
+  function ledgerBudget25() {
+    const budget = data.budgetV23 || {};
+    budget.houseCategories = Array.isArray(budget.houseCategories) ? budget.houseCategories : [];
+    budget.fixed = Array.isArray(budget.fixed) ? budget.fixed : [];
+    budget.goals = Array.isArray(budget.goals) ? budget.goals : [];
+    return budget;
+  }
+
+  function ledgerPots25(budget = ledgerBudget25()) {
+    const pots = [];
+    budget.houseCategories.forEach((item, index) => pots.push({
+      id: `category:${item.id || String(item.title || `huisbudget-${index}`).toLocaleLowerCase('nl-NL')}`,
+      label: item.title || `Huisbudget ${index + 1}`, kind: 'house',
+      plannedCents: Math.round((Number(item.amount) || 0) * 100)
+    }));
+    budget.fixed.forEach((item, index) => pots.push({
+      id: `fixed:${item.id || String(item.title || `last-${index}`).toLocaleLowerCase('nl-NL')}`,
+      label: item.title || `Vaste last ${index + 1}`, kind: 'fixed',
+      plannedCents: plannedMonthlyLedger25(item)
+    }));
+    budget.goals.forEach((item, index) => pots.push({
+      id: `goal:${item.id || String(item.title || `doel-${index}`).toLocaleLowerCase('nl-NL')}`,
+      label: item.title || `Spaardoel ${index + 1}`, kind: 'goal',
+      plannedCents: Math.round((Number(item.monthly) || 0) * 100)
+    }));
+    return pots;
+  }
+
+  function ledgerState25(budget = ledgerBudget25(), pots = ledgerPots25(budget)) {
+    if (!ledgerCore25) return null;
+    const current = budget.financialLedger;
+    const ledger = ledgerCore25.normalize(current);
+    let changed = !current || !Array.isArray(current.incomes) || !Array.isArray(current.expenses)
+      || !Array.isArray(current.transfers) || !current.openingBalances || !current.goalSnapshots || !current.potSnapshots;
+    const activePotIds = new Set(pots.map(pot => pot.id));
+    pots.forEach(pot => {
+      const previous = ledger.potSnapshots[pot.id];
+      const next = { label: pot.label, kind: pot.kind, plannedCents: pot.plannedCents, active: true };
+      if (!previous || previous.label !== next.label || previous.kind !== next.kind
+        || previous.plannedCents !== next.plannedCents || previous.active !== true) changed = true;
+      ledger.potSnapshots[pot.id] = next;
+    });
+    Object.keys(ledger.potSnapshots).forEach(potId => {
+      if (activePotIds.has(potId)) return;
+      if (ledger.potSnapshots[potId].active !== false) changed = true;
+      ledger.potSnapshots[potId] = { ...ledger.potSnapshots[potId], active: false };
+    });
+    Object.keys(ledgerCore25.allPotBalances(ledger, pots)).forEach(potId => {
+      if (ledger.potSnapshots[potId]) return;
+      ledger.potSnapshots[potId] = { label: 'Verwijderd potje', kind: 'archived', plannedCents: 0, active: false };
+      changed = true;
+    });
+    budget.goals.forEach((goal, index) => {
+      const pot = pots.find(item => item.id === `goal:${goal.id || String(goal.title || `doel-${index}`).toLocaleLowerCase('nl-NL')}`);
+      if (!pot) return;
+      const saved = window.SamenThuisSavings?.balance(goal) ?? Number(goal.current || 0);
+      const balance = Math.round((Number(saved) || 0) * 100);
+      const key = String(goal.id || pot.id);
+      if (!Object.hasOwn(ledger.goalSnapshots, key)) {
+        ledger.goalSnapshots[key] = balance;
+        if (!Object.hasOwn(ledger.openingBalances, pot.id)) ledger.openingBalances[pot.id] = balance;
+        changed = true;
+      } else {
+        const previous = Number(ledger.goalSnapshots[key]) || 0;
+        if (previous !== balance) {
+          ledger.openingBalances[pot.id] = (Number(ledger.openingBalances[pot.id]) || 0) + balance - previous;
+          ledger.goalSnapshots[key] = balance;
+          changed = true;
+        }
+      }
+    });
+    budget.financialLedger = ledger;
+    if (changed) save({ touch: false });
+    return ledger;
+  }
+
+  function ledgerPotHistory25(ledger, activePots) {
+    const activeIds = new Set(activePots.map(pot => pot.id));
+    const balances = ledgerCore25.allPotBalances(ledger, activePots);
+    const ids = new Set([...Object.keys(ledger.potSnapshots || {}), ...Object.keys(balances)]);
+    return [...activePots, ...[...ids].filter(id => !activeIds.has(id)).map(id => ({
+      id, ...(ledger.potSnapshots[id] || { label: 'Verwijderd potje', kind: 'archived', plannedCents: 0 }),
+      archived: true
+    }))];
+  }
+
+  function syncGoalMirrors25(ledger, budget = ledgerBudget25()) {
+    const savings = window.SamenThuisSavings;
+    if (!savings) return;
+    const movements = new Map();
+    const addMovement = (potId, amountCents, date, key, note) => {
+      if (!String(potId || '').startsWith('goal:') || !amountCents) return;
+      const goal = budget.goals.find((item, index) =>
+        `goal:${item.id || String(item.title || `doel-${index}`).toLocaleLowerCase('nl-NL')}` === potId);
+      if (!goal) return;
+      const goalId = String(goal.id || potId);
+      if (!movements.has(goalId)) movements.set(goalId, []);
+      movements.get(goalId).push({
+        id: `budget-ledger:${key}`, externalId: `budget-ledger:${key}`,
+        amount: Number(amountCents) / 100, date, note, source: 'budget-ledger'
+      });
+    };
+    ledger.incomes.forEach(income => (income.allocations || []).forEach(allocation =>
+      addMovement(allocation.potId, allocation.amountCents, income.date, `allocation:${allocation.id}`, `Toewijzing van ${income.source}`)));
+    ledger.expenses.forEach(expense =>
+      addMovement(expense.potId, -Number(expense.amountCents || 0), expense.date, `expense:${expense.id}`, expense.description));
+    ledger.transfers.forEach(transfer => {
+      addMovement(transfer.fromPotId, -Number(transfer.amountCents || 0), transfer.date, `transfer-out:${transfer.id}`, transfer.description || 'Interne verschuiving');
+      addMovement(transfer.toPotId, Number(transfer.amountCents || 0), transfer.date, `transfer-in:${transfer.id}`, transfer.description || 'Interne verschuiving');
+    });
+    budget.goals.forEach(goal => {
+      goal.deposits = Array.isArray(goal.deposits) ? goal.deposits : [];
+      const retained = goal.deposits.filter(deposit => !String(deposit.externalId || '').startsWith('budget-ledger:'));
+      const expected = movements.get(String(goal.id)) || [];
+      goal.deposits = [...retained, ...expected.map(movement => ({
+        ...movement,
+        amount: Math.round(movement.amount * 100) / 100,
+        sig: `${movement.date}|${movement.amount}|${movement.note.toLowerCase()}|${movement.source}`
+      }))];
+      const goalBalance = savings.balance(goal);
+      ledger.goalSnapshots[String(goal.id)] = Math.round(goalBalance * 100);
+    });
+  }
+
+  function ledgerNode25(tag, className = '', text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined) node.textContent = String(text);
+    return node;
+  }
+
+  function ledgerInput25(name, type = 'text', values = {}) {
+    const input = ledgerNode25('input');
+    input.name = name;
+    input.type = type;
+    Object.entries(values).forEach(([key, value]) => {
+      if (key === 'required') input.required = Boolean(value);
+      else if (key === 'value') input.value = String(value ?? '');
+      else input.setAttribute(key, String(value));
+    });
+    return input;
+  }
+
+  function ledgerSelect25(name, options, required = true) {
+    const select = ledgerNode25('select');
+    select.name = name;
+    select.required = required;
+    options.forEach(({ value, label, selected }) => {
+      const option = ledgerNode25('option', '', label);
+      option.value = value;
+      if (selected) option.selected = true;
+      select.append(option);
+    });
+    return select;
+  }
+
+  function ledgerField25(labelText, control, wide = false) {
+    const label = ledgerNode25('label', wide ? 'ledger-wide25' : '');
+    label.append(document.createTextNode(labelText), control);
+    return label;
+  }
+
+  function ledgerButton25(text, className = 'secondary', type = 'button', attributes = {}) {
+    const button = ledgerNode25('button', className, text);
+    button.type = type;
+    Object.entries(attributes).forEach(([name, value]) => button.setAttribute(name, String(value)));
+    return button;
+  }
+
+  function ledgerEditFormMarkup25(ledger, pots) {
+    if (!ledgerEdit25) return null;
+    const { kind, id: entryId } = ledgerEdit25;
+    if (!['incomes', 'expenses', 'transfers'].includes(kind)) { ledgerEdit25 = null; return null; }
+    const entry = ledger[kind]?.find(item => item.id === entryId);
+    if (!entry) { ledgerEdit25 = null; return null; }
+    const potSelect = (name, selected, label) => ledgerField25(label, ledgerSelect25(name,
+      pots.map(pot => ({ value: pot.id, label: pot.label, selected: pot.id === selected }))));
+    const fields = ledgerNode25('div', 'ledger-fields25');
+    fields.append(
+      ledgerField25('Bedrag (€)', ledgerInput25('amount', 'number', {
+        step: '0.01', min: '0.01', inputmode: 'decimal', value: decimalLedger25(entry.amountCents), required: true
+      })),
+      ledgerField25('Datum', ledgerInput25('date', 'date', { value: entry.date, required: true }))
+    );
+    if (kind === 'incomes') {
+      fields.append(
+        ledgerField25('Boekingsmaand', ledgerInput25('month', 'month', { value: entry.month || entry.date.slice(0, 7), required: true })),
+        ledgerField25('Persoon / bron', ledgerInput25('source', 'text', { value: entry.source || '', maxlength: '80', required: true })),
+        ledgerField25('Omschrijving', ledgerInput25('description', 'text', { value: entry.description || '', maxlength: '160' }), true)
+      );
+    } else if (kind === 'expenses') {
+      const categories = ['Boodschappen', 'Tanken', 'Vaste lasten', 'Abonnementen', 'Persoonlijk', 'Huishouden', 'Overig'];
+      fields.append(
+        ledgerField25('Categorie', ledgerSelect25('category', categories.map(category => ({
+          value: category, label: category, selected: category === entry.category
+        })))),
+        potSelect('potId', entry.potId, 'Potje'),
+        ledgerField25('Persoon (optioneel)', ledgerInput25('person', 'text', { value: entry.person || '', maxlength: '80' })),
+        ledgerField25('Omschrijving', ledgerInput25('description', 'text', {
+          value: entry.description || '', maxlength: '160', required: true
+        }), true)
+      );
+    } else {
+      fields.append(
+        potSelect('fromPotId', entry.fromPotId, 'Van potje'),
+        potSelect('toPotId', entry.toPotId, 'Naar potje'),
+        ledgerField25('Omschrijving', ledgerInput25('description', 'text', { value: entry.description || '', maxlength: '160' }), true)
+      );
+    }
+    const form = ledgerNode25('form', 'ledger-form25');
+    form.dataset.ledgerEdit = kind;
+    form.dataset.entryId = entryId;
+    form.append(ledgerNode25('h3', '', 'Boeking corrigeren'), fields);
+    const actions = ledgerNode25('div', 'button-row');
+    actions.append(
+      ledgerButton25('Wijziging controleren', 'primary', 'submit'),
+      ledgerButton25('Annuleren', 'secondary', 'button', { 'data-ledger-cancel-edit': '' })
+    );
+    form.append(actions);
+    return form;
+  }
+
+  function ledgerMarkup25() {
+    const budget = ledgerBudget25(), pots = ledgerPots25(budget), ledger = ledgerState25(budget, pots);
+    if (!ledger) {
+      const section = ledgerNode25('section', 'card');
+      const message = ledgerNode25('p', '', 'De financiële administratie is niet beschikbaar in deze browser.');
+      message.setAttribute('role', 'alert');
+      section.append(message);
+      return section;
+    }
+    const allPots = ledgerPotHistory25(ledger, pots);
+    const summary = ledgerCore25.monthSummary(ledger, ledgerMonth25, allPots);
+    const balances = summary.potBalances;
+    const allocationsForPot = potId => ledger.incomes.reduce((sum, income) =>
+      sum + (income.allocations || []).filter(item => item.potId === potId).reduce((n, item) => n + Number(item.amountCents || 0), 0), 0);
+    const monthlyPlan = [...budget.fixed.map(plannedMonthlyLedger25),
+      ...budget.houseCategories.map(item => Math.round((Number(item.amount) || 0) * 100)),
+      ...budget.goals.map(item => Math.round((Number(item.monthly) || 0) * 100)),
+      Math.round((Number(budget.investing) || 0) * 100)].reduce((sum, value) => sum + value, 0);
+    const monthResult = summary.incomeCents - summary.expenseCents;
+    const totalPotBalances = Object.values(balances).reduce((sum, value) => sum + Number(value || 0), 0);
+    const unallocated = summary.cashBalanceCents - totalPotBalances;
+    const plannedContribution = budget.incomes && Number.isFinite(Number(budget.contributionPct))
+      ? Math.round((Number(budget.incomes.Kees || 0) + Number(budget.incomes.Daphne || 0))
+        * Math.max(0, Math.min(100, Number(budget.contributionPct))) * 100 / 100)
+      : null;
+    const plannedExternal = [...budget.fixed.map(plannedMonthlyLedger25),
+      ...budget.houseCategories.map(item => Math.round((Number(item.amount) || 0) * 100))]
+      .reduce((sum, value) => sum + value, 0);
+    const savingsProposal = budget.goals.reduce((sum, goal) => sum + Math.round((Number(goal.monthly) || 0) * 100), 0);
+    const projection = ledgerMonth25 === todayISO().slice(0, 7) && plannedContribution !== null
+      ? summary.cashBalanceCents + Math.max(0, plannedContribution - summary.incomeCents)
+        - Math.max(0, plannedExternal - summary.expenseCents)
+      : null;
+    const ledgerDate = ledgerMonth25 === todayISO().slice(0, 7) ? todayISO() : `${ledgerMonth25}-01`;
+    const eligibleIncomes = ledger.incomes.filter(income => Number(income.amountCents || 0)
+      > (income.allocations || []).reduce((sum, allocation) => sum + Number(allocation.amountCents || 0), 0));
+    const section = ledgerNode25('section', 'card ledger25');
+    const heading = ledgerNode25('div', 'card-head');
+    const headingText = ledgerNode25('div');
+    headingText.append(ledgerNode25('p', 'eyebrow', 'WERKELIJKHEID · APARTE BOEKINGEN'),
+      ledgerNode25('h2', '', 'Inkomsten, uitgaven & potjessaldi'));
+    const monthInput = ledgerInput25('month', 'month', { value: ledgerMonth25 });
+    monthInput.dataset.ledgerMonth = '';
+    heading.append(headingText, ledgerField25('Maand', monthInput));
+    heading.querySelector('label').className = 'ledger-month25';
+    section.append(heading, ledgerNode25('p', 'muted',
+      'Deze administratie is aanvullend op het bestaande budgetplan. De geplande maandinleg, huisbudgetten en spaardoelen blijven ongewijzigd. Verdelingen en interne verschuivingen tellen niet als inkomsten.'));
+
+    const kpis = ledgerNode25('div', 'ledger-kpis25');
+    const kpi = (label, value, negative = false) => {
+      const item = ledgerNode25('article');
+      item.append(ledgerNode25('small', '', label),
+        ledgerNode25('b', negative ? 'ledger-negative25' : '', value === null ? '—' : moneyLedger25(value)));
+      return item;
+    };
+    kpis.append(
+      kpi('Inkomsten geboekt', summary.incomeCents),
+      kpi('Toegewezen uit inkomsten', summary.allocatedCents),
+      kpi('Werkelijk uitgegeven', summary.expenseCents),
+      kpi('Geregistreerd maandresultaat', monthResult, monthResult < 0),
+      kpi('Huishoudsaldo nu', summary.cashBalanceCents, summary.cashBalanceCents < 0),
+      kpi('Nog niet toegewezen', unallocated, unallocated < 0),
+      kpi('Indicatie einde maand', projection, projection !== null && projection < 0)
+    );
+    section.append(kpis);
+    section.append(ledgerNode25('p', 'ledger-plan25',
+      `Planning: ${moneyLedger25(monthlyPlan)} per maand (waaronder ${moneyLedger25(savingsProposal)} geplande spaardoelinleg) · Werkelijke uitgaven deze maand: ${moneyLedger25(summary.expenseCents)}. De indicatie voor deze maand gebruikt alleen het bestaande geplande huishoudinkomen en vaste/huislasten minus al geboekte bedragen; het is geen bankprognose. Eerdere maanden tonen alleen de geboekte werkelijkheid.`));
+
+    const registration = ledgerNode25('section', 'ledger-section25');
+    registration.append(ledgerNode25('h3', '', 'Registreren'));
+    const forms = ledgerNode25('div', 'ledger-forms25');
+    const addForm = (kind, title, fields, buttonText, extra) => {
+      const form = ledgerNode25('form', 'ledger-form25');
+      form.dataset.ledgerForm = kind;
+      form.append(ledgerNode25('h3', '', title));
+      const fieldGrid = ledgerNode25('div', 'ledger-fields25');
+      fields.forEach(field => fieldGrid.append(field));
+      form.append(fieldGrid);
+      if (extra) form.append(extra);
+      form.append(ledgerButton25(buttonText, 'primary', 'submit'));
+      forms.append(form);
+      return form;
+    };
+    const expenseCategories = ['Boodschappen', 'Tanken', 'Vaste lasten', 'Abonnementen', 'Persoonlijk', 'Huishouden', 'Overig'];
+    const potOptions = pots.map(pot => ({ value: pot.id, label: pot.label }));
+    const allPotOptions = allPots.map(pot => ({
+      value: pot.id, label: `${pot.label}${pot.archived ? ' · verwijderd' : ''}`
+    }));
+    const incomeFields = [
+      ledgerField25('Bedrag (€)', ledgerInput25('amount', 'number', { inputmode: 'decimal', min: '0.01', step: '0.01', required: true })),
+      ledgerField25('Datum', ledgerInput25('date', 'date', { value: ledgerDate, required: true })),
+      ledgerField25('Boekingsmaand', ledgerInput25('month', 'month', { value: ledgerMonth25, required: true })),
+      ledgerField25('Type', ledgerSelect25('type', [
+        { value: 'salary', label: 'Salaris' }, { value: 'benefit', label: 'Toeslag' }, { value: 'other', label: 'Overige inkomsten' }
+      ], false)),
+      ledgerField25('Persoon / bron', ledgerInput25('source', 'text', { placeholder: 'Kees, Daphne, toeslag…', maxlength: '80', required: true })),
+      ledgerField25('Omschrijving (optioneel)', ledgerInput25('description', 'text', { maxlength: '160' }))
+    ];
+    addForm('income', 'Inkomen toevoegen', incomeFields, 'Inkomstenboeking controleren');
+
+    const allocationForm = ledgerNode25('form', 'ledger-form25');
+    allocationForm.dataset.ledgerForm = 'allocation';
+    allocationForm.append(ledgerNode25('h3', '', 'Inkomen verdelen'));
+    if (eligibleIncomes.length) {
+      const allocationFields = ledgerNode25('div', 'ledger-fields25');
+      allocationFields.append(
+        ledgerField25('Inkomstenboeking', ledgerSelect25('incomeId', eligibleIncomes.map(income => {
+          const allocated = (income.allocations || []).reduce((sum, item) => sum + Number(item.amountCents || 0), 0);
+          return {
+            value: income.id,
+            label: `${income.source} · ${income.date} · nog ${moneyLedger25(Number(income.amountCents || 0) - allocated)}`
+          };
+        }))),
+        ledgerField25('Potje', ledgerSelect25('potId', potOptions)),
+        ledgerField25('Bedrag (€)', ledgerInput25('amount', 'number', { inputmode: 'decimal', min: '0.01', step: '0.01', required: true }))
+      );
+      allocationForm.append(allocationFields, ledgerButton25('Verdeling controleren', 'primary', 'submit'));
+    } else {
+      allocationForm.append(ledgerNode25('p', 'muted', 'Registreer eerst inkomsten met een nog niet verdeeld bedrag.'));
+    }
+    forms.append(allocationForm);
+
+    addForm('expense', 'Werkelijke uitgave', [
+      ledgerField25('Bedrag (€)', ledgerInput25('amount', 'number', { inputmode: 'decimal', min: '0.01', step: '0.01', required: true })),
+      ledgerField25('Datum', ledgerInput25('date', 'date', { value: ledgerDate, required: true })),
+      ledgerField25('Categorie', ledgerSelect25('category', expenseCategories.map(category => ({ value: category, label: category })), false)),
+      ledgerField25('Potje', ledgerSelect25('potId', potOptions)),
+      ledgerField25('Persoon (optioneel)', ledgerInput25('person', 'text', { maxlength: '80' })),
+      ledgerField25('Omschrijving', ledgerInput25('description', 'text', { maxlength: '160', required: true }))
+    ], 'Uitgave controleren');
+
+    addForm('transfer', 'Geld tussen potjes verschuiven', [
+      ledgerField25('Van potje', ledgerSelect25('fromPotId', allPotOptions)),
+      ledgerField25('Naar potje', ledgerSelect25('toPotId', allPotOptions)),
+      ledgerField25('Bedrag (€)', ledgerInput25('amount', 'number', { inputmode: 'decimal', min: '0.01', step: '0.01', required: true })),
+      ledgerField25('Datum', ledgerInput25('date', 'date', { value: ledgerDate, required: true })),
+      ledgerField25('Omschrijving', ledgerInput25('description', 'text', { maxlength: '160' }), true)
+    ], 'Verschuiving controleren', ledgerNode25('p', 'small-note',
+      'Ook verwijderde potjes met resterend saldo blijven bereikbaar. Vooraf wordt de verschuiving getoond en bevestigd; het huishoudsaldo verandert niet.'));
+    registration.append(forms);
+    section.append(registration);
+
+    const selectedEdit = ledgerEditFormMarkup25(ledger, allPots);
+    if (selectedEdit) section.append(selectedEdit);
+
+    const historySection = (title, content) => {
+      const block = ledgerNode25('section', 'ledger-section25');
+      block.append(ledgerNode25('h3', '', title), content);
+      return block;
+    };
+    const potSection = ledgerNode25('section', 'ledger-section25');
+    const potHeading = ledgerNode25('div', 'card-head');
+    potHeading.append(ledgerNode25('h3', '', 'Potjes · saldo nu'),
+      ledgerNode25('span', 'small-note', 'Bestaande maandbudgetten blijven planning.'));
+    potSection.append(potHeading);
+    const potRows = ledgerNode25('div');
+    allPots.forEach(pot => {
+      const balance = Number(balances[pot.id] || 0);
+      const assigned = Number(ledger.openingBalances[pot.id] || 0) + allocationsForPot(pot.id);
+      const spent = summary.expenses.filter(item => item.potId === pot.id)
+        .reduce((sum, item) => sum + Number(item.amountCents || 0), 0);
+      const row = ledgerNode25('article', `ledger-pot25${balance < 0 ? ' is-negative' : ''}${pot.archived ? ' is-archived' : ''}`);
+      const name = ledgerNode25('div');
+      name.append(ledgerNode25('h3', '', pot.label), ledgerNode25('small', '',
+        pot.archived ? 'Verwijderd potje · verschuif het saldo naar een actief potje'
+          : pot.kind === 'goal' ? 'Spaardoel' : pot.kind === 'fixed' ? 'Vaste last' : 'Huisbudget'));
+      row.append(name);
+      const metric = (label, value) => {
+        const item = ledgerNode25('span');
+        item.append(ledgerNode25('small', '', label), ledgerNode25('b', '', moneyLedger25(value)));
+        return item;
+      };
+      row.append(
+        metric(pot.archived ? 'Begroot toen verwijderd' : 'Begroot / mnd', pot.plannedCents),
+        metric('Toegewezen totaal', assigned),
+        metric('Uitgegeven deze maand', spent),
+        metric('Saldo nu', balance)
+      );
+      potRows.append(row);
+    });
+    potSection.append(allPots.length ? potRows
+      : ledgerNode25('p', 'muted', 'Voeg eerst potjes of spaardoelen toe in de bestaande budgetplanning.'));
+    section.append(potSection);
+
+    const incomeRows = ledgerNode25('div', 'ledger-history25');
+    summary.incomes.forEach(income => {
+      const allocated = (income.allocations || []).reduce((sum, allocation) => sum + Number(allocation.amountCents || 0), 0);
+      const row = ledgerNode25('article', 'ledger-entry25');
+      const details = ledgerNode25('div');
+      const type = income.type === 'salary' ? 'Salaris' : income.type === 'benefit' ? 'Toeslag' : 'Overige inkomsten';
+      details.append(ledgerNode25('strong', '', `${income.source} · ${type}`),
+        ledgerNode25('small', '', `${income.date} · maand ${income.month || income.date.slice(0, 7)}${income.description ? ` · ${income.description}` : ''}`));
+      if (income.allocations?.length) {
+        const allocationList = ledgerNode25('ul');
+        income.allocations.forEach(allocation => {
+          const pot = allPots.find(item => item.id === allocation.potId);
+          const item = ledgerNode25('li', '', `${pot?.label || 'Verwijderd potje'} · ${moneyLedger25(allocation.amountCents)} `);
+          item.append(ledgerButton25('Verwijderen', 'text-btn', 'button', {
+            'data-ledger-delete-allocation': income.id,
+            'data-allocation-id': allocation.id
+          }));
+          allocationList.append(item);
+        });
+        details.append(allocationList);
+      }
+      details.append(ledgerNode25('small', '', `Nog te verdelen: ${moneyLedger25(Number(income.amountCents || 0) - allocated)}`));
+      const actions = ledgerNode25('span', 'ledger-actions25');
+      actions.append(
+        ledgerButton25('Corrigeren', 'secondary', 'button', { 'data-ledger-edit-kind': 'incomes', 'data-entry-id': income.id }),
+        ledgerButton25('Verwijderen', 'secondary', 'button', { 'data-ledger-delete-kind': 'incomes', 'data-entry-id': income.id })
+      );
+      row.append(details, ledgerNode25('b', '', moneyLedger25(income.amountCents)), actions);
+      incomeRows.append(row);
+    });
+    if (!summary.incomes.length) incomeRows.append(ledgerNode25('p', 'muted', 'Geen inkomsten geboekt voor deze maand.'));
+    section.append(historySection(`Inkomsten van ${ledgerMonth25}`, incomeRows));
+
+    const expenseRows = ledgerNode25('div', 'ledger-history25');
+    summary.expenses.forEach(expense => {
+      const pot = allPots.find(item => item.id === expense.potId);
+      const details = ledgerNode25('div');
+      details.append(ledgerNode25('strong', '', expense.description),
+        ledgerNode25('small', '', `${expense.date} · ${expense.category} · ${pot?.label || 'Verwijderd potje'}${expense.person ? ` · ${expense.person}` : ''}`));
+      const actions = ledgerNode25('span', 'ledger-actions25');
+      actions.append(
+        ledgerButton25('Corrigeren', 'secondary', 'button', { 'data-ledger-edit-kind': 'expenses', 'data-entry-id': expense.id }),
+        ledgerButton25('Verwijderen', 'secondary', 'button', { 'data-ledger-delete-kind': 'expenses', 'data-entry-id': expense.id })
+      );
+      const row = ledgerNode25('article', 'ledger-entry25');
+      row.append(details, ledgerNode25('b', '', `− ${moneyLedger25(expense.amountCents)}`), actions);
+      expenseRows.append(row);
+    });
+    if (!summary.expenses.length) expenseRows.append(ledgerNode25('p', 'muted', 'Geen uitgaven geboekt voor deze maand.'));
+    section.append(historySection(`Uitgaven van ${ledgerMonth25}`, expenseRows));
+
+    const transferRows = ledgerNode25('div', 'ledger-history25');
+    summary.transfers.forEach(transfer => {
+      const from = allPots.find(item => item.id === transfer.fromPotId);
+      const to = allPots.find(item => item.id === transfer.toPotId);
+      const details = ledgerNode25('div');
+      details.append(ledgerNode25('strong', '', `${from?.label || 'Verwijderd potje'} → ${to?.label || 'Verwijderd potje'}`),
+        ledgerNode25('small', '', `${transfer.date}${transfer.description ? ` · ${transfer.description}` : ''}`));
+      const actions = ledgerNode25('span', 'ledger-actions25');
+      actions.append(
+        ledgerButton25('Corrigeren', 'secondary', 'button', { 'data-ledger-edit-kind': 'transfers', 'data-entry-id': transfer.id }),
+        ledgerButton25('Verwijderen', 'secondary', 'button', { 'data-ledger-delete-kind': 'transfers', 'data-entry-id': transfer.id })
+      );
+      const row = ledgerNode25('article', 'ledger-entry25');
+      row.append(details, ledgerNode25('b', '', moneyLedger25(transfer.amountCents)), actions);
+      transferRows.append(row);
+    });
+    if (!summary.transfers.length) transferRows.append(ledgerNode25('p', 'muted', 'Geen verschuivingen geboekt voor deze maand.'));
+    section.append(historySection(`Verschuivingen van ${ledgerMonth25}`, transferRows));
+    section.append(ledgerNode25('p', 'small-note',
+      'Boekingen worden in de bestaande huishoudopslag bewaard en via de huidige versleutelde huishoudsynchronisatie gedeeld. Dit registreert bedragen; het voert geen bankbetalingen uit.'));
+    return section;
+  }
+
+  let offerQuery25 = String(data.offerCurrentQuery25 || '');
+  let offerLoading25 = false;
+  let offerError25 = '';
+  let offerSuccess25 = '';
+  let offerFavoritesOnly25 = false;
+  let offerFilters25 = { category: '', sort: 'ending' };
+  let offerSelectedStores25 = new Set();
+  let offerRequestController25 = null;
+  let offerGroup25 = '';
+  let offerCategoryGroups25 = null;
+  let offerCategoryNotice25 = '';
+  let offerCategoryLoading25 = false;
+  let offerHasMore25 = false;
+  let offerPage25 = 1;
+  const OFFER_CATEGORY_TTL25 = 6 * 60 * 60 * 1000;
+  const offerRequestGuard25 = offerCore25().createLatestRequestGuard();
+
+  function offerCore25() { return window.SamenThuisOffers; }
+  function resetOfferFilters25() {
+    offerSelectedStores25 = new Set(offerCore25().SUPPORTED_STORES);
+    offerFilters25 = { category: '', sort: 'ending' };
+    offerFavoritesOnly25 = false;
+    offerGroup25 = '';
+  }
+  function offerGroups25() {
+    const core = offerCore25();
+    if (!offerCategoryGroups25) {
+      const cached = data.offerCategoryCache25;
+      offerCategoryGroups25 = core.buildCategoryGroups(cached?.categories?.length ? cached.categories : core.KNOWN_CATEGORIES);
+      if (!cached?.categories?.length) offerCategoryNotice25 = 'Standaard categorie-indeling (de actuele lijst is nog niet opgehaald).';
+      const age = cached?.checkedAt ? Date.now() - Date.parse(cached.checkedAt) : Infinity;
+      if (!(age < OFFER_CATEGORY_TTL25)) loadOfferCategories25();
+    }
+    return offerCategoryGroups25;
+  }
+  async function loadOfferCategories25(force = false) {
+    if (offerCategoryLoading25) return;
+    offerCategoryLoading25 = true;
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), 10000) : null;
+    try {
+      const base = String(syncConfig.projectUrl || DEFAULT_PROJECT_URL).replace(/\/$/, '');
+      const result = await offerCore25().fetchCategories({
+        url: `${base}/functions/v1/grocery-prices`,
+        headers: { apikey: DEFAULT_PUBLISHABLE_KEY, Authorization: 'Bearer ' + DEFAULT_PUBLISHABLE_KEY },
+        signal: controller?.signal
+      });
+      data.offerCategoryCache25 = { categories: result.categories, checkedAt: result.checkedAt };
+      offerCategoryGroups25 = offerCore25().buildCategoryGroups(result.categories);
+      offerCategoryNotice25 = '';
+      save({ touch: false });
+    } catch (error) {
+      // Geldige (gecachte) gegevens blijven staan; de oorzaak wordt gelogd (geen secrets).
+      console.warn('PrijsProfeet-categorieën vernieuwen mislukt:', error?.name === 'AbortError' ? 'time-out' : (error?.message || 'onbekende fout'));
+      if (!data.offerCategoryCache25?.categories?.length) offerCategoryNotice25 = 'Categorieën konden niet worden vernieuwd; de standaardindeling wordt gebruikt.';
+    } finally {
+      if (timer) clearTimeout(timer);
+      offerCategoryLoading25 = false;
+      if (current === 'offers') render();
+    }
+  }
+  resetOfferFilters25();
+  function offerList25() {
+    const core = offerCore25();
+    const active = Array.isArray(data.offers25) ? data.offers25 : [];
+    const archived = Array.isArray(data.offerArchive25) ? data.offerArchive25 : [];
+    const scheduled = Array.isArray(data.offerScheduled25) ? data.offerScheduled25 : [];
+    const groups = offerGroups25();
+    const supported = core.filterSupportedOffers([...active, ...archived, ...scheduled])
+      .map(item => core.applyOfficialCategory(item, groups));
+    const partition = core.partition(core.dedupe(supported), new Date());
+    const keepArchive = data.settings?.archiveExpiredOffers !== false;
+    const nextActive = core.dedupe(partition.active);
+    const nextArchive = keepArchive ? core.dedupe(partition.archive) : [];
+    const nextScheduled = core.dedupe(partition.upcoming);
+    if (JSON.stringify([active, archived, scheduled]) !== JSON.stringify([nextActive, nextArchive, nextScheduled])) {
+      data.offers25 = nextActive;
+      data.offerArchive25 = nextArchive;
+      data.offerScheduled25 = nextScheduled;
+      save({ touch: false });
+    }
+    return { active: nextActive, archived: nextArchive, scheduled: nextScheduled };
+  }
+  function offerDate25(value) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value || ''))) return '';
+    return new Date(`${value}T12:00:00`).toLocaleDateString('nl-NL', { day: 'numeric', month: 'short', year: 'numeric' });
+  }
+  function validOfferUrl25(value) {
+    try {
+      const url = new URL(value);
+      return ['http:', 'https:'].includes(url.protocol) ? url.href : '';
+    } catch (_) { return ''; }
+  }
+  function offerMoney25(value, currency = 'EUR') {
+    const amount = Number(value);
+    if (value == null || value === '' || !Number.isFinite(amount) || amount < 0) return '';
+    try { return new Intl.NumberFormat('nl-NL', { style: 'currency', currency: String(currency || 'EUR').toUpperCase() }).format(amount); }
+    catch (_) { return ''; }
+  }
+  function renderOfferCard25(offer, archived = false) {
+    const core = offerCore25();
+    const key = core.key(offer);
+    const isFavorite = (data.favoriteOffers25 || []).includes(key);
+    const sourceUrl = validOfferUrl25(offer.sourceUrl || '');
+    const imageUrl = validOfferUrl25(offer.imageUrl || '');
+    const price = offerMoney25(offer.price, offer.currency);
+    const reliableOriginal = Number.isFinite(Number(offer.originalPrice)) && Number(offer.originalPrice) > Number(offer.price);
+    const originalPrice = reliableOriginal ? offerMoney25(offer.originalPrice, offer.currency) : '';
+    const percent = core.offerDiscountPercent(offer);
+    const savingsAmount = reliableOriginal && Number.isFinite(Number(offer.savingsAmount))
+      && Number(offer.savingsAmount) > 0
+      && Math.abs(Number(offer.savingsAmount) - (Number(offer.originalPrice) - Number(offer.price))) <= 0.01
+      ? offerMoney25(offer.savingsAmount, offer.currency) : '';
+    const packageDetails = [offer.packaging || offer.size, offer.contents].filter(Boolean).filter((value, index, all) => all.indexOf(value) === index).join(' · ');
+    const promotion = [offer.promotionType, offer.promotionText].filter((value, index, all) => value && all.indexOf(value) === index).join(' · ');
+    const estimated = offer.validUntilEstimated === true ? ' (geschat)' : '';
+    const dates = offer.validFrom && offer.validTo
+      ? `Geldig van ${offerDate25(offer.validFrom)} t/m ${offerDate25(offer.validTo)}${estimated}`
+      : offer.validFrom ? `Geldig vanaf ${offerDate25(offer.validFrom)}`
+        : offer.validTo ? `Geldig t/m ${offerDate25(offer.validTo)}${estimated}` : '';
+    const multiBuy = offer.multiBuyQuantity > 1 && offer.multiBuyPrice != null && offerMoney25(offer.multiBuyPrice, offer.currency)
+      ? `${offer.multiBuyQuantity} voor ${offerMoney25(offer.multiBuyPrice, offer.currency)}` : '';
+    const extras = [multiBuy, offer.inStoreOnly ? 'Alleen in de winkel' : '', offer.onlineOnly ? 'Alleen online' : '',
+      offer.loyaltyPrice != null && offerMoney25(offer.loyaltyPrice, offer.currency) ? `${offer.loyaltyProgram || 'Klantenkaart'}-prijs ${offerMoney25(offer.loyaltyPrice, offer.currency)}` : '',
+      offer.maxPerCustomer ? `Max. ${offer.maxPerCustomer} per klant` : ''].filter(Boolean).join(' · ');
+    const original = sourceUrl ? `<a href="${esc(sourceUrl)}" target="_blank" rel="noopener noreferrer">Product bij ${esc(offer.store || 'de winkel')}</a>` : '';
+    return `<article class="card offer-card25">
+      <div class="offer-card-head25"><div><p class="eyebrow">${esc(offer.store || 'Supermarkt')}${offer.brand ? ` · ${esc(offer.brand)}` : ''}${offer.ean ? ` · EAN ${esc(offer.ean)}` : ''}</p><h2>${esc(offer.name)}</h2>${packageDetails ? `<p class="muted offer-package25">${esc(packageDetails)}</p>` : ''}</div>${price ? `<strong class="offer-price25">${esc(price)}</strong>` : ''}</div>
+      ${imageUrl ? `<img class="offer-image25" src="${esc(imageUrl)}" alt="${esc(offer.name)}" loading="lazy">` : ''}
+      ${(originalPrice || percent != null || savingsAmount) ? `<p class="offer-discount25">${originalPrice ? `<span>Was <del>${esc(originalPrice)}</del></span>` : ''}${percent != null ? `<strong>${Math.round(percent)}% korting</strong>` : ''}${savingsAmount ? `<span>${esc(savingsAmount)} korting</span>` : ''}</p>` : ''}
+      ${core.formatUnitPrice(offer) ? `<p class="offer-unit-price25">${esc(core.formatUnitPrice(offer))}</p>` : ''}
+      ${promotion ? `<p class="offer-promotion25">${esc(promotion)}</p>` : ''}
+      ${extras ? `<p class="offer-promotion25">${esc(extras)}</p>` : ''}
+      ${offer.deliveryInfo ? `<p class="muted">${esc(offer.deliveryInfo)}</p>` : ''}
+      ${dates || offer.category ? `<p class="muted">${dates ? esc(dates) : ''}${dates && offer.category ? ' · ' : ''}${offer.category ? `Categorie: ${esc(offer.category)}` : ''}</p>` : ''}
+      <p class="muted">Bron: ${esc(offer.source || 'PrijsProfeet')}</p>
+      <div class="button-row">${original}<button type="button" class="secondary" data-offer-favorite="${esc(key)}">${isFavorite ? '★ Favoriet' : '☆ Favoriet'}</button>${archived ? '' : `<button type="button" class="primary" data-offer-grocery="${esc(key)}">＋ Voeg toe aan boodschappenlijst</button>`}</div></article>`;
+  }
+  function renderOffers25() {
+    const { active, archived, scheduled } = offerQuery25
+      ? offerList25()
+      : { active: [], archived: [], scheduled: [] };
+    const favorites = Array.isArray(data.favoriteOffers25) ? data.favoriteOffers25 : [];
+    const queryCache = data.offerSearchCache25 && typeof data.offerSearchCache25 === 'object' ? data.offerSearchCache25 : {};
+    const checkedAt = queryCache[offerQuery25]?.checkedAt || '';
+    const core = offerCore25();
+    const groups = offerGroups25();
+    const selectedGroup = groups.find(g => g.id === offerGroup25) || null;
+    const selectedCategory = offerFilters25.category ? core.categoryBySlug(groups, offerFilters25.category) : null;
+    const matchingFilters = {
+      stores: [...offerSelectedStores25],
+      favoritesOnly: offerFavoritesOnly25,
+      favorites,
+      categories: GROCERY_CATEGORIES
+    };
+    const selection = { group: offerGroup25, categorySlug: offerFilters25.category };
+    const filtered = active.filter(item => core.matchesOfferFilters(item, matchingFilters) && core.matchesCategorySelection(item, selection));
+    const sorters = {
+      price: (a, b) => Number(a.price) - Number(b.price),
+      discount: (a, b) => Number(b.discountPercent || 0) - Number(a.discountPercent || 0),
+      ending: (a, b) => String(a.validTo || '9999-12-31').localeCompare(String(b.validTo || '9999-12-31'))
+    };
+    filtered.sort(sorters[offerFilters25.sort] || sorters.ending);
+    const emptyMessage = !active.length
+      ? offerError25 ? '' : offerQuery25 ? 'Geen actuele aanbiedingen gevonden voor deze zoekopdracht.' : 'Zoek op productnaam of merk om actuele aanbiedingen op te halen.'
+      : offerSelectedStores25.size === 0
+        ? 'Selecteer ten minste één supermarkt om aanbiedingen te bekijken.'
+        : (offerFilters25.category || offerGroup25) && !filtered.length
+          ? `Geen aanbiedingen in ${selectedCategory ? 'de categorie ' + selectedCategory.name : 'de hoofdgroep ' + (selectedGroup?.name || '')} voor de geselecteerde supermarkten.`
+          : offerFavoritesOnly25 && !filtered.length
+            ? 'Geen favoriete aanbiedingen voldoen aan deze filters.'
+            : 'Geen aanbiedingen voldoen aan deze filters.';
+    return `<div class="offers-page25"><section class="card offers-toolbar25"><div><p class="eyebrow">ACTUELE SUPERMARKTAANBIEDINGEN</p><h2>Zoek in PrijsProfeet</h2></div>
+      <form class="offer-search25" data-offer-search><label class="field">Product of merk<input name="query" maxlength="100" value="${esc(offerQuery25)}" placeholder="Bijvoorbeeld koffie of wasmiddel"></label><button class="primary" type="submit" ${offerLoading25 ? 'disabled' : ''}>${offerLoading25 ? 'Laden…' : 'Aanbiedingen zoeken'}</button></form>
+      <p class="muted">Zoeken via de bestaande Supabase Edge Function. Bron: <a href="https://www.prijsprofeet.nl" target="_blank" rel="noopener noreferrer">PrijsProfeet</a>. Er worden geen aanbiedingen verzonnen.</p>
+      ${offerError25 ? `<p class="notice error" role="alert">${esc(offerError25)}</p>` : ''}
+      ${checkedAt ? `<p class="small-note">Laatst opgehaald: ${esc(new Date(checkedAt).toLocaleString('nl-NL'))}</p>` : ''}
+      ${offerLoading25 ? '<p role="status">Aanbiedingen ophalen…</p>' : ''}
+      ${offerSuccess25 && !offerLoading25 && !offerError25 ? `<p class="notice" role="status">${esc(offerSuccess25)}</p>` : ''}
+    </section>
+    <section class="card"><div class="offer-filters25">
+      <fieldset class="offer-store-filter25"><legend>Supermarkten</legend><div class="offer-store-options25">${offerCore25().SUPPORTED_STORES.map(store => `<label class="offer-store-choice25 ${offerSelectedStores25.has(store) ? 'is-selected' : ''}"><input type="checkbox" data-offer-store="${esc(store)}" ${offerSelectedStores25.has(store) ? 'checked' : ''}>${esc(store)}</label>`).join('')}</div><button type="button" class="text-btn" data-offer-filters-reset>Standaardfilters herstellen</button></fieldset>
+      <div class="offer-category-filter25 cat-wrap25"><span class="offer-category-title25">Categorieën</span>
+        <div class="offer-chip-row25" role="group" aria-label="Hoofdgroepen"><button type="button" class="offer-chip25 ${!offerGroup25 && !offerFilters25.category ? 'is-selected' : ''}" data-offer-group="" aria-pressed="${!offerGroup25 && !offerFilters25.category}">Alle categorieën</button>${groups.map(g => `<button type="button" class="offer-chip25 ${offerGroup25 === g.id ? 'is-selected' : ''}" data-offer-group="${esc(g.id)}" aria-pressed="${offerGroup25 === g.id}">${esc(g.name)}</button>`).join('')}</div>
+        ${selectedGroup ? `<div class="offer-chip-row25" role="group" aria-label="Categorieën in ${esc(selectedGroup.name)}">${selectedGroup.categories.map(c => `<button type="button" class="offer-chip25 offer-chip-sub25 ${offerFilters25.category === c.slug ? 'is-selected' : ''}" data-offer-category="${esc(c.slug)}" aria-pressed="${offerFilters25.category === c.slug}" title="${c.count != null ? `${esc(c.name)} · ${c.count} producten volgens PrijsProfeet` : esc(c.name)}">${esc(c.name)}</button>`).join('')}</div>` : ''}
+        ${selectedCategory ? `<p class="small-note">Geselecteerd: <strong>${esc(selectedCategory.name)}</strong>${selectedGroup ? ` (${esc(selectedGroup.name)})` : ''}${offerQuery25 ? '' : ' — vul een zoekterm in om deze categorie te doorzoeken'} <button type="button" class="text-btn" data-offer-group="">Terug naar alle categorieën</button></p>` : ''}
+        ${offerCategoryNotice25 ? `<p class="small-note">${esc(offerCategoryNotice25)}</p>` : ''}
+      </div>
+      <label>Sorteren op<select data-offer-filter="sort"><option value="ending" ${offerFilters25.sort === 'ending' ? 'selected' : ''}>Einddatum</option><option value="price" ${offerFilters25.sort === 'price' ? 'selected' : ''}>Prijs</option><option value="discount" ${offerFilters25.sort === 'discount' ? 'selected' : ''}>Korting</option></select></label>
+      <label class="offer-favorite-filter25"><input type="checkbox" data-offer-favorites ${offerFavoritesOnly25 ? 'checked' : ''}> Favorieten</label>
+      <label class="offer-favorite-filter25"><input type="checkbox" data-offer-archive ${data.settings?.archiveExpiredOffers !== false ? 'checked' : ''}> Verlopen aanbiedingen archiveren</label>
+    </div></section>
+    <div class="offers-list25">${filtered.map(item => renderOfferCard25(item)).join('') || (!offerError25 && !offerLoading25 ? `<section class="card"><p class="muted">${esc(emptyMessage)}</p></section>` : '')}</div>
+    ${offerHasMore25 && !offerLoading25 ? '<div class="button-row"><button type="button" class="secondary" data-offer-more>Meer resultaten laden</button></div>' : ''}
+    ${archived.length ? `<details class="card offer-archive25"><summary>Archief verlopen aanbiedingen (${archived.length})</summary><div class="offers-list25">${archived.map(item => renderOfferCard25(item, true)).join('')}</div></details>` : ''}
+    ${scheduled.length ? `<details class="card offer-archive25"><summary>Binnenkort geldig (${scheduled.length})</summary><div class="offers-list25">${scheduled.map(item => renderOfferCard25(item, true)).join('')}</div></details>` : ''}
+    <p class="small-note">Aanbiedingen kunnen wijzigen. Controleer de geldigheid en prijs bij de oorspronkelijke bron voordat je koopt.</p></div>`;
+  }
+  function setOfferResults25(offers) {
+    const core = offerCore25();
+    const groups = offerGroups25();
+    const supported = core.filterSupportedOffers(offers).map(item => core.applyOfficialCategory(item, groups));
+    const partition = core.partition(core.dedupe(supported), new Date());
+    data.offers25 = partition.active;
+    data.offerScheduled25 = partition.upcoming;
+    data.offerArchive25 = data.settings?.archiveExpiredOffers === false ? [] : partition.archive;
+  }
+  async function searchOffers25(query, { append = false } = {}) {
+    const requestToken = offerRequestGuard25.begin();
+    offerRequestController25?.abort();
+    offerRequestController25 = null;
+    const term = String(query || '').trim();
+    offerQuery25 = term;
+    data.offerCurrentQuery25 = term;
+    offerError25 = '';
+    offerSuccess25 = '';
+    const categorySlug = offerFilters25.category;
+    const page = append ? offerPage25 + 1 : 1;
+    const previous = append ? [...(data.offers25 || [])] : [];
+    if (!append) { data.offers25 = []; offerHasMore25 = false; offerPage25 = 1; }
+    data.offerArchive25 = append ? data.offerArchive25 : [];
+    data.offerScheduled25 = append ? data.offerScheduled25 : [];
+    offerLoading25 = false;
+    save({ touch: false });
+    if (!term) {
+      offerError25 = 'Vul een productnaam of merk in om actuele aanbiedingen te zoeken.';
+      render();
+      return;
+    }
+    const cache = data.offerSearchCache25 && typeof data.offerSearchCache25 === 'object' ? data.offerSearchCache25 : {};
+    const cacheKey = categorySlug ? `${term}\u0001${categorySlug}` : term;
+    const cached = append ? null : cache[cacheKey];
+    if (cached?.checkedAt && Date.now() - Date.parse(cached.checkedAt) < 20 * 60 * 1000) {
+      setOfferResults25(cached.offers || []);
+      offerHasMore25 = cached.hasMore === true;
+      offerSuccess25 = `${data.offers25.length} actuele aanbiedingen gevonden voor “${term}”.`;
+      save({ touch: false });
+      render();
+      return;
+    }
+    offerLoading25 = true;
+    render();
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    offerRequestController25 = controller;
+    const timer = controller ? setTimeout(() => controller.abort(), 12000) : null;
+    try {
+      const base = String(syncConfig.projectUrl || DEFAULT_PROJECT_URL).replace(/\/$/, '');
+      const result = await offerCore25().fetchOffers({
+        query: term,
+        category: categorySlug,
+        page,
+        url: `${base}/functions/v1/grocery-prices`,
+        headers: { apikey: DEFAULT_PUBLISHABLE_KEY, Authorization: 'Bearer ' + DEFAULT_PUBLISHABLE_KEY },
+        signal: controller?.signal
+      });
+      if (!offerRequestGuard25.isCurrent(requestToken)) return;
+      const groups = offerGroups25();
+      const fetched = result.offers.map(item => offerCore25().applyOfficialCategory(item, groups));
+      const offers = append ? offerCore25().mergeOffers(previous, fetched) : fetched;
+      setOfferResults25(offers);
+      offerPage25 = page;
+      offerHasMore25 = result.hasMore === true;
+      data.offerSearchCache25 = { ...cache, [cacheKey]: { offers, hasMore: offerHasMore25, checkedAt: result.checkedAt } };
+      const cacheTerms = Object.keys(data.offerSearchCache25);
+      if (cacheTerms.length > 20) cacheTerms.slice(0, cacheTerms.length - 20).forEach(key => delete data.offerSearchCache25[key]);
+      offerError25 = '';
+      offerSuccess25 = `${data.offers25.length} actuele aanbiedingen gevonden voor “${term}”.`;
+      save({ touch: false });
+    } catch (error) {
+      if (!offerRequestGuard25.isCurrent(requestToken)) return;
+      if (append) { setOfferResults25(previous); }
+      offerError25 = error.name === 'AbortError'
+        ? 'De aanvraag duurde te lang. Probeer het opnieuw.'
+        : `${error.message || 'Aanbiedingen zijn tijdelijk niet beschikbaar.'} De Edge Function grocery-prices moet actief zijn; er is geen actuele aanbieding geladen.`;
+    } finally {
+      if (timer) clearTimeout(timer);
+      if (offerRequestGuard25.isCurrent(requestToken)) {
+        offerLoading25 = false;
+        offerRequestController25 = null;
+        if (current === 'offers') render();
+      }
+    }
+  }
+
+  let editingCollection25 = null;
+  function collectionItems25(name) {
+    if (!Array.isArray(data[name])) data[name] = [];
+    else if (data[name].some(item => !item || typeof item !== 'object' || Array.isArray(item))) {
+      data[name] = data[name].filter(item => item && typeof item === 'object' && !Array.isArray(item));
+    }
+    return data[name];
+  }
+
+  function safeLink25(value) {
+    try {
+      const url = new URL(value, location.href);
+      return ['http:', 'https:'].includes(url.protocol) ? url.href : '';
+    } catch (_) { return ''; }
+  }
+
+  function renderCollection25(name) {
+    const tasks = name === 'tasks';
+    const label = tasks ? 'Taak' : 'Programma';
+    const items = collectionItems25(name);
+    const old = editingCollection25?.collection === name
+      ? items.find(item => item.id === editingCollection25.id) || null : null;
+    const form = tasks
+      ? `<label class="field">Taak<input name="title" maxlength="120" value="${esc(old?.title || '')}" placeholder="Bijv. vuilnis buitenzetten" required></label>
+        <label class="field">Categorie<input name="category" maxlength="50" value="${esc(old?.category || '')}" placeholder="Bijv. Huishouden"></label>
+        <label class="field">Voor wie?<select name="person">${['Samen', 'Kees', 'Daphne'].map(person => `<option ${old?.person === person ? 'selected' : ''}>${person}</option>`).join('')}</select></label>
+        <label class="field">Uiterste datum<input name="due" type="date" value="${esc(old?.due || '')}"></label>`
+      : `<label class="field">Naam<input name="title" maxlength="120" value="${esc(old?.title || '')}" placeholder="Bijv. zwemles of concert" required></label>
+        <label class="field">Soort<input name="category" maxlength="50" value="${esc(old?.category || '')}" placeholder="Bijv. Sport, cultuur of tv"></label>
+        <label class="field">Datum<input name="date" type="date" value="${esc(old?.date || '')}"></label>
+        <label class="field">Link (optioneel)<input name="url" type="url" maxlength="500" value="${esc(old?.url || '')}" placeholder="https://…"></label>
+        <label class="field">Notitie<textarea name="note" maxlength="500">${esc(old?.note || '')}</textarea></label>`;
+    const ordered = [...items].sort((a, b) => Number(Boolean(a.done)) - Number(Boolean(b.done))
+      || String(a.due || a.date || '').localeCompare(String(b.due || b.date || '')));
+    const rows = ordered.map(item => {
+      const detail = tasks
+        ? [item.category, item.person, item.due && `Uiterlijk ${item.due}`].filter(Boolean).join(' · ')
+        : [item.category, item.date, item.note].filter(Boolean).join(' · ');
+      const link = !tasks && safeLink25(item.url)
+        ? `<a href="${esc(safeLink25(item.url))}" target="_blank" rel="noopener noreferrer">Open link</a>` : '';
+      return `<article class="card collection-item25 ${item.done ? 'is-done' : ''}"><div><h2>${esc(item.title || label)}</h2><p class="muted">${esc(detail || (item.done ? 'Afgerond' : 'Nog geen details'))}</p>${link}</div><div class="button-row"><button type="button" class="secondary" data-collection-toggle="${name}" data-item-id="${esc(item.id)}">${item.done ? 'Opnieuw openen' : 'Afronden'}</button><button type="button" class="secondary" data-collection-edit="${name}" data-item-id="${esc(item.id)}">Bewerken</button><button type="button" class="secondary" data-collection-delete="${name}" data-item-id="${esc(item.id)}">Verwijderen</button></div></article>`;
+    }).join('');
+    const heading = tasks ? 'Taken' : "Programma's";
+    return `<div class="collection-page25"><section class="card settings-card"><div class="card-head"><div><p class="eyebrow">SAMEN THUIS</p><h2>${heading}</h2></div></div><form class="form-grid compact-form" data-collection-form="${name}">${form}<div class="button-row"><button class="primary" type="submit">${old ? 'Wijzigingen opslaan' : `${label} toevoegen`}</button>${old ? '<button class="secondary" type="button" data-collection-cancel>Annuleren</button>' : ''}</div></form></section><div class="collection-list25">${rows || `<section class="card"><p class="muted">Nog geen ${tasks ? 'open taken' : 'programma’s'}.</p></section>`}</div></div>`;
+  }
+
+  function weatherLocation25() {
+    const settings = data.settings || {};
+    const lat = settings.weatherLat === '' || settings.weatherLat == null ? NaN : Number(settings.weatherLat);
+    const lon = settings.weatherLon === '' || settings.weatherLon == null ? NaN : Number(settings.weatherLon);
+    return {
+      place: typeof settings.weatherPlace === 'string' && settings.weatherPlace.trim()
+        ? settings.weatherPlace.trim().slice(0, 80) : DEFAULT_LOCATION.place,
+      lat: Number.isFinite(lat) && lat >= -90 && lat <= 90 ? lat : DEFAULT_LOCATION.lat,
+      lon: Number.isFinite(lon) && lon >= -180 && lon <= 180 ? lon : DEFAULT_LOCATION.lon
+    };
+  }
+  window.SamenThuisWeatherLocation25 = weatherLocation25;
+
+  function validForecast25(forecast) {
+    const daily = forecast?.daily;
+    const hourly = forecast?.hourly;
+    return Number.isFinite(forecast?.current?.temperature_2m)
+      && Array.isArray(daily?.time) && daily.time.length >= 1
+      && ['weather_code', 'temperature_2m_max', 'temperature_2m_min', 'precipitation_probability_max', 'precipitation_sum']
+        .every(key => Array.isArray(daily[key]) && daily[key].length === daily.time.length)
+      && Array.isArray(hourly?.time) && hourly.time.length >= 1
+      && ['temperature_2m', 'precipitation'].every(key => Array.isArray(hourly[key]) && hourly[key].length === hourly.time.length);
+  }
+
+  async function getForecast25(force = false) {
+    const location = weatherLocation25();
+    const locationKey = `${location.lat},${location.lon}`;
+    let cache = null;
+    try { cache = JSON.parse(localStorage.getItem(WEATHER_KEY) || 'null'); } catch (_) {}
+    const cached = cache?.location === locationKey && validForecast25(cache.data) ? cache : null;
+    if (!force && cached && Date.now() - cached.savedAt < 30 * 60 * 1000) return { ...cached, stale: false };
+    if (!navigator.onLine) {
+      if (cached) return { ...cached, stale: true };
+      throw new Error('Geen internetverbinding en geen opgeslagen verwachting beschikbaar.');
+    }
+    const query = new URLSearchParams({
+      latitude: String(location.lat), longitude: String(location.lon), timezone: 'auto', forecast_days: '7',
+      current: 'temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,weather_code',
+      daily: 'weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum',
+      hourly: 'temperature_2m,precipitation'
+    });
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), 10000) : null;
+    try {
+      const response = await fetch(`https://api.open-meteo.com/v1/forecast?${query}`, {
+        cache: 'no-store', ...(controller ? { signal: controller.signal } : {})
+      });
+      if (!response.ok) throw new Error(`Weer ophalen mislukt (${response.status}).`);
+      const forecast = await response.json();
+      if (!validForecast25(forecast)) throw new Error('De weerservice gaf onvolledige gegevens terug.');
+      const result = { location: locationKey, savedAt: Date.now(), data: forecast, stale: false };
+      try { localStorage.setItem(WEATHER_KEY, JSON.stringify(result)); } catch (_) {}
+      return result;
+    } catch (error) {
+      if (cached) return { ...cached, stale: true };
+      throw error;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  function chart25(title, labels, high, low, rain, suffix) {
+    if (labels.length < 2 || !high.every(Number.isFinite)) return '';
+    const width = 680, height = 280, left = 44, right = 40, top = 20, bottom = 46;
+    const innerWidth = width - left - right, innerHeight = height - top - bottom;
+    const temps = [...high, ...(low || [])].filter(Number.isFinite);
+    const min = Math.floor(Math.min(...temps) - 1), max = Math.ceil(Math.max(...temps) + 1);
+    const maxRain = Math.max(1, ...rain.map(value => Number.isFinite(value) ? value : 0));
+    const x = index => left + innerWidth * (index / (labels.length - 1));
+    const y = value => top + innerHeight - ((value - min) / (max - min || 1)) * innerHeight;
+    const rainY = value => top + innerHeight - (Math.max(0, value || 0) / maxRain) * innerHeight;
+    const polyline = values => values.every(Number.isFinite)
+      ? `<polyline points="${values.map((value, index) => `${x(index).toFixed(1)},${y(value).toFixed(1)}`).join(' ')}"/>` : '';
+    const bars = rain.map((value, index) => {
+      const barY = rainY(value);
+      return `<rect x="${(x(index) - Math.min(18, innerWidth / labels.length * .28)).toFixed(1)}" y="${barY.toFixed(1)}" width="${Math.min(36, innerWidth / labels.length * .56).toFixed(1)}" height="${(top + innerHeight - barY).toFixed(1)}" rx="3"/>`;
+    }).join('');
+    const step = Math.max(1, Math.ceil(labels.length / 8));
+    const ticks = labels.map((label, index) => index % step === 0
+      ? `<text x="${x(index).toFixed(1)}" y="${height - 20}" text-anchor="middle">${esc(label)}</text>` : '').join('');
+    const hasLow = Array.isArray(low) && low.length === labels.length && low.every(Number.isFinite);
+    const axis = [max, min].map(value => `<text x="${left - 6}" y="${(y(value) + 4).toFixed(1)}" text-anchor="end">${value}°</text>`).join('');
+    const valueLabels = (values, offset) => values.map((value, index) => index % step === 0
+      ? `<text class="weather-val25" x="${x(index).toFixed(1)}" y="${(y(value) + offset).toFixed(1)}" text-anchor="middle">${Math.round(value)}°</text>` : '').join('');
+    const points = high.map((value, index) => `<circle cx="${x(index).toFixed(1)}" cy="${y(value).toFixed(1)}" r="8"><title>${esc(labels[index])}: ${hasLow ? `${Math.round(low[index])}–${Math.round(value)}` : Math.round(value)} °C</title></circle>`).join('');
+    return `<section class="card weather-chart25"><div class="card-head"><h2>${esc(title)}</h2></div><div class="weather-svg25"><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(title)}"><line x1="${left}" y1="${top + innerHeight}" x2="${width - right}" y2="${top + innerHeight}"/><g class="weather-rain25">${bars}</g><g class="weather-low25">${polyline(low || [])}</g><g class="weather-high25">${polyline(high)}</g>${axis}${valueLabels(high, -7)}${hasLow ? valueLabels(low, 15) : ''}<g class="weather-pts25">${points}</g>${ticks}<text x="${left}" y="${height - 2}">— temperatuur °C · ▮ neerslag mm</text></svg></div><p class="small-note">${esc(suffix)}</p></section>`;
+  }
+
+  function weatherMarkup25(forecast) {
+    const { current: now, daily, hourly } = forecast;
+    const days = daily.time.map((date, index) => `<li class="list-item weather-day25"><strong>${esc(new Date(`${date}T12:00:00`).toLocaleDateString('nl-NL', { weekday: 'long', day: 'numeric', month: 'short' }))}</strong><span>${esc(weatherCode25[daily.weather_code[index]] || 'Onbekend')}</span><span>${Math.round(daily.temperature_2m_min[index])}° – ${Math.round(daily.temperature_2m_max[index])}°</span><span>${Math.round(daily.precipitation_probability_max[index] || 0)}% · ${Number(daily.precipitation_sum[index] || 0).toFixed(1)} mm</span></li>`).join('');
+    const today = todayISO();
+    const start = Math.max(0, hourly.time.findIndex(time => time >= `${today}T${new Date().getHours().toString().padStart(2, '0')}:00`));
+    const indices = Array.from({ length: 24 }, (_, index) => start + index).filter(index => index < hourly.time.length);
+    const hourlyLabels = indices.map(index => hourly.time[index].slice(11, 16));
+    const hourlyTemps = indices.map(index => hourly.temperature_2m[index]);
+    const hourlyRain = indices.map(index => hourly.precipitation[index]);
+    const dailyLabels = daily.time.map(date => new Date(`${date}T12:00:00`).toLocaleDateString('nl-NL', { weekday: 'short' }));
+    const condition = weatherCode25[now.weather_code] || 'Onbekend';
+    const location = weatherLocation25();
+    return `<section class="card weather-current25"><div class="card-head"><div><p class="eyebrow">${esc(location.place)}</p><h2>Weer</h2></div><button type="button" class="secondary" data-weather-refresh>↻ Vernieuwen</button></div><p class="weather-now"><strong>${Math.round(now.temperature_2m)}°C</strong> ${esc(condition)}</p><p class="muted">Voelt als ${Math.round(now.apparent_temperature)}° · wind ${Math.round(now.wind_speed_10m)} km/u · luchtvochtigheid ${Math.round(now.relative_humidity_2m)}%</p></section>
+      ${chart25('Komende 7 dagen', dailyLabels, daily.temperature_2m_max, daily.temperature_2m_min, daily.precipitation_sum, 'Maximaal en minimaal temperatuurverloop met verwachte neerslag.')}
+      ${chart25('Komende 24 uur', hourlyLabels, hourlyTemps, [], hourlyRain, 'Uurlijkse temperatuur en neerslag.')}
+      <section class="card weather-days25"><div class="card-head"><h2>7-daagse verwachting</h2></div><ul class="weather-list25">${days}</ul></section>
+      <section class="card settings-card"><div class="card-head"><div><p class="eyebrow">LOCATIE</p><h2>Weerlocatie aanpassen</h2></div></div><form class="form-grid weather-location25" data-weather-location><label class="field">Plaats<input name="place" maxlength="80" value="${esc(location.place)}" required></label><label class="field">Breedtegraad<input name="lat" type="number" step="any" min="-90" max="90" value="${location.lat}" required></label><label class="field">Lengtegraad<input name="lon" type="number" step="any" min="-180" max="180" value="${location.lon}" required></label><div class="button-row"><button class="primary" type="submit">Locatie opslaan</button><button class="secondary" type="button" data-weather-geolocate>Mijn locatie</button></div></form><p class="small-note">Weergegevens worden lokaal 30 minuten gecachet. Locatie-instellingen worden met de bestaande appgegevens gesynchroniseerd.</p></section>
+      <p class="small-note weather-cache-note25" data-weather-cache-note></p>`;
+  }
+
+  async function loadWeatherPage25(force = false) {
+    const box = document.querySelector('[data-weather-page-body]');
+    if (!box) return;
+    box.innerHTML = '<p class="muted">Weer laden…</p>';
+    try {
+      const result = await getForecast25(force);
+      if (!box.isConnected) return;
+      box.innerHTML = weatherMarkup25(result.data);
+      const note = box.querySelector('[data-weather-cache-note]');
+      if (note) note.textContent = `${result.stale ? 'Offline of tijdelijk niet bereikbaar · laatst opgeslagen verwachting' : 'Bijgewerkt'} · ${new Date(result.savedAt).toLocaleString('nl-NL')}`;
+    } catch (error) {
+      if (box.isConnected) box.innerHTML = `<section class="card"><p>${esc(error.message || 'Het weer kan nu niet worden geladen.')}</p><button type="button" class="secondary" data-weather-refresh>Opnieuw proberen</button></section>`;
+    }
+  }
+
+  function renderWeather25() {
+    return `<div class="weather-page25 page-grid"><div data-weather-page-body><p class="muted">Weer laden…</p></div></div>`;
+  }
+
+  const AUTH_KEY25 = 'samenThuisPersonalAuthV1';
+  const personalPreferencesCore25 = window.SamenThuisPersonalPreferences;
+  let authSession25 = null;
+  let authNotice25 = '';
+  let authBusy25 = false;
+  let personalPreferencesReady25 = false;
+  let personalSaveTimer25;
+  try { authSession25 = JSON.parse(localStorage.getItem(AUTH_KEY25) || 'null'); } catch (_) {}
+
+  function authBase25() { return String(syncConfig.projectUrl || DEFAULT_PROJECT_URL).replace(/\/$/, ''); }
+  function authHeaders25(token = '') {
+    return { 'Content-Type': 'application/json', apikey: DEFAULT_PUBLISHABLE_KEY, ...(token ? { Authorization: 'Bearer ' + token } : {}) };
+  }
+  async function authRequest25(path, body, token = '') {
+    const response = await fetch(`${authBase25()}${path}`, {
+      method: 'POST', headers: authHeaders25(token), body: JSON.stringify(body || {})
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.msg || payload.message || payload.error_description || payload.error || `Supabase Auth (${response.status})`);
+    return payload;
+  }
+  async function readySession25() {
+    if (!authSession25?.access_token || !authSession25?.refresh_token) return null;
+    if (Number(authSession25.expires_at || 0) > Date.now() + 60000) return authSession25;
+    const next = await authRequest25('/auth/v1/token?grant_type=refresh_token', { refresh_token: authSession25.refresh_token });
+    authSession25 = { ...next, expires_at: Date.now() + Number(next.expires_in || 3600) * 1000 };
+    localStorage.setItem(AUTH_KEY25, JSON.stringify(authSession25));
+    return authSession25;
+  }
+  window.SamenThuisAuth25 = { session: () => authSession25, ready: readySession25 };
+  function uiDefault25() { return { theme: 'system', accent: 'purple', accentColor: '#7057d9', density: 'comfortable' }; }
+  function setPersonalPreferences25(value) {
+    const normalized = personalPreferencesCore25?.normalize(value, DASH_DEFAULTS, dashboardCore, DASH_DEFAULT_VISIBLE) || value || {};
+    window.SamenThuisPersonalUi20?.set(normalized.ui || uiDefault25());
+    window.SamenThuisDashboardPreferences25?.set(normalized.dashboard || dashboardCore?.defaults(DASH_DEFAULTS));
+  }
+  function localAccountPreferences25(userId) {
+    try { return JSON.parse(localStorage.getItem(personalPreferencesCore25.storageKey(userId)) || 'null'); } catch (_) { return null; }
+  }
+  function saveLocalAccountPreferences25(userId) {
+    const preferences = {
+      ui: window.SamenThuisPersonalUi20?.get() || uiDefault25(),
+      dashboard: window.SamenThuisDashboardPreferences25?.get() || dashboardCore?.defaults(DASH_DEFAULTS)
+    };
+    localStorage.setItem(personalPreferencesCore25.storageKey(userId), JSON.stringify(preferences));
+    return preferences;
+  }
+  async function writePersonalPreferences25(preferences) {
+    const session = await readySession25();
+    if (!session?.user?.id) throw new Error('Meld je opnieuw aan om voorkeuren te synchroniseren.');
+    const response = await fetch(`${authBase25()}/rest/v1/personal_preferences?on_conflict=user_id`, {
+      method: 'POST',
+      headers: { ...authHeaders25(session.access_token), Prefer: 'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify({
+        user_id: session.user.id, ui_config: preferences.ui,
+        dashboard_config: preferences.dashboard, updated_at: new Date().toISOString()
+      })
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.message || `Persoonlijke voorkeuren opslaan mislukt (${response.status}).`);
+    }
+    localStorage.setItem(personalPreferencesCore25.storageKey(session.user.id), JSON.stringify(preferences));
+  }
+  async function loadPersonalPreferences25() {
+    const session = await readySession25();
+    if (!session?.user?.id) return;
+    const response = await fetch(`${authBase25()}/rest/v1/personal_preferences?select=ui_config,dashboard_config&user_id=eq.${encodeURIComponent(session.user.id)}&limit=1`, {
+      headers: authHeaders25(session.access_token)
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.message || `Voorkeuren ophalen mislukt (${response.status}); controleer de persoonlijke-voorkeurenmigratie.`);
+    }
+    const rows = await response.json();
+    const saved = Array.isArray(rows) ? rows[0] : null;
+    if (saved) setPersonalPreferences25({ ui: saved.ui_config, dashboard: saved.dashboard_config });
+    else {
+      const local = localAccountPreferences25(session.user.id);
+      setPersonalPreferences25(local || { ui: uiDefault25(), dashboard: dashboardCore?.defaults(DASH_DEFAULTS) });
+      await writePersonalPreferences25(saveLocalAccountPreferences25(session.user.id));
+    }
+    personalPreferencesReady25 = true;
+    authNotice25 = 'Persoonlijke voorkeuren zijn geladen en worden per account gesynchroniseerd.';
+    if (current === 'settings') render();
+  }
+  async function authenticate25(action) {
+    if (authBusy25) return;
+    const form = document.querySelector('[data-personal-auth25]');
+    const email = String(form?.elements.email.value || '').trim();
+    const password = String(form?.elements.password.value || '');
+    if (!email || !password) { authNotice25 = 'Vul je e-mailadres en wachtwoord in.'; render(); return; }
+    authBusy25 = true; authNotice25 = '';
+    if (current === 'settings') render();
+    try {
+      const endpoint = action === 'sign-up' ? '/auth/v1/signup' : '/auth/v1/token?grant_type=password';
+      const result = await authRequest25(endpoint, { email, password });
+      if (!result.access_token || !result.refresh_token || !result.user?.id) {
+        authNotice25 = 'Account ontvangen. Bevestig je e-mailadres via de e-mail van Supabase en meld je daarna aan.';
+      } else {
+        authSession25 = { ...result, expires_at: Date.now() + Number(result.expires_in || 3600) * 1000 };
+        localStorage.setItem(AUTH_KEY25, JSON.stringify(authSession25));
+        personalPreferencesReady25 = false;
+        await loadPersonalPreferences25();
+      }
+    } catch (error) { authNotice25 = error.message || 'Aanmelden is mislukt.'; }
+    finally { authBusy25 = false; if (current === 'settings') render(); }
+  }
+  async function restoreAuthCallback25() {
+    const params = new URLSearchParams(String(location.hash || '').replace(/^#/, ''));
+    const accessToken = params.get('access_token'), refreshToken = params.get('refresh_token');
+    if (!accessToken || !refreshToken) return false;
+    const response = await fetch(`${authBase25()}/auth/v1/user`, { headers: authHeaders25(accessToken) });
+    const user = await response.json().catch(() => ({}));
+    if (!response.ok || !user.id) throw new Error(user.message || 'E-mailbevestiging kon niet worden gevalideerd.');
+    authSession25 = {
+      access_token: accessToken, refresh_token: refreshToken, user,
+      expires_at: Date.now() + Number(params.get('expires_in') || 3600) * 1000
+    };
+    localStorage.setItem(AUTH_KEY25, JSON.stringify(authSession25));
+    history.replaceState({}, '', `${location.pathname}${location.search}`);
+    await loadPersonalPreferences25();
+    return true;
+  }
+  async function signOut25() {
+    try {
+      const session = await readySession25();
+      if (session) await authRequest25('/auth/v1/logout', {}, session.access_token);
+    } catch (_) {}
+    authSession25 = null; personalPreferencesReady25 = false;
+    localStorage.removeItem(AUTH_KEY25);
+    authNotice25 = 'Je bent afgemeld. Lokale voorkeuren blijven op dit apparaat staan.';
+    if (current === 'settings') render();
+  }
+  function personalSettings25() {
+    if (current !== 'settings') return;
+    const view = document.querySelector('#view');
+    if (!view || view.querySelector('[data-personal-account25]')) return;
+    const email = authSession25?.user?.email || '';
+    const account = email
+      ? `<p class="muted">Aangemeld als <strong>${esc(email)}</strong>. Je accentkleur en dashboardindeling worden afzonderlijk per account bewaard.</p><button type="button" class="secondary" data-personal-sign-out>Afmelden</button>`
+      : `<form class="form-grid" data-personal-auth25><label class="field">E-mailadres<input type="email" name="email" autocomplete="username" required></label><label class="field">Wachtwoord<input type="password" name="password" autocomplete="current-password" minlength="8" required></label><div class="button-row"><button type="button" class="primary" data-personal-auth="sign-in" ${authBusy25 ? 'disabled' : ''}>Aanmelden</button><button type="button" class="secondary" data-personal-auth="sign-up" ${authBusy25 ? 'disabled' : ''}>Account maken</button></div></form>`;
+    view.insertAdjacentHTML('beforeend', `<section class="card settings-card" data-personal-account25><div class="card-head"><div><p class="eyebrow">PERSOONLIJK ACCOUNT</p><h2>Voorkeuren op al je apparaten</h2></div></div><p class="muted">De huishoudcode blijft alleen voor gedeelde huishoudgegevens. Een persoonlijk Supabase-account scheidt accentkleur en dashboardindeling per gebruiker. Vereist de persoonlijke-voorkeurenmigratie in Supabase.</p>${account}${authNotice25 ? `<p class="notice" role="status">${esc(authNotice25)}</p>` : ''}</section>`);
+  }
+  window.addEventListener('samenThuisPreferencesChange', () => {
+    if (!authSession25?.user?.id || !personalPreferencesReady25) return;
+    clearTimeout(personalSaveTimer25);
+    personalSaveTimer25 = setTimeout(async () => {
+      try { await writePersonalPreferences25(saveLocalAccountPreferences25(authSession25.user.id)); }
+      catch (error) { authNotice25 = error.message || 'Persoonlijke voorkeuren konden niet worden gesynchroniseerd.'; }
+    }, 500);
+  });
+  document.addEventListener('click', event => {
+    const auth = event.target.closest('[data-personal-auth]');
+    if (auth) { authenticate25(auth.dataset.personalAuth); return; }
+    if (event.target.closest('[data-personal-sign-out]')) signOut25();
+  });
+  if (location.hash.includes('access_token=')) {
+    restoreAuthCallback25().catch(error => { authNotice25 = error.message || 'Aanmeldkoppeling kon niet worden voltooid.'; });
+  } else if (authSession25?.user?.id) {
+    loadPersonalPreferences25().catch(error => { authNotice25 = error.message || 'Persoonlijke voorkeuren konden niet worden geladen.'; });
+  }
+
+  /* Digitaal krijtbord · berichten per huishouden via Supabase (RLS) */
+  const chalkCore25 = window.SamenThuisChalkboard;
+  const chalk25 = { uid: '', status: 'idle', household: null, role: '', messages: [], error: '', notice: '', loadedAt: 0, busy: false, formError: '' };
+
+  async function chalkRequest25(path, options = {}) {
+    const session = await readySession25();
+    if (!session?.user?.id) throw new Error('Meld je aan via Instellingen om het krijtbord te gebruiken.');
+    const response = await fetch(`${authBase25()}${path}`, {
+      ...options, headers: { ...authHeaders25(session.access_token), ...(options.headers || {}) }
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.message || `Krijtbord is niet bereikbaar (${response.status}).`);
+    }
+    return response.status === 204 ? null : response.json().catch(() => null);
+  }
+
+  function chalkMessageHtml25(message) {
+    const mine = message.user_id === authSession25?.user?.id;
+    const removable = chalkCore25.canDelete(message, authSession25?.user?.id, chalk25.role);
+    return `<li class="chalk-message25"><p>${esc(message.body)}</p><footer><span>${mine ? 'Jij' : esc(message.author_name)} · <time datetime="${esc(message.created_at)}">${esc(chalkCore25.formatWhen(message.created_at))}</time></span>${removable ? `<button type="button" class="chalk-delete25" data-chalk-delete="${esc(message.id)}" aria-label="Verwijder bericht van ${esc(message.author_name)}">Wissen</button>` : ''}</footer></li>`;
+  }
+
+  function chalkInner25() {
+    const head = `<header class="chalk-head25"><div><p class="eyebrow">THUIS OP DE MUUR</p><h3>Ons krijtbord ♡</h3></div>`;
+    if (chalk25.status === 'signedout') {
+      return `${head}</header><p class="chalk-empty25">Meld je aan met je persoonlijke account om berichtjes voor elkaar achter te laten.</p><a class="chalk-button25" href="#/settings" data-v19-go="settings">Naar Instellingen</a>`;
+    }
+    if (chalk25.status === 'idle' || chalk25.status === 'loading') return `${head}</header><p class="chalk-empty25" role="status">Krijtbord laden…</p>`;
+    if (chalk25.status === 'error') {
+      return `${head}</header><p class="chalk-error25" role="alert">${esc(chalk25.error)}</p><button type="button" class="chalk-button25" data-chalk-retry>Opnieuw proberen</button>`;
+    }
+    if (chalk25.status === 'nohousehold') {
+      return `${head}</header><p class="chalk-empty25">Maak een huishouden aan of voeg je toe met de code van je huisgenoot.</p><form class="chalk-form25" data-chalk-create><label for="chalkHouseName">Naam van jullie huishouden</label><input id="chalkHouseName" name="name" maxlength="80" required placeholder="Bijv. Samen Thuis"><button class="chalk-button25">Huishouden aanmaken</button></form><form class="chalk-form25" data-chalk-join><label for="chalkJoinCode">Of join met een code</label><input id="chalkJoinCode" name="code" maxlength="20" required autocomplete="off"><button class="chalk-button25">Toevoegen</button></form>${chalk25.formError ? `<p class="chalk-error25" role="alert">${esc(chalk25.formError)}</p>` : ''}`;
+    }
+    const messages = chalkCore25.sortMessages(chalk25.messages);
+    const list = messages.length
+      ? `<ul class="chalk-list25" tabindex="0" aria-label="Berichten, nieuwste bovenaan">${messages.map(chalkMessageHtml25).join('')}</ul>`
+      : '<p class="chalk-empty25">Het krijtbord is nog leeg. Schrijf jullie eerste lieve berichtje ♡</p>';
+    return `${head}<button type="button" class="chalk-button25" data-chalk-open>Laat een berichtje achter</button></header><p class="chalk-notice25" role="status" aria-live="polite">${esc(chalk25.notice)}</p>${list}<p class="chalk-code25">${esc(chalk25.household?.name || '')} · code om huisgenoten toe te voegen: <strong>${esc(chalk25.household?.join_code || '')}</strong></p>`;
+  }
+
+  function chalkboardMarkup25() {
+    return `<section class="chalkboard25 card" data-widget18="chalkboard" aria-label="Krijtbord">${chalkInner25()}</section>`;
+  }
+
+  function paintChalkboard25() {
+    document.querySelectorAll('[data-widget18="chalkboard"]').forEach(node => { node.innerHTML = chalkInner25(); });
+  }
+
+  async function refreshChalkboard25(force = true) {
+    const userId = authSession25?.user?.id || '';
+    if (chalk25.uid !== userId) Object.assign(chalk25, { uid: userId, status: 'idle', household: null, role: '', messages: [], notice: '', loadedAt: 0 });
+    if (!userId) { chalk25.status = 'signedout'; paintChalkboard25(); return; }
+    if (chalk25.busy) return;
+    if (!force && chalk25.status === 'ready' && Date.now() - chalk25.loadedAt < 60000) return;
+    chalk25.busy = true;
+    if (chalk25.status !== 'ready') { chalk25.status = 'loading'; paintChalkboard25(); }
+    try {
+      const uid = encodeURIComponent(authSession25.user.id);
+      const rows = await chalkRequest25(`/rest/v1/household_members?select=role,households(id,name,join_code)&user_id=eq.${uid}&order=joined_at.asc&limit=1`);
+      const membership = rows?.[0];
+      if (!membership?.households) { chalk25.status = 'nohousehold'; chalk25.household = null; chalk25.messages = []; return; }
+      chalk25.household = membership.households; chalk25.role = membership.role;
+      chalk25.messages = await chalkRequest25(`/rest/v1/chalkboard_messages?select=id,user_id,author_name,body,created_at&household_id=eq.${encodeURIComponent(chalk25.household.id)}&order=created_at.desc&limit=50`) || [];
+      chalk25.status = 'ready'; chalk25.loadedAt = Date.now();
+    } catch (error) {
+      chalk25.status = 'error'; chalk25.error = error.message || 'Het krijtbord kon niet worden geladen.';
+    } finally {
+      chalk25.busy = false; paintChalkboard25();
+    }
+  }
+
+  function chalkDialog25() {
+    let dialog = document.querySelector('#chalkDialog');
+    if (dialog) return dialog;
+    dialog = document.createElement('dialog');
+    dialog.id = 'chalkDialog';
+    dialog.className = 'chalk-dialog25';
+    dialog.innerHTML = `<form id="chalkForm" novalidate><div class="dialog-head"><div><p class="eyebrow">KRIJTBORD</p><h2>Laat een berichtje achter</h2></div><button type="button" class="icon-btn" data-chalk-close aria-label="Sluiten">×</button></div><div class="field"><label for="chalkText">Je bericht</label><textarea id="chalkText" name="text" rows="4" placeholder="Ik hoop dat je een fijne dag hebt ❤️" aria-describedby="chalkCount chalkFormError"></textarea><small id="chalkCount" class="chalk-count25">0 / ${chalkCore25.MAX_LENGTH}</small><p id="chalkFormError" class="chalk-error25" role="alert"></p></div><div class="dialog-actions"><button type="button" class="secondary" data-chalk-close>Annuleren</button><button type="submit" class="primary">Plaats bericht</button></div></form>`;
+    document.body.append(dialog);
+    return dialog;
+  }
+
+  async function postChalkMessage25(form) {
+    const field = form.elements.text, errorNode = form.querySelector('#chalkFormError');
+    const result = chalkCore25.validateMessage(field.value);
+    if (!result.ok) { errorNode.textContent = result.error; field.focus(); return; }
+    const submit = form.querySelector('[type="submit"]');
+    submit.disabled = true; errorNode.textContent = '';
+    try {
+      const session = await readySession25();
+      const saved = await chalkRequest25('/rest/v1/chalkboard_messages', {
+        method: 'POST', headers: { Prefer: 'return=representation' },
+        body: JSON.stringify({ household_id: chalk25.household.id, user_id: session.user.id, author_name: chalkCore25.authorName(session.user), body: result.value })
+      });
+      if (!saved?.length) throw new Error('Het bericht is niet opgeslagen.');
+      chalk25.messages = [saved[0], ...chalk25.messages].slice(0, 50);
+      chalk25.notice = 'Je berichtje hangt op het krijtbord ♡';
+      field.value = '';
+      document.querySelector('#chalkDialog')?.close();
+      paintChalkboard25(); toast('Bericht geplaatst op het krijtbord.');
+    } catch (error) {
+      errorNode.textContent = `Het bericht is niet geplaatst: ${error.message || 'onbekende fout'}. Je tekst is bewaard; probeer het opnieuw.`;
+    } finally { submit.disabled = false; }
+  }
+
+  async function deleteChalkMessage25(id) {
+    const message = chalk25.messages.find(item => item.id === id);
+    if (!message || !chalkCore25.canDelete(message, authSession25?.user?.id, chalk25.role)) return;
+    if (!confirm('Dit bericht van het krijtbord wissen?')) return;
+    try {
+      const removed = await chalkRequest25(`/rest/v1/chalkboard_messages?id=eq.${encodeURIComponent(id)}`, { method: 'DELETE', headers: { Prefer: 'return=representation' } });
+      if (!removed?.length) throw new Error('Je hebt geen rechten om dit bericht te wissen.');
+      chalk25.messages = chalk25.messages.filter(item => item.id !== id);
+      chalk25.notice = 'Bericht gewist.';
+      paintChalkboard25();
+    } catch (error) {
+      chalk25.notice = `Wissen mislukt: ${error.message || 'onbekende fout'}`;
+      paintChalkboard25();
+    }
+  }
+
+  async function joinOrCreateHousehold25(form, kind) {
+    chalk25.formError = '';
+    try {
+      if (kind === 'create') await chalkRequest25('/rest/v1/rpc/create_household', { method: 'POST', body: JSON.stringify({ p_name: form.elements.name.value }) });
+      else await chalkRequest25('/rest/v1/rpc/join_household', { method: 'POST', body: JSON.stringify({ p_code: form.elements.code.value }) });
+      await refreshChalkboard25(true);
+    } catch (error) {
+      chalk25.formError = error.message || 'Dit is niet gelukt.'; paintChalkboard25();
+    }
+  }
+
+  document.addEventListener('click', event => {
+    if (event.target.closest('[data-chalk-open]')) {
+      const dialog = chalkDialog25();
+      dialog.querySelector('#chalkFormError').textContent = '';
+      dialog.showModal(); dialog.querySelector('#chalkText').focus();
+      return;
+    }
+    if (event.target.closest('[data-chalk-close]')) { document.querySelector('#chalkDialog')?.close(); return; }
+    if (event.target.closest('[data-chalk-retry]')) { refreshChalkboard25(true); return; }
+    const del = event.target.closest('[data-chalk-delete]');
+    if (del) deleteChalkMessage25(del.dataset.chalkDelete);
+  });
+  document.addEventListener('input', event => {
+    if (!event.target.matches('#chalkText')) return;
+    const count = Array.from(event.target.value).length;
+    const node = document.querySelector('#chalkCount');
+    node.textContent = `${count} / ${chalkCore25.MAX_LENGTH}`;
+    node.classList.toggle('over', count > chalkCore25.MAX_LENGTH);
+  });
+  document.addEventListener('submit', event => {
+    if (event.target.matches('#chalkForm')) { event.preventDefault(); postChalkMessage25(event.target); }
+    else if (event.target.matches('[data-chalk-create]')) { event.preventDefault(); joinOrCreateHousehold25(event.target, 'create'); }
+    else if (event.target.matches('[data-chalk-join]')) { event.preventDefault(); joinOrCreateHousehold25(event.target, 'join'); }
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && current === 'today' && document.querySelector('[data-widget18="chalkboard"]:not([hidden])')) refreshChalkboard25(true);
+  });
+
+  function render25(...args) {
+    if (current === 'tasks' || current === 'programs') {
+      document.querySelector('#view').innerHTML = renderCollection25(current);
+      document.querySelector('#pageTitle').textContent = sections[current].label;
+      document.querySelector('#addBtn').style.display = 'none';
+      document.querySelectorAll('[data-nav23], [data-v19-go]').forEach(button => {
+        const page = button.dataset.nav23 || button.dataset.v19Go;
+        button.classList.toggle('active', page === current);
+      });
+      updateSyncBadge();
+      return;
+    }
+    if (current === 'challenges' && typeof window.SamenThuisRenderChallenges25 === 'function') {
+      window.SamenThuisRenderChallenges25();
+      document.querySelector('#pageTitle').textContent = sections.challenges.label;
+      document.querySelector('#addBtn').style.display = 'none';
+      document.querySelectorAll('[data-nav23], [data-v19-go]').forEach(button => {
+        const page = button.dataset.nav23 || button.dataset.v19Go;
+        button.classList.toggle('active', page === 'challenges');
+      });
+      updateSyncBadge();
+      return;
+    }
+    if (current === 'weather') {
+      document.querySelector('#view').innerHTML = renderWeather25();
+      document.querySelector('#pageTitle').textContent = sections.weather.label;
+      document.querySelector('#addBtn').style.display = 'none';
+      document.querySelectorAll('[data-nav23], [data-v19-go]').forEach(button => {
+        const page = button.dataset.nav23 || button.dataset.v19Go;
+        button.classList.toggle('active', page === 'weather');
+      });
+      updateSyncBadge();
+      requestAnimationFrame(() => loadWeatherPage25());
+      return;
+    }
+    if (current === 'offers') {
+      document.querySelector('#view').innerHTML = renderOffers25();
+      document.querySelector('#pageTitle').textContent = sections.offers.label;
+      document.querySelector('#addBtn').style.display = 'none';
+      document.querySelectorAll('[data-nav23], [data-v19-go]').forEach(button => {
+        const page = button.dataset.nav23 || button.dataset.v19Go;
+        button.classList.toggle('active', page === 'offers');
+      });
+      updateSyncBadge();
+      return;
+    }
+    const result = previousRender25(...args);
+    requestAnimationFrame(() => {
+      applyDashboard25();
+      if (current === 'budget19' && !document.querySelector('#view .ledger25')) {
+        document.querySelector('#view')?.append(ledgerMarkup25());
+      }
+      const settings = document.querySelector('#view .settings-grid');
+      if (current === 'settings' && settings && !settings.querySelector('.dashboard-editor25')) {
+        settings.insertAdjacentHTML('beforeend', dashboardEditor25());
+      }
+      personalSettings25();
+    });
+    return result;
+  }
+
+  const previousRender25 = render;
+  render = render25;
+  window.__ST_V26_INTEGRATED__ = true;
+  window.SamenThuisChallengeStore = {
+    get() { return data.challengeDataV26 ? clone(data.challengeDataV26) : null; },
+    save(value, { initialize = false } = {}) {
+      data.challengeDataV26 = clone(value);
+      save({ touch: !initialize, sync: true });
+    }
+  };
+
+  document.addEventListener('click', event => {
+    const groupBtn = event.target.closest('[data-offer-group]');
+    if (groupBtn) {
+      const id = groupBtn.dataset.offerGroup;
+      const changed = offerGroup25 !== id || offerFilters25.category;
+      const hadCategory = !!offerFilters25.category;
+      offerGroup25 = id;
+      offerFilters25.category = '';
+      if (hadCategory && offerQuery25) searchOffers25(offerQuery25); else if (changed) render();
+      return;
+    }
+    const categoryBtn = event.target.closest('[data-offer-category]');
+    if (categoryBtn) {
+      const slug = categoryBtn.dataset.offerCategory;
+      offerFilters25.category = offerFilters25.category === slug ? '' : slug;
+      if (offerQuery25) searchOffers25(offerQuery25); else render();
+      return;
+    }
+    if (event.target.closest('[data-offer-more]')) {
+      if (offerQuery25 && !offerLoading25) searchOffers25(offerQuery25, { append: true });
+      return;
+    }
+    if (event.target.closest('[data-offer-filters-reset]')) {
+      resetOfferFilters25();
+      render();
+      return;
+    }
+    if (event.target.closest('[data-ledger-cancel-edit]')) {
+      ledgerEdit25 = null; render(); return;
+    }
+    const editLedger = event.target.closest('[data-ledger-edit-kind]');
+    if (editLedger) {
+      ledgerEdit25 = { kind: editLedger.dataset.ledgerEditKind, id: editLedger.dataset.entryId };
+      render(); return;
+    }
+    const deleteAllocation = event.target.closest('[data-ledger-delete-allocation]');
+    if (deleteAllocation) {
+      const ledger = ledgerState25(), income = ledger.incomes.find(item => item.id === deleteAllocation.dataset.ledgerDeleteAllocation);
+      if (!income || !confirm('Deze pottoewijzing verwijderen? De inkomstenboeking blijft staan en het bedrag wordt weer niet-toegewezen.')) return;
+      ledgerCore25.removeAllocation(ledger, income.id, deleteAllocation.dataset.allocationId);
+      syncGoalMirrors25(ledger);
+      save(); render(); return;
+    }
+    const deleteLedger = event.target.closest('[data-ledger-delete-kind]');
+    if (deleteLedger) {
+      const kind = deleteLedger.dataset.ledgerDeleteKind, ledger = ledgerState25();
+      const entry = ledger[kind]?.find(item => item.id === deleteLedger.dataset.entryId);
+      if (!entry) return;
+      const note = kind === 'incomes' ? ' De bijbehorende toewijzingen verdwijnen ook; reeds geboekte uitgaven blijven zichtbaar.'
+        : kind === 'expenses' ? ' Het huishoud- en potjessaldo wordt opnieuw berekend.'
+          : ' Het saldo wordt opnieuw berekend; het huishoudtotaal blijft gelijk.';
+      if (!confirm(`Deze ${kind === 'incomes' ? 'inkomstenboeking' : kind === 'expenses' ? 'uitgave' : 'verschuiving'} verwijderen?${note}`)) return;
+      ledgerCore25.removeEntry(ledger, kind, entry.id);
+      syncGoalMirrors25(ledger);
+      ledgerEdit25 = null; save(); render(); return;
+    }
+    const favoriteOffer = event.target.closest('[data-offer-favorite]');
+    if (favoriteOffer) {
+      const key = favoriteOffer.dataset.offerFavorite;
+      const favorites = new Set(Array.isArray(data.favoriteOffers25) ? data.favoriteOffers25 : []);
+      if (favorites.has(key)) favorites.delete(key); else favorites.add(key);
+      data.favoriteOffers25 = [...favorites];
+      save({ touch: false }); render(); return;
+    }
+    const addOffer = event.target.closest('[data-offer-grocery]');
+    if (addOffer) {
+      const key = addOffer.dataset.offerGrocery;
+      const offer = [...(data.offers25 || [])].find(item => offerCore25().key(item) === key);
+      if (!offer) { toast('Deze aanbieding is niet meer actief.'); return; }
+      data.groceries ||= [];
+      if (offerCore25().offerAlreadyInGroceries(data.groceries, offer)) {
+        addOffer.disabled = true;
+        toast('Deze aanbieding staat al op de boodschappenlijst.');
+        return;
+      }
+      const item = offerCore25().groceryItemFromOffer({
+        ...offer,
+        sourceUrl: validOfferUrl25(offer.sourceUrl) || ''
+      }, id, offerGroups25());
+      data.groceries.push(item);
+      addOffer.disabled = true;
+      save(); toast('Toegevoegd aan de boodschappenlijst'); render(); return;
+    }
+    if (event.target.closest('[data-offer-archive]')) return;
+    const submitOffers = event.target.closest('[data-offer-search]');
+    if (submitOffers) return;
+    if (event.target.closest('[data-collection-cancel]')) {
+      editingCollection25 = null; render(); return;
+    }
+    const collectionAction = event.target.closest('[data-collection-toggle], [data-collection-edit], [data-collection-delete]');
+    if (collectionAction) {
+      const name = collectionAction.dataset.collectionToggle || collectionAction.dataset.collectionEdit || collectionAction.dataset.collectionDelete;
+      const items = collectionItems25(name);
+      const item = items.find(entry => entry.id === collectionAction.dataset.itemId);
+      if (!item) return;
+      if (collectionAction.hasAttribute('data-collection-toggle')) item.done = !item.done;
+      else if (collectionAction.hasAttribute('data-collection-edit')) editingCollection25 = { collection: name, id: item.id };
+      else {
+        if (!confirm(`“${item.title}” verwijderen?`)) return;
+        data[name] = items.filter(entry => entry.id !== item.id);
+      }
+      if (collectionAction.hasAttribute('data-collection-delete') && !data[name].some(entry => entry.id === item.id)) {
+        editingCollection25 = null;
+      }
+      save(); render(); return;
+    }
+    if (event.target.closest('[data-weather-refresh]')) { loadWeatherPage25(true); return; }
+    if (event.target.closest('[data-weather-geolocate]')) {
+      if (!navigator.geolocation) { toast('Locatiebepaling wordt niet door deze browser ondersteund.'); return; }
+      navigator.geolocation.getCurrentPosition(position => {
+        const form = document.querySelector('[data-weather-location]');
+        if (!form) return;
+        form.elements.lat.value = position.coords.latitude.toFixed(5);
+        form.elements.lon.value = position.coords.longitude.toFixed(5);
+      }, () => toast('Je locatie kon niet worden opgehaald.'), { timeout: 10000, maximumAge: 300000 });
+      return;
+    }
+    const move = event.target.closest('[data-dashboard-move]');
+    if (move) {
+      if (dashboardCore) dashboard25 = dashboardCore.move(dashboard25, move.dataset.dashboardMove, Number(move.dataset.direction), DASH_DEFAULTS, DASH_DEFAULT_VISIBLE);
+      else {
+        const index = dashboard25.order.indexOf(move.dataset.dashboardMove);
+        const next = index + Number(move.dataset.direction);
+        if (index < 0 || next < 0 || next >= dashboard25.order.length) return;
+        [dashboard25.order[index], dashboard25.order[next]] = [dashboard25.order[next], dashboard25.order[index]];
+      }
+      saveDashboard25(); render();
+      return;
+    }
+    if (event.target.closest('[data-dashboard-reset]')) {
+      dashboard25 = normalizeDashboard25(null);
+      saveDashboard25(); render();
+    }
+  });
+
+  document.addEventListener('change', event => {
+    if (event.target.matches('[data-ledger-month]')) {
+      if (ledgerCore25.validMonth(event.target.value)) { ledgerMonth25 = event.target.value; ledgerEdit25 = null; render(); }
+      else toast('Kies een geldige maand.');
+      return;
+    }
+    if (event.target.matches('[data-offer-filter]')) {
+      offerFilters25[event.target.dataset.offerFilter] = event.target.value;
+      render(); return;
+    }
+    if (event.target.matches('[data-offer-store]')) {
+      const store = event.target.dataset.offerStore;
+      if (event.target.checked) offerSelectedStores25.add(store);
+      else offerSelectedStores25.delete(store);
+      render(); return;
+    }
+    if (event.target.matches('[data-offer-favorites]')) {
+      offerFavoritesOnly25 = event.target.checked;
+      render(); return;
+    }
+    if (event.target.matches('[data-offer-archive]')) {
+      data.settings.archiveExpiredOffers = event.target.checked;
+      if (!event.target.checked) data.offerArchive25 = [];
+      else offerList25();
+      save({ touch: false }); render(); return;
+    }
+    const toggle = event.target.closest('[data-dashboard-visible]');
+    if (!toggle) return;
+    if (dashboardCore) dashboard25 = dashboardCore.setVisible(dashboard25, toggle.dataset.dashboardVisible, toggle.checked, DASH_DEFAULTS, DASH_DEFAULT_VISIBLE);
+    else dashboard25.visible[toggle.dataset.dashboardVisible] = toggle.checked;
+    saveDashboard25();
+    if (current === 'settings') render();
+    else applyDashboard25();
+  });
+
+  document.addEventListener('submit', event => {
+    const ledgerEditForm = event.target.closest('[data-ledger-edit]');
+    const ledgerForm = event.target.closest('[data-ledger-form]');
+    if (ledgerEditForm || ledgerForm) {
+      event.preventDefault();
+      const form = ledgerEditForm || ledgerForm;
+      const fields = Object.fromEntries(new FormData(form));
+      const budget = ledgerBudget25(), pots = ledgerPots25(budget), ledger = ledgerState25(budget, pots);
+      const allPots = ledgerPotHistory25(ledger, pots);
+      const submit = form.querySelector('button[type="submit"]');
+      if (submit) submit.disabled = true;
+      try {
+        if (ledgerEditForm) {
+          const kind = ledgerEditForm.dataset.ledgerEdit, entryId = ledgerEditForm.dataset.entryId;
+          const preview = clone(ledger);
+          try {
+            ledgerCore25.updateEntry(preview, kind, entryId, fields, allPots, { allowOverdraw: true });
+            if (kind !== 'incomes') {
+              const before = ledgerCore25.allPotBalances(ledger, allPots);
+              const after = ledgerCore25.allPotBalances(preview, allPots);
+              const newlyOverdrawn = Object.entries(after).filter(([potId, balance]) =>
+                balance < 0 && balance < (before[potId] || 0));
+              for (const [potId, balance] of newlyOverdrawn) {
+                const pot = allPots.find(item => item.id === potId);
+                if (!confirm(`Deze correctie leidt tot een negatief saldo van ${moneyLedger25(balance)} in ${pot?.label || 'een potje'}. Bewust doorgaan?`)) {
+                  if (submit) submit.disabled = false;
+                  return;
+                }
+              }
+            }
+          } catch (error) { throw error; }
+          ledgerCore25.updateEntry(ledger, kind, entryId, fields, allPots, { allowOverdraw: true });
+          syncGoalMirrors25(ledger);
+          ledgerEdit25 = null; save(); render(); toast('Boeking bijgewerkt'); return;
+        }
+        const action = ledgerForm.dataset.ledgerForm;
+        if (action === 'income') {
+          if (!confirm(`Inkomsten registreren: ${moneyLedger25(ledgerCore25.cents(fields.amount))} van ${String(fields.source).trim()}, geboekt in ${fields.month}?`)) {
+            if (submit) submit.disabled = false;
+            return;
+          }
+          ledgerCore25.addIncome(ledger, fields, pots);
+          syncGoalMirrors25(ledger);
+          toast('Inkomstenboeking opgeslagen');
+        } else if (action === 'allocation') {
+          const income = ledger.incomes.find(item => item.id === fields.incomeId);
+          if (!income) throw new Error('Deze inkomstenboeking bestaat niet meer.');
+          const pot = pots.find(item => item.id === fields.potId);
+          const amount = ledgerCore25.cents(fields.amount);
+          const already = (income.allocations || []).reduce((sum, item) => sum + Number(item.amountCents || 0), 0);
+          if (!confirm(`Verdeling controleren: ${moneyLedger25(amount)} van ${income.source} naar ${pot?.label || 'het potje'}. Daarna blijft ${moneyLedger25(Number(income.amountCents || 0) - already - amount)} van deze inkomstenboeking nog niet toegewezen. Dit is geen nieuwe inkomstenboeking. Definitief verdelen?`)) {
+            if (submit) submit.disabled = false;
+            return;
+          }
+          ledgerCore25.allocateIncome(ledger, fields, pots);
+          syncGoalMirrors25(ledger);
+          toast('Verdeling opgeslagen');
+        } else if (action === 'expense') {
+          try { ledgerCore25.addExpense(ledger, fields, pots); }
+          catch (error) {
+            if (error.code !== 'INSUFFICIENT_FUNDS') throw error;
+            const balance = ledgerCore25.allPotBalances(ledger, pots)[fields.potId] || 0;
+            if (!confirm(`${error.message} Het huidige saldo is ${moneyLedger25(balance)}; de boeking maakt het saldo negatief. Bewust toch registreren?`)) {
+              if (submit) submit.disabled = false;
+              return;
+            }
+            ledgerCore25.addExpense(ledger, fields, pots, { allowOverdraw: true });
+          }
+          syncGoalMirrors25(ledger);
+          toast('Uitgave opgeslagen');
+        } else if (action === 'transfer') {
+          const preview = clone(ledger);
+          ledgerCore25.addTransfer(preview, fields, allPots, { allowOverdraw: true });
+          const amount = ledgerCore25.cents(fields.amount);
+          const before = ledgerCore25.allPotBalances(ledger, allPots);
+          const after = ledgerCore25.allPotBalances(preview, allPots);
+          const source = allPots.find(item => item.id === fields.fromPotId);
+          const destination = allPots.find(item => item.id === fields.toPotId);
+          if (!confirm(`Controleer verschuiving: ${moneyLedger25(amount)} van ${source?.label || 'bronpotje'} (${moneyLedger25(before[fields.fromPotId] || 0)} → ${moneyLedger25(after[fields.fromPotId] || 0)}) naar ${destination?.label || 'doelpotje'} (${moneyLedger25(before[fields.toPotId] || 0)} → ${moneyLedger25(after[fields.toPotId] || 0)}). Huishoudsaldo blijft ${moneyLedger25(ledgerCore25.availableCashCents(ledger))}. Definitief verschuiven?`)) {
+            if (submit) submit.disabled = false;
+            return;
+          }
+          if ((before[fields.fromPotId] || 0) < amount && !confirm(`Waarschuwing: het bronpotje krijgt een negatief saldo van ${moneyLedger25(after[fields.fromPotId] || 0)}. Bewust doorgaan?`)) {
+            if (submit) submit.disabled = false;
+            return;
+          }
+          ledgerCore25.addTransfer(ledger, fields, allPots, { allowOverdraw: true });
+          syncGoalMirrors25(ledger);
+          toast('Verschuiving opgeslagen');
+        }
+        save(); render();
+      } catch (error) {
+        if (submit) submit.disabled = false;
+        toast(error.message || 'De boeking kon niet worden opgeslagen.');
+      }
+      return;
+    }
+    const offerForm = event.target.closest('[data-offer-search]');
+    if (offerForm) {
+      event.preventDefault();
+      searchOffers25(new FormData(offerForm).get('query'));
+      return;
+    }
+    const collectionForm = event.target.closest('[data-collection-form]');
+    if (collectionForm) {
+      event.preventDefault();
+      const name = collectionForm.dataset.collectionForm;
+      const fields = Object.fromEntries(new FormData(collectionForm));
+      const items = collectionItems25(name);
+      const existing = editingCollection25?.collection === name
+        ? items.find(item => item.id === editingCollection25.id) : null;
+      const item = name === 'tasks'
+        ? { ...existing, id: existing?.id || id(), title: String(fields.title || '').trim(), category: String(fields.category || '').trim(), person: String(fields.person || 'Samen'), due: String(fields.due || ''), done: existing?.done === true }
+        : { ...existing, id: existing?.id || id(), title: String(fields.title || '').trim(), category: String(fields.category || '').trim(), date: String(fields.date || ''), url: String(fields.url || '').trim(), note: String(fields.note || '').trim(), done: existing?.done === true };
+      if (!item.title) return;
+      const index = items.findIndex(entry => entry.id === item.id);
+      if (index < 0) items.unshift(item); else items[index] = item;
+      editingCollection25 = null;
+      save(); render(); toast(`${name === 'tasks' ? 'Taak' : 'Programma'} opgeslagen`);
+      return;
+    }
+    const form = event.target.closest('[data-weather-location]');
+    if (!form) return;
+    event.preventDefault();
+    const values = new FormData(form);
+    const lat = Number(values.get('lat')), lon = Number(values.get('lon'));
+    const place = String(values.get('place') || '').trim();
+    if (!place || !Number.isFinite(lat) || lat < -90 || lat > 90 || !Number.isFinite(lon) || lon < -180 || lon > 180) {
+      toast('Controleer de plaats en coördinaten.');
+      return;
+    }
+    data.settings ||= {};
+    data.settings.weatherPlace = place.slice(0, 80);
+    data.settings.weatherLat = lat;
+    data.settings.weatherLon = lon;
+    save();
+    try { localStorage.removeItem(WEATHER_KEY); } catch (_) {}
+    render();
+    toast('Weerlocatie opgeslagen');
+  });
+})();
+
+/* Vriezer & mealprep: gekoppeld aan Voorraad (data.freezer) en Weekmenu (meal.freezerId). */
+(function () {
+  const F = window.FreezerCore;
+  if (!F) return;
+  const fzUI = { query: '', location: '', sort: 'first', open: false };
+  const list = () => (data.freezer = Array.isArray(data.freezer) ? data.freezer : []);
+  const today = () => todayISO();
+  const field = (n, label, type = 'text', extra = '') => `<label class="fz-field"><span>${label}</span><input id="fz-${n}" type="${type}" ${extra}></label>`;
+  const opts = arr => arr.map(o => `<option>${esc(o)}</option>`).join('');
+
+  function itemRow(x) {
+    const d = F.daysLeft(x, today());
+    const tag = d === null ? '' : d < 0 ? `<span class="tag red">${-d} d over datum</span>` : d <= 14 ? `<span class="tag orange">nog ${d} d</span>` : `<span class="tag green">nog ${d} d</span>`;
+    return `<section class="card fz-item"><div class="card-head"><strong>${esc(x.title)}</strong>${tag}</div>
+      <p class="muted">${esc(x.kind)} · ${esc(x.location)}${x.category ? ' · ' + esc(x.category) : ''}${x.label ? ' · 🏷 ' + esc(x.label) : ''}${x.recipe ? ' · Recept: ' + esc(x.recipe) : ''}</p>
+      <p class="muted">${x.frozen ? 'Ingevroren ' + fmtDate(x.frozen) : x.prepared ? 'Bereid ' + fmtDate(x.prepared) : ''}${x.bestBefore ? ' · Tot ' + fmtDate(x.bestBefore) : ''}</p>
+      ${x.note ? `<p class="muted">${esc(x.note)}</p>` : ''}
+      <div class="stock-controls"><strong>${x.portions} <small>${esc(x.legacyStock?.unit || 'porties')}${x.batchPortions > x.portions ? ` · ${x.batchPortions} ingevroren` : ''}</small></strong></div>
+      <div class="button-row"><button class="secondary" data-fz="eaten:${x.id}">Opgegeten −1</button><button class="secondary" data-fz="thawed:${x.id}">Ontdooid −1</button><button class="secondary" data-fz="discarded:${x.id}">Weggegooid −1</button><button class="secondary" data-fz="move:${x.id}">Verplaats</button><button class="delete" data-fz="delete:${x.id}" aria-label="Verwijderen">×</button></div></section>`;
+  }
+
+  function freezerHTML() {
+    const t = today(), s = F.summary(list(), t), items = F.sortFilter(list(), fzUI, t);
+    const first = F.sortFilter(list(), { sort: 'first' }, t)[0];
+    return `<section class="card fz-panel" id="fzPanel"><div class="card-head"><div><p class="eyebrow">Vriezer & mealprep</p><h2>${s.total} porties · ${s.items} items</h2></div><button class="primary" data-fz="toggle:form">＋ Toevoegen</button></div>
+      <p class="muted">${s.urgent ? `⚠ ${s.urgent} bijna op of over datum${s.expired ? ` (${s.expired} verlopen)` : ''}. ` : ''}${first ? `Eerst gebruiken: <strong>${esc(first.title)}</strong>${first.bestBefore ? ' (' + fmtDate(first.bestBefore) + ')' : ''}` : 'Nog niets in de vriezer.'}</p>
+      <div class="fz-form" ${fzUI.open ? '' : 'hidden'}>
+        <div class="fz-grid">${field('title', 'Gerecht / product', 'text', 'list="fz-recipes" maxlength="120" required')}${field('portions', 'Porties ingevroren', 'number', 'min="1" value="2" inputmode="numeric"')}
+        <label class="fz-field"><span>Soort</span><select id="fz-kind">${opts(F.KINDS)}</select></label><label class="fz-field"><span>Plek</span><select id="fz-location">${opts(F.LOCATIONS)}</select></label>
+        ${field('frozen', 'Invriesdatum', 'date', `value="${t}"`)}${field('bestBefore', 'Uiterste gebruiksdatum', 'date')}${field('cooked', 'Porties bereid (optioneel)', 'number', 'min="1" inputmode="numeric"')}${field('category', 'Categorie')}${field('label', 'Label')}${field('note', 'Notitie')}</div>
+        <datalist id="fz-recipes">${[...new Set((data.meals || []).map(m => m.title).filter(Boolean))].slice(0, 50).map(n => `<option value="${esc(n)}">`).join('')}</datalist>
+        <div class="button-row"><button class="primary" data-fz="save:close">Opslaan</button><button class="secondary" data-fz="save:more">Opslaan & volgende</button></div></div>
+      <div class="fz-filters"><input id="fzQuery" type="search" placeholder="Zoek in vriezer en voorraad" value="${esc(fzUI.query)}" aria-label="Zoeken"><select id="fzLoc" aria-label="Plek"><option value="">Alle plekken</option>${F.LOCATIONS.map(l => `<option ${fzUI.location === l ? 'selected' : ''}>${l}</option>`).join('')}</select><select id="fzSort" aria-label="Sorteren"><option value="first" ${fzUI.sort === 'first' ? 'selected' : ''}>Eerst gebruiken</option><option value="name" ${fzUI.sort === 'name' ? 'selected' : ''}>Naam</option><option value="portions" ${fzUI.sort === 'portions' ? 'selected' : ''}>Meeste porties</option></select></div>
+      <div class="grid three">${items.map(itemRow).join('') || empty('Geen items gevonden')}</div></section>`;
+  }
+
+  function mealLinkHTML() {
+    const avail = F.sortFilter(list(), {}, today());
+    const linked = (data.meals || []).filter(m => m.freezerId);
+    const planner = avail.length ? `<div class="fz-grid"><label class="fz-field"><span>Vriezergerecht</span><select id="fzMealItem">${avail.map(x => `<option value="${x.id}">${esc(x.title)} (${x.portions})</option>`).join('')}</select></label>${field('mealDate', 'Datum', 'date', `value="${today()}"`)}<label class="fz-field"><span>Maaltijd</span><select id="fzMealType"><option>Avondeten</option><option>Lunch</option><option>Ontbijt</option></select></label>${field('mealPortions', 'Porties', 'number', 'min="1" value="2"')}</div><button class="primary" data-fz="plan:x">Inplannen</button>` : '<p class="muted">Geen beschikbare vriezergerechten.</p>';
+    const rows = linked.map(m => { const it = list().find(x => x.id === m.freezerId); const done = F.wasProcessed(it, 'meal:' + m.id); return `<div class="list-item"><div class="item-main"><strong>${esc(m.title)}</strong><small>${fmtDate(m.date)} · ${esc(m.type)} · ${esc(String(m.persons || 1))} porties</small></div>${done ? '<span class="tag green">Verwerkt</span>' : `<button class="secondary" data-fz="book:${m.id}">Gegeten ✓</button>`}</div>`; }).join('');
+    const ing = (data.meals || []).filter(m => m.ingredients && m.date >= today()).length;
+    return `<section class="card" id="fzMeals"><h2>Vriezer in weekmenu</h2>${planner}<div class="list">${rows}</div>${ing ? `<div class="button-row"><button class="secondary" data-fz="shop:x">Ontbrekende ingrediënten naar boodschappen</button></div>` : ''}</section>`;
+  }
+
+  function inject() {
+    const view = document.querySelector('#view');
+    if (!view || document.querySelector('#fzPanel, #fzMeals')) return;
+    if (current === 'stock') view.insertAdjacentHTML('afterbegin', freezerHTML());
+    else if (current === 'meals') view.insertAdjacentHTML('beforeend', mealLinkHTML());
+  }
+  const prev = render;
+  render = function (...a) { const r = prev(...a); inject(); return r; };
+
+  const val = n => (document.querySelector('#fz-' + n) || {}).value || '';
+  function done(msg) { save(); render(); if (msg) toast(msg); }
+
+  document.addEventListener('input', e => { if (e.target.id === 'fzQuery') { fzUI.query = e.target.value; const p = document.querySelector('#fzPanel'); if (p) { const pos = e.target.selectionStart; p.outerHTML = freezerHTML(); const q = document.querySelector('#fzQuery'); q.focus(); q.setSelectionRange(pos, pos); } } });
+  document.addEventListener('change', e => { if (e.target.id === 'fzLoc') fzUI.location = e.target.value; else if (e.target.id === 'fzSort') fzUI.sort = e.target.value; else return; document.querySelector('#fzPanel').outerHTML = freezerHTML(); });
+  document.addEventListener('click', e => {
+    const b = e.target.closest('[data-fz]'); if (!b) return;
+    const [act, ref] = b.dataset.fz.split(':'), item = list().find(x => x.id === ref);
+    if (act === 'toggle') { fzUI.open = !fzUI.open; render(); return; }
+    if (act === 'save') {
+      const cooked = Math.floor(Number(val('cooked')) || 0), frozen = Math.floor(Number(val('portions')) || 0);
+      if (cooked && frozen > cooked) { toast('Ingevroren porties kunnen niet hoger zijn dan bereide porties.'); return; }
+      const bb = val('bestBefore'), fr = val('frozen');
+      if (bb && fr && bb < fr) { toast('Gebruiksdatum ligt vóór invriesdatum.'); return; }
+      const recipe = F.matchMealTitle(val('title'), data.meals);
+      const res = F.add(list(), { title: val('title'), portions: frozen, kind: val('kind'), location: val('location'), frozen: fr, prepared: fr, bestBefore: bb, category: val('category'), label: val('label'), recipe: recipe?.title || '', note: val('note') + (cooked && cooked > frozen ? ` (${cooked - frozen} van ${cooked} porties direct gegeten)` : '') }, today());
+      if (!res.ok) { toast(res.error); return; }
+      fzUI.open = ref === 'more'; done(res.merged ? 'Samengevoegd met bestaand item' : 'Toegevoegd'); return;
+    }
+    if (act === 'plan') {
+      const it = list().find(x => x.id === (document.querySelector('#fzMealItem') || {}).value), n = Math.max(1, Math.floor(Number(val('mealPortions')) || 1));
+      if (!it) return;
+      const planned = F.planMeal(data.meals, it, { id: id(), date: val('mealDate') || today(), type: (document.querySelector('#fzMealType') || {}).value || 'Avondeten', title: it.title, persons: n }, today());
+      if (!planned.ok) { toast(planned.error); return; }
+      done('Ingepland'); return;
+    }
+    if (act === 'book') {
+      const m = data.meals.find(x => x.id === ref), it = m && list().find(x => x.id === m.freezerId);
+      if (!it) { toast('Vriezergerecht niet meer beschikbaar.'); return; }
+      const r = F.bookMeal(it, m); done(r.ok ? 'Voorraad bijgewerkt' : r.error); return;
+    }
+    if (act === 'shop') {
+      let added = 0;
+      data.meals.filter(m => m.ingredients && m.date >= today()).forEach(m => F.missingIngredients(m.ingredients, data.stock, data.groceries).forEach(t => { data.groceries.push({ id: id(), title: t, category: categorizeProduct(t), done: false }); added++; }));
+      done(added ? `${added} ingrediënt(en) toegevoegd` : 'Niets ontbreekt'); return;
+    }
+    if (!item) return;
+    if (act === 'delete') { if (confirm('Verwijderen?')) { data.freezer = list().filter(x => x !== item); done(); } return; }
+    if (act === 'move') { const to = prompt('Verplaats naar (' + F.LOCATIONS.join(', ') + ')', item.location === 'Vriezer' ? 'Koelkast' : 'Vriezer'); if (!to) return; const n = prompt('Aantal porties (1-' + item.portions + ')', item.portions); const r = F.move(list(), item, to.trim().replace(/^./, c => c.toUpperCase()), n); if (!r.ok) toast(r.error); else done('Verplaatst'); return; }
+    const r = F.consume(item, act, 1); if (!r.ok) toast(r.error); else done(act === 'thawed' ? 'Ontdooid — vergeet de maaltijd niet in te plannen' : 'Bijgewerkt');
+  });
+})();

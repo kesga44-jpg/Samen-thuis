@@ -155,5 +155,103 @@
     return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
   }
 
-  return { hasConcurrentChanges, mergeUnique, nextDue, normalizeFuelMateFill, preserveUnknownFields, resolveSyncConflict, createConflictStore, sameData, remoteChangedSinceChoice, conditionalUpdateSucceeded };
+  // Bewaar onleesbare opslag onder een eigen sleutel (eenmalig per inhoud) voordat save() deze kan overschrijven.
+  function preserveCorruptData(storage, raw, key, now) {
+    if (!raw) return false;
+    try {
+      const existing = JSON.parse(storage.getItem(key) || 'null');
+      if (existing && existing.raw === raw) return true;
+      const list = Array.isArray(existing?.items) ? existing.items : [];
+      const items = list.concat({ raw, at: now }).slice(-3);
+      storage.setItem(key, JSON.stringify({ raw, at: now, items }));
+      return true;
+    } catch { return false; }
+  }
+
+  function parseStoredData(raw, migrate) {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Geen geldige Samen Thuis-gegevens');
+    return migrate(parsed);
+  }
+
+  // Laadt lokale gegevens; beschadigde brondata blijft bewaard en wordt nooit stil weggegooid.
+  function loadWithRecovery(storage, o) {
+    let stored = null;
+    try {
+      stored = storage.getItem(o.storageKey) || (o.legacyKey ? storage.getItem(o.legacyKey) : null);
+      if (!stored) return { data: o.fresh(), status: 'empty' };
+      const data = parseStoredData(stored, o.migrate);
+      try {
+        if (!storage.getItem(o.backupKey)) {
+          storage.setItem(o.backupKey, stored);
+          storage.setItem(o.backupAtKey, o.now());
+        }
+      } catch {}
+      return { data, status: 'ok' };
+    } catch {
+      const preserved = preserveCorruptData(storage, stored, o.corruptKey, o.now());
+      try {
+        const backup = storage.getItem(o.backupKey);
+        if (backup && backup !== stored) return { data: parseStoredData(backup, o.migrate), status: 'recovered', preserved };
+      } catch {}
+      return { data: o.fresh(), status: 'fresh', preserved };
+    }
+  }
+
+  function listCorruptBackups(storage, key, migrate) {
+    let items = [];
+    try { items = JSON.parse(storage.getItem(key) || 'null')?.items || []; } catch { return []; }
+    return items.map((item, index) => {
+      let valid = true;
+      try { parseStoredData(item.raw, migrate); } catch { valid = false; }
+      return { index, at: item.at || '', size: String(item.raw || '').length, valid };
+    });
+  }
+
+  // Schrijft herstelde gegevens: eerst de herstelvlag, dan de herstelkopie, dan pas de gegevens.
+  // Bij een fout blijven de oorspronkelijke gegevens intact en wordt de vlag weer verwijderd.
+  function writeRestored(storage, o, data, sourceRaw) {
+    const current = storage.getItem(o.storageKey);
+    if (o.holdKey) storage.setItem(o.holdKey, '1');
+    try {
+      if (current && current !== sourceRaw) storage.setItem(o.preRestoreKey, current);
+      storage.setItem(o.storageKey, JSON.stringify(data));
+    } catch (error) {
+      if (o.holdKey) { try { storage.removeItem(o.holdKey); } catch {} }
+      throw error;
+    }
+    return data;
+  }
+
+  // Valideert vóór herstel; de huidige gegevens gaan eerst naar een aparte kopie.
+  function restoreCorruptBackup(storage, o, index) {
+    const items = JSON.parse(storage.getItem(o.corruptKey) || 'null')?.items || [];
+    const item = items[index];
+    if (!item) throw new Error('Back-up niet gevonden');
+    const data = parseStoredData(item.raw, o.migrate);
+    return writeRestored(storage, o, data, item.raw);
+  }
+
+  // Herstel vanuit een back-upbestand: zelfde bescherming als restoreCorruptBackup.
+  // De updatedAt van de back-up blijft ongewijzigd, zodat de eerstvolgende sync via de hold een conflictkeuze vraagt.
+  function restoreBackupText(storage, o, text) {
+    const data = parseStoredData(text, o.migrate);
+    return writeRestored(storage, o, data, null);
+  }
+
+  // Bepaalt de synchronisatiestap. Een herstelde kopie die afwijkt van de cloud wordt nooit automatisch geüpload.
+  function planSync({ local, remote, hold, resolution, lastSyncedAt }) {
+    if (!remote) return 'upload';
+    if (!resolution && ((hold && !sameData(local, remote))
+      || hasConcurrentChanges(local.meta?.updatedAt, remote.meta?.updatedAt, lastSyncedAt, local, remote))) return 'conflict';
+    if (resolution === 'remote') return 'remote';
+    if (resolution === 'local') return 'upload';
+    const l = new Date(local.meta?.updatedAt || 0).getTime();
+    const r = new Date(remote.meta?.updatedAt || 0).getTime();
+    if (r > l) return 'remote';
+    if (l > r) return 'upload';
+    return 'none';
+  }
+
+  return { restoreBackupText, planSync, loadWithRecovery, listCorruptBackups, restoreCorruptBackup, preserveCorruptData, hasConcurrentChanges, mergeUnique, nextDue, normalizeFuelMateFill, preserveUnknownFields, resolveSyncConflict, createConflictStore, sameData, remoteChangedSinceChoice, conditionalUpdateSucceeded };
 });
