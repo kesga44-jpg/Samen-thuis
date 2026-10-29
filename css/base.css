@@ -1,7 +1,0 @@
-/* Basis-aanvullingen; aanvullend op styles.css */
-::selection { color: #fff; background: var(--blue); }
-html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
-button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid var(--blue); outline-offset: 2px; }
-button:disabled { opacity: 0.5; cursor: not-allowed; }
-img, svg, canvas { max-width: 100%; }
-.hidden { display: none !important; }
