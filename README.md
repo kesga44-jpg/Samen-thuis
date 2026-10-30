@@ -13,3 +13,8 @@ donkerblauwe oppervlakken krijgen lichte tekst.
 
 De mobiele navigatie en het bewaren van de horizontale positie blijven
 onderdeel van de bestaande app-functionaliteit.
+
+Het budget gebruikt één financiële ledger in integer centen. Inkomstenbronnen,
+verdelingsregels en terugkerende vaste lasten worden in diezelfde versleutelde
+huishoudgegevens bewaard. Verwachte betalingen reserveren alleen saldo; een
+uitgave ontstaat pas nadat een gebruiker de daadwerkelijke betaling bevestigt.
