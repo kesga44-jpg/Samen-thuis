@@ -102,3 +102,126 @@ test('invalid dates, months, pot references and transfers are rejected', () => {
     amount: '1', date: '2026-10-01', fromPotId: 'groceries', toPotId: 'missing'
   }, pots), /bestaand potje/);
 });
+
+test('income distribution previews first, respects priority and applies only once', () => {
+  const ledger = L.empty();
+  L.addIncome(ledger, {
+    id: 'salary', amount: '1000', date: '2026-10-25', type: 'salary', source: 'Kees'
+  }, pots);
+  L.addAllocationRule(ledger, { potId: 'groceries', kind: 'fixed', amount: '300', priority: 1 }, pots, 'fixed-rule');
+  L.addAllocationRule(ledger, { potId: 'buffer', kind: 'percent', basisPoints: 5000, priority: 2 }, pots, 'percent-rule');
+  const proposal = L.proposeIncomeDistribution(ledger, 'salary', pots);
+  assert.equal(proposal.status, 'proposed');
+  assert.deepEqual(proposal.allocations.map(item => item.amountCents), [30000, 50000]);
+  assert.equal(proposal.unallocatedCents, 20000);
+  assert.equal(L.allPotBalances(ledger, pots).groceries, 0);
+  assert.equal(L.proposeIncomeDistribution(ledger, 'salary', pots).id, proposal.id);
+  assert.equal(L.approveIncomeDistribution(ledger, proposal.id, pots), true);
+  assert.equal(L.approveIncomeDistribution(ledger, proposal.id, pots), false);
+  assert.equal(ledger.pendingDistributions[0].status, 'approved');
+  assert.equal(L.allPotBalances(ledger, pots).groceries, 30000);
+  assert.equal(L.allPotBalances(ledger, pots).buffer, 50000);
+  assert.equal(L.availableCashCents(ledger), 100000);
+});
+
+test('automatic distribution caps to received income and keeps deterministic allocation ids', () => {
+  const ledger = L.empty();
+  L.addIncome(ledger, {
+    id: 'bonus', amount: '50', date: '2026-10-26', type: 'other', source: 'Bonus'
+  }, pots);
+  L.addAllocationRule(ledger, { potId: 'groceries', kind: 'fixed', amount: '100', priority: 0 }, pots, 'rule');
+  L.setDistributionMode(ledger, 'automatic');
+  const proposal = L.proposeIncomeDistribution(ledger, 'bonus', pots, { automatic: true });
+  assert.equal(proposal.status, 'approved');
+  assert.equal(proposal.allocations[0].amountCents, 5000);
+  assert.equal(proposal.unallocatedCents, 0);
+  assert.equal(L.proposeIncomeDistribution(ledger, 'bonus', pots, { automatic: true }).id, proposal.id);
+  assert.equal(ledger.incomes[0].allocations.length, 1);
+});
+
+test('monthly plan shows different income dates, reserves upcoming bills and updates after payment', () => {
+  const ledger = L.empty();
+  ledger.openingBalances.groceries = 100000;
+  L.addIncomeSource(ledger, {
+    name: 'Salaris Kees', receiver: 'Kees', amount: '3000', frequency: 'monthly',
+    expectedDate: '2026-10-25'
+  }, pots, 'kees');
+  L.addIncomeSource(ledger, {
+    name: 'Salaris Daphne', receiver: 'Daphne', amount: '2500', frequency: 'monthly',
+    expectedDate: '2026-10-28'
+  }, pots, 'daphne');
+  L.addRecurringBill(ledger, {
+    name: 'Huur', amount: '700', potId: 'groceries', frequency: 'monthly',
+    startDate: '2026-10-01', expectedDate: '2026-10-01'
+  }, pots, 'rent');
+  L.addRecurringBill(ledger, {
+    name: 'Internet', amount: '50', potId: 'groceries', frequency: 'monthly',
+    startDate: '2026-10-12', expectedDate: '2026-10-12'
+  }, pots, 'internet');
+  let plan = L.monthPlan(ledger, '2026-10', pots);
+  assert.deepEqual(plan.expectedIncome.map(item => item.date), ['2026-10-25', '2026-10-28']);
+  assert.equal(plan.totalBillsCents, 75000);
+  assert.equal(plan.byPot.groceries.reservedCents, 75000);
+  assert.equal(plan.byPot.groceries.availableCents, 25000);
+  assert.equal(plan.byPot.groceries.stillNeededCents, 0);
+
+  L.recordBillPayment(ledger, { billId: 'rent', occurrenceDate: '2026-10-01' }, pots);
+  plan = L.monthPlan(ledger, '2026-10', pots);
+  assert.equal(plan.byPot.groceries.paidCents, 70000);
+  assert.equal(plan.byPot.groceries.dueCents, 5000);
+  assert.equal(plan.byPot.groceries.balanceCents, 30000);
+  assert.equal(plan.byPot.groceries.reservedCents, 5000);
+  assert.equal(plan.byPot.groceries.availableCents, 25000);
+  assert.throws(() => L.recordBillPayment(ledger, {
+    billId: 'rent', occurrenceDate: '2026-10-01'
+  }, pots), /al als betaald/);
+});
+
+test('recurring bills respect frequency, start/end dates, variable payments and insufficient pot balances', () => {
+  const ledger = L.empty();
+  ledger.openingBalances.groceries = 2500;
+  L.addRecurringBill(ledger, {
+    name: 'Verzekering', amount: '40', potId: 'groceries', frequency: 'quarterly',
+    startDate: '2026-01-05', expectedDate: '2026-01-05', endDate: '2026-10-05', variable: true
+  }, pots, 'insurance');
+  const plan = L.monthPlan(ledger, '2026-10', pots);
+  assert.deepEqual(plan.bills.map(item => item.date), ['2026-10-05']);
+  assert.equal(plan.byPot.groceries.stillNeededCents, 1500);
+  assert.throws(() => L.recordBillPayment(ledger, {
+    billId: 'insurance', occurrenceDate: '2026-10-05', amount: '30'
+  }, pots), error => error.code === 'INSUFFICIENT_FUNDS');
+  L.recordBillPayment(ledger, {
+    billId: 'insurance', occurrenceDate: '2026-10-05', amount: '20'
+  }, pots, { allowOverdraw: true });
+  assert.equal(L.monthPlan(ledger, '2026-10', pots).byPot.groceries.balanceCents, 500);
+});
+
+test('recurrences keep their original month-end date and configuration edits retain identity', () => {
+  const ledger = L.empty();
+  L.addIncomeSource(ledger, {
+    name: 'Salaris', receiver: 'Kees', amount: '3000', frequency: 'monthly', expectedDate: '2026-01-31'
+  }, pots, 'monthly-salary');
+  L.addRecurringBill(ledger, {
+    name: 'Hypotheek', amount: '1200', potId: 'buffer', frequency: 'monthly',
+    expectedDate: '2026-01-31', startDate: '2026-01-31'
+  }, pots, 'mortgage');
+  assert.equal(L.monthPlan(ledger, '2026-02', pots).expectedIncome[0].date, '2026-02-28');
+  assert.equal(L.monthPlan(ledger, '2026-03', pots).expectedIncome[0].date, '2026-03-31');
+  assert.equal(L.monthPlan(ledger, '2026-02', pots).bills[0].date, '2026-02-28');
+  L.updateRecurringBill(ledger, 'mortgage', {
+    name: 'Hypotheek', amount: '1250', potId: 'buffer', frequency: 'monthly',
+    expectedDate: '2026-01-31', startDate: '2026-01-31'
+  }, pots);
+  assert.equal(ledger.recurringBills[0].id, 'mortgage');
+  assert.equal(ledger.recurringBills[0].amountCents, 125000);
+});
+
+test('normalization preserves old ledger records and initializes planner settings safely', () => {
+  const legacy = { incomes: [{ id: 'legacy' }], expenses: [], transfers: [], openingBalances: {} };
+  const normalized = L.normalize(legacy);
+  assert.equal(normalized.incomes[0].id, 'legacy');
+  assert.deepEqual(normalized.incomeSources, []);
+  assert.deepEqual(normalized.recurringBills, []);
+  assert.equal(normalized.distributionMode, 'approval');
+  assert.deepEqual(legacy.incomes, normalized.incomes);
+});

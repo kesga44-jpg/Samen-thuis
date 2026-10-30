@@ -6046,6 +6046,7 @@ document.addEventListener('click', event => {
 
   let ledgerMonth25 = todayISO().slice(0, 7);
   let ledgerEdit25 = null;
+  let ledgerConfigEdit25 = null;
   const ledgerCore25 = window.SamenThuisBudgetLedger;
   const moneyLedger25 = value => new Intl.NumberFormat('nl-NL', { style: 'currency', currency: 'EUR' }).format((Number(value) || 0) / 100);
   const decimalLedger25 = value => (Number(value || 0) / 100).toFixed(2);
@@ -6288,6 +6289,7 @@ document.addEventListener('click', event => {
     }
     const allPots = ledgerPotHistory25(ledger, pots);
     const summary = ledgerCore25.monthSummary(ledger, ledgerMonth25, allPots);
+    const cashflow = ledgerCore25.monthPlan(ledger, ledgerMonth25, allPots);
     const balances = summary.potBalances;
     const allocationsForPot = potId => ledger.incomes.reduce((sum, income) =>
       sum + (income.allocations || []).filter(item => item.potId === potId).reduce((n, item) => n + Number(item.amountCents || 0), 0), 0);
@@ -6422,6 +6424,238 @@ document.addEventListener('click', event => {
     const selectedEdit = ledgerEditFormMarkup25(ledger, allPots);
     if (selectedEdit) section.append(selectedEdit);
 
+    const planning = ledgerNode25('section', 'ledger-section25 ledger-planning25');
+    const planningHeading = ledgerNode25('div', 'card-head');
+    const planningTitle = ledgerNode25('div');
+    planningTitle.append(ledgerNode25('p', 'eyebrow', 'INKOMSTEN & VASTE LASTEN'),
+      ledgerNode25('h3', '', 'Maandplanning'));
+    const mode = ledgerSelect25('distributionMode', [
+      { value: 'approval', label: 'Eerst goedkeuren', selected: ledger.distributionMode !== 'automatic' },
+      { value: 'automatic', label: 'Automatisch verdelen', selected: ledger.distributionMode === 'automatic' }
+    ]);
+    mode.dataset.ledgerMode = '';
+    planningHeading.append(planningTitle, ledgerField25('Verdeling van ontvangen inkomsten', mode));
+    planning.append(planningHeading, ledgerNode25('p', 'small-note',
+      'Alleen werkelijk ontvangen inkomsten worden verdeeld. Automatische modus past de regels direct toe; goedkeuringsmodus toont eerst een voorstel.'));
+    const planMetrics = ledgerNode25('div', 'ledger-kpis25');
+    const planKpi = (label, amount) => {
+      const card = ledgerNode25('article');
+      card.append(ledgerNode25('small', '', label), ledgerNode25('b', '', moneyLedger25(amount)));
+      return card;
+    };
+    planMetrics.append(
+      planKpi('Vaste lasten deze maand', cashflow.totalBillsCents),
+      planKpi('Nog niet betaald', cashflow.unpaidBillsCents),
+      planKpi('Verwachte inkomsten', cashflow.expectedIncome
+        .filter(item => !item.received).reduce((sum, item) => sum + item.amountCents, 0))
+    );
+    planning.append(planMetrics);
+
+    const schedules = ledgerNode25('div', 'ledger-schedule25');
+    const timeline = [
+      ...cashflow.expectedIncome.map(item => ({ ...item, timelineKind: 'income' })),
+      ...cashflow.bills.map(item => ({ ...item, timelineKind: 'bill' }))
+    ].sort((a, b) => a.date.localeCompare(b.date));
+    timeline.forEach(item => {
+      const row = ledgerNode25('article', 'ledger-entry25');
+      const details = ledgerNode25('div');
+      if (item.timelineKind === 'income') {
+        details.append(ledgerNode25('strong', '', `${item.name} · ${item.receiver}`),
+          ledgerNode25('small', '', `${item.date} · ${item.received ? 'Ontvangen en geregistreerd' : 'Verwacht inkomen'}`));
+        row.append(details, ledgerNode25('b', '', `+ ${moneyLedger25(item.amountCents)}`));
+        if (!item.received) row.append(ledgerButton25('Ontvangst boeken', 'secondary', 'button', {
+          'data-ledger-receive': item.sourceId, 'data-income-date': item.date
+        }));
+      } else {
+        const pot = allPots.find(candidate => candidate.id === item.potId);
+        details.append(ledgerNode25('strong', '', item.name),
+          ledgerNode25('small', '', `${item.date} · ${pot?.label || 'Verwijderd potje'} · ${item.paid ? 'Betaald' : 'Verwachte afschrijving'}`));
+        row.append(details, ledgerNode25('b', '', `− ${moneyLedger25(item.expectedAmountCents)}`));
+        if (!item.paid) {
+          if (item.variable) {
+            const amount = ledgerInput25('amount', 'number', {
+              inputmode: 'decimal', min: '0.01', step: '0.01',
+              value: decimalLedger25(item.expectedAmountCents), 'aria-label': `Werkelijk bedrag voor ${item.name}`
+            });
+            amount.dataset.billAmount = item.billId;
+            amount.dataset.billOccurrenceDate = item.date;
+            row.append(amount);
+          }
+          row.append(ledgerButton25('Betaald registreren', 'secondary', 'button', {
+            'data-ledger-bill-paid': item.billId, 'data-bill-occurrence-date': item.date
+          }));
+        }
+      }
+      schedules.append(row);
+    });
+    if (!schedules.children.length) schedules.append(ledgerNode25('p', 'muted',
+      'Stel inkomstenbronnen en vaste lasten in om de maandtijdlijn te vullen.'));
+    planning.append(schedules);
+
+    const sourceForm = ledgerNode25('form', 'ledger-form25');
+    const sourceEdit = ledgerConfigEdit25?.kind === 'income-source'
+      ? ledger.incomeSources.find(item => item.id === ledgerConfigEdit25.id) : null;
+    sourceForm.dataset.ledgerForm = sourceEdit ? 'edit-income-source' : 'income-source';
+    if (sourceEdit) sourceForm.dataset.editId = sourceEdit.id;
+    sourceForm.append(ledgerNode25('h3', '', sourceEdit ? 'Inkomstenbron wijzigen' : 'Inkomstenbron instellen'));
+    const sourceFields = ledgerNode25('div', 'ledger-fields25');
+    sourceFields.append(
+      ledgerField25('Naam', ledgerInput25('name', 'text', { maxlength: '100', required: true, value: sourceEdit?.name || '' })),
+      ledgerField25('Netto bedrag (€)', ledgerInput25('amount', 'number', { inputmode: 'decimal', min: '0.01', step: '0.01', required: true, value: sourceEdit ? decimalLedger25(sourceEdit.amountCents) : '' })),
+      ledgerField25('Ontvanger', ledgerInput25('receiver', 'text', { maxlength: '80', required: true, value: sourceEdit?.receiver || '' })),
+      ledgerField25('Frequentie', ledgerSelect25('frequency', [
+        { value: 'weekly', label: 'Wekelijks', selected: sourceEdit?.frequency === 'weekly' },
+        { value: 'monthly', label: 'Maandelijks', selected: !sourceEdit || sourceEdit.frequency === 'monthly' },
+        { value: 'quarterly', label: 'Per kwartaal', selected: sourceEdit?.frequency === 'quarterly' },
+        { value: 'semiannual', label: 'Halfjaarlijks', selected: sourceEdit?.frequency === 'semiannual' },
+        { value: 'yearly', label: 'Jaarlijks', selected: sourceEdit?.frequency === 'yearly' },
+        { value: 'once', label: 'Eenmalig', selected: sourceEdit?.frequency === 'once' }
+      ])),
+      ledgerField25('Eerstvolgende ontvangstdatum', ledgerInput25('expectedDate', 'date', { value: sourceEdit?.expectedDate || ledgerDate, required: true })),
+      ledgerField25('Voorkeurspotje (optioneel)', ledgerSelect25('potId', [
+        { value: '', label: 'Geen voorkeur', selected: !sourceEdit?.potId },
+        ...potOptions.map(item => ({ ...item, selected: item.value === sourceEdit?.potId }))
+      ], false))
+    );
+    sourceForm.append(sourceFields, ledgerButton25(sourceEdit ? 'Wijzigingen bewaren' : 'Inkomstenbron bewaren', 'primary', 'submit'));
+    if (sourceEdit) sourceForm.append(ledgerButton25('Annuleren', 'secondary', 'button', { 'data-ledger-config-cancel': '' }));
+
+    const ruleForm = ledgerNode25('form', 'ledger-form25');
+    const ruleEdit = ledgerConfigEdit25?.kind === 'allocation-rule'
+      ? ledger.allocationRules.find(item => item.id === ledgerConfigEdit25.id) : null;
+    ruleForm.dataset.ledgerForm = ruleEdit ? 'edit-allocation-rule' : 'allocation-rule';
+    if (ruleEdit) ruleForm.dataset.editId = ruleEdit.id;
+    ruleForm.append(ledgerNode25('h3', '', ruleEdit ? 'Verdelingsregel wijzigen' : 'Verdelingsregel toevoegen'));
+    const ruleFields = ledgerNode25('div', 'ledger-fields25');
+    ruleFields.append(
+      ledgerField25('Potje', ledgerSelect25('potId', potOptions.map(item => ({ ...item, selected: item.value === ruleEdit?.potId })))),
+      ledgerField25('Soort', ledgerSelect25('kind', [
+        { value: 'fixed', label: 'Vast bedrag', selected: !ruleEdit || ruleEdit.kind === 'fixed' },
+        { value: 'percent', label: 'Percentage', selected: ruleEdit?.kind === 'percent' }
+      ])),
+      ledgerField25('Bedrag (€) of percentage', ledgerInput25('value', 'number', {
+        inputmode: 'decimal', min: '0.01', step: '0.01', required: true,
+        value: ruleEdit ? (ruleEdit.kind === 'percent' ? (ruleEdit.value / 100).toFixed(2) : decimalLedger25(ruleEdit.value)) : ''
+      })),
+      ledgerField25('Prioriteit (lager = eerst)', ledgerInput25('priority', 'number', {
+        min: '0', step: '1', value: ruleEdit?.priority ?? ledger.allocationRules.length
+      }))
+    );
+    ruleForm.append(ruleFields, ledgerButton25(ruleEdit ? 'Wijzigingen bewaren' : 'Regel bewaren', 'primary', 'submit'));
+    if (ruleEdit) ruleForm.append(ledgerButton25('Annuleren', 'secondary', 'button', { 'data-ledger-config-cancel': '' }));
+
+    const billForm = ledgerNode25('form', 'ledger-form25');
+    const billEdit = ledgerConfigEdit25?.kind === 'recurring-bill'
+      ? ledger.recurringBills.find(item => item.id === ledgerConfigEdit25.id) : null;
+    billForm.dataset.ledgerForm = billEdit ? 'edit-recurring-bill' : 'recurring-bill';
+    if (billEdit) billForm.dataset.editId = billEdit.id;
+    billForm.append(ledgerNode25('h3', '', billEdit ? 'Vaste last wijzigen' : 'Vaste last instellen'));
+    const billFields = ledgerNode25('div', 'ledger-fields25');
+    billFields.append(
+      ledgerField25('Naam', ledgerInput25('name', 'text', { maxlength: '100', required: true, value: billEdit?.name || '' })),
+      ledgerField25('Bedrag (€)', ledgerInput25('amount', 'number', { inputmode: 'decimal', min: '0.01', step: '0.01', required: true, value: billEdit ? decimalLedger25(billEdit.amountCents) : '' })),
+      ledgerField25('Potje', ledgerSelect25('potId', potOptions.map(item => ({ ...item, selected: item.value === billEdit?.potId })))),
+      ledgerField25('Frequentie', ledgerSelect25('frequency', [
+        { value: 'weekly', label: 'Wekelijks', selected: billEdit?.frequency === 'weekly' },
+        { value: 'monthly', label: 'Maandelijks', selected: !billEdit || billEdit.frequency === 'monthly' },
+        { value: 'quarterly', label: 'Per kwartaal', selected: billEdit?.frequency === 'quarterly' },
+        { value: 'semiannual', label: 'Halfjaarlijks', selected: billEdit?.frequency === 'semiannual' },
+        { value: 'yearly', label: 'Jaarlijks', selected: billEdit?.frequency === 'yearly' }
+      ])),
+      ledgerField25('Eerstvolgende afschrijving', ledgerInput25('expectedDate', 'date', { value: billEdit?.expectedDate || ledgerDate, required: true })),
+      ledgerField25('Startdatum', ledgerInput25('startDate', 'date', { value: billEdit?.startDate || ledgerDate, required: true })),
+      ledgerField25('Einddatum (optioneel)', ledgerInput25('endDate', 'date', { value: billEdit?.endDate || '' })),
+      ledgerField25('Notitie', ledgerInput25('note', 'text', { maxlength: '240', value: billEdit?.note || '' }), true)
+    );
+    const variableInput = ledgerInput25('variable', 'checkbox');
+    variableInput.checked = Boolean(billEdit?.variable);
+    const variableLabel = ledgerField25('Variabel bedrag', variableInput);
+    billFields.append(variableLabel);
+    billForm.append(billFields, ledgerButton25(billEdit ? 'Wijzigingen bewaren' : 'Vaste last bewaren', 'primary', 'submit'));
+    if (billEdit) billForm.append(ledgerButton25('Annuleren', 'secondary', 'button', { 'data-ledger-config-cancel': '' }));
+    const setupForms = ledgerNode25('div', 'ledger-forms25');
+    setupForms.append(sourceForm, ruleForm, billForm);
+    planning.append(setupForms);
+
+    const sourceList = ledgerNode25('div', 'ledger-history25');
+    ledger.incomeSources.forEach(source => {
+      const row = ledgerNode25('article', 'ledger-entry25');
+      const details = ledgerNode25('div');
+      details.append(ledgerNode25('strong', '', `${source.name} · ${moneyLedger25(source.amountCents)}`),
+        ledgerNode25('small', '', `${source.receiver} · ${source.frequency} · eerstvolgende ${source.expectedDate} · ${source.active === false ? 'Uitgeschakeld' : 'Actief'}`));
+      const actions = ledgerNode25('span', 'ledger-actions25');
+      actions.append(
+        ledgerButton25('Wijzigen', 'secondary', 'button', { 'data-ledger-config-edit': 'income-source', 'data-config-id': source.id }),
+        ledgerButton25(source.active === false ? 'Inschakelen' : 'Uitschakelen', 'secondary', 'button', {
+          'data-ledger-source-toggle': source.id
+        })
+      );
+      row.append(details, actions); sourceList.append(row);
+    });
+    if (!sourceList.children.length) sourceList.append(ledgerNode25('p', 'muted', 'Nog geen vaste inkomstenbronnen ingesteld.'));
+    planning.append(ledgerNode25('h3', '', 'Inkomstenbronnen'), sourceList);
+
+    const billList = ledgerNode25('div', 'ledger-history25');
+    ledger.recurringBills.forEach(bill => {
+      const pot = allPots.find(item => item.id === bill.potId);
+      const row = ledgerNode25('article', 'ledger-entry25');
+      const details = ledgerNode25('div');
+      details.append(ledgerNode25('strong', '', `${bill.name} · ${moneyLedger25(bill.amountCents)}`),
+        ledgerNode25('small', '', `${pot?.label || 'Verwijderd potje'} · ${bill.frequency} · ${bill.expectedDate} · ${bill.variable ? 'Variabel' : 'Vast'} · ${bill.active === false ? 'Uitgeschakeld' : 'Actief'}`));
+      const actions = ledgerNode25('span', 'ledger-actions25');
+      actions.append(
+        ledgerButton25('Wijzigen', 'secondary', 'button', { 'data-ledger-config-edit': 'recurring-bill', 'data-config-id': bill.id }),
+        ledgerButton25(bill.active === false ? 'Inschakelen' : 'Uitschakelen', 'secondary', 'button', {
+          'data-ledger-bill-toggle': bill.id
+        })
+      );
+      row.append(details, actions); billList.append(row);
+    });
+    if (!billList.children.length) billList.append(ledgerNode25('p', 'muted', 'Nog geen terugkerende vaste lasten ingesteld.'));
+    planning.append(ledgerNode25('h3', '', 'Terugkerende vaste lasten'), billList);
+
+    const ruleList = ledgerNode25('div', 'ledger-history25');
+    ledger.allocationRules.sort((a, b) => Number(a.priority || 0) - Number(b.priority || 0)).forEach(rule => {
+      const pot = allPots.find(item => item.id === rule.potId);
+      const value = rule.kind === 'percent' ? `${(rule.value / 100).toLocaleString('nl-NL')}%` : moneyLedger25(rule.value);
+      const row = ledgerNode25('article', 'ledger-entry25');
+      row.append(ledgerNode25('strong', '', `${pot?.label || 'Verwijderd potje'} · ${value} · prioriteit ${rule.priority + 1}`),
+        ledgerNode25('small', '', rule.active === false ? 'Uitgeschakeld' : 'Actief'));
+      const actions = ledgerNode25('span', 'ledger-actions25');
+      actions.append(
+        ledgerButton25('Wijzigen', 'secondary', 'button', { 'data-ledger-config-edit': 'allocation-rule', 'data-config-id': rule.id }),
+        ledgerButton25(rule.active === false ? 'Inschakelen' : 'Uitschakelen', 'secondary', 'button', {
+        'data-ledger-rule-toggle': rule.id
+        })
+      );
+      row.append(actions);
+      ruleList.append(row);
+    });
+    if (!ruleList.children.length) ruleList.append(ledgerNode25('p', 'muted', 'Nog geen verdelingsregels ingesteld.'));
+    planning.append(ledgerNode25('h3', '', 'Verdelingsregels · prioriteit'), ruleList);
+
+    const proposals = ledgerNode25('div', 'ledger-history25');
+    ledger.pendingDistributions.filter(item => item.status === 'proposed').forEach(proposal => {
+      const income = ledger.incomes.find(item => item.id === proposal.incomeId);
+      const row = ledgerNode25('article', 'ledger-entry25');
+      const details = ledgerNode25('div');
+      details.append(ledgerNode25('strong', '', `Voorstel voor ${income?.source || 'inkomsten'}`));
+      const list = ledgerNode25('ul');
+      proposal.allocations.forEach(allocation => {
+        const pot = allPots.find(item => item.id === allocation.potId);
+        list.append(ledgerNode25('li', '', `${pot?.label || 'Verwijderd potje'} · ${moneyLedger25(allocation.amountCents)}`));
+      });
+      details.append(list, ledgerNode25('small', '', `Niet verdeeld: ${moneyLedger25(proposal.unallocatedCents)}`));
+      row.append(details, ledgerButton25('Verdeling goedkeuren', 'primary', 'button', {
+        'data-ledger-distribution-approve': proposal.id
+      }));
+      proposals.append(row);
+    });
+    if (proposals.children.length) planning.append(ledgerNode25('h3', '', 'Wacht op goedkeuring'), proposals);
+    planning.append(ledgerNode25('p', 'small-note',
+      'Verwachte afschrijvingen zijn reserveringen, geen betalingen. Alleen na jouw bevestiging wordt een uitgave geboekt; variabele bedragen kunnen daarbij worden aangepast.'));
+    section.append(planning);
+
     const historySection = (title, content) => {
       const block = ledgerNode25('section', 'ledger-section25');
       block.append(ledgerNode25('h3', '', title), content);
@@ -6438,7 +6672,9 @@ document.addEventListener('click', event => {
       const assigned = Number(ledger.openingBalances[pot.id] || 0) + allocationsForPot(pot.id);
       const spent = summary.expenses.filter(item => item.potId === pot.id)
         .reduce((sum, item) => sum + Number(item.amountCents || 0), 0);
-      const row = ledgerNode25('article', `ledger-pot25${balance < 0 ? ' is-negative' : ''}${pot.archived ? ' is-archived' : ''}`);
+      const reservation = cashflow.byPot[pot.id] || { reservedCents: 0, availableCents: balance, stillNeededCents: 0 };
+      const needsAttention = balance < 0 || reservation.stillNeededCents > 0;
+      const row = ledgerNode25('article', `ledger-pot25${needsAttention ? ' is-negative' : ''}${pot.archived ? ' is-archived' : ''}`);
       const name = ledgerNode25('div');
       name.append(ledgerNode25('h3', '', pot.label), ledgerNode25('small', '',
         pot.archived ? 'Verwijderd potje · verschuif het saldo naar een actief potje'
@@ -6453,6 +6689,9 @@ document.addEventListener('click', event => {
         metric(pot.archived ? 'Begroot toen verwijderd' : 'Begroot / mnd', pot.plannedCents),
         metric('Toegewezen totaal', assigned),
         metric('Uitgegeven deze maand', spent),
+        metric('Gereserveerd', reservation.reservedCents),
+        metric('Vrij beschikbaar', reservation.availableCents),
+        metric('Nog nodig', reservation.stillNeededCents),
         metric('Saldo nu', balance)
       );
       potRows.append(row);
@@ -7390,6 +7629,95 @@ document.addEventListener('click', event => {
   };
 
   document.addEventListener('click', event => {
+    const receiveIncome = event.target.closest('[data-ledger-receive]');
+    if (receiveIncome) {
+      const ledger = ledgerState25(), source = ledger.incomeSources.find(item => item.id === receiveIncome.dataset.ledgerReceive);
+      if (!source) { toast('Deze inkomstenbron is niet meer beschikbaar.'); return; }
+      const date = receiveIncome.dataset.incomeDate;
+      if (!confirm(`Bevestig dat ${source.name} van ${moneyLedger25(source.amountCents)} op ${date} daadwerkelijk is ontvangen. Alleen dan wordt dit als inkomen geboekt.`)) return;
+      const pots = ledgerPots25();
+      try {
+        const hasRules = ledger.allocationRules.some(rule => rule.active !== false);
+        const income = ledgerCore25.addIncome(ledger, {
+          amount: source.amountCents / 100, date, type: 'other', source: source.name,
+          description: `Ontvangst geregistreerd voor ${source.receiver}`, sourceId: source.id,
+          externalId: `income-source:${source.id}:${date}`,
+          allocations: !hasRules && source.potId ? [{ potId: source.potId, amount: source.amountCents / 100 }] : []
+        }, pots);
+        const proposal = hasRules
+          ? ledgerCore25.proposeIncomeDistribution(ledger, income.id, pots, { automatic: ledger.distributionMode === 'automatic' })
+          : null;
+        syncGoalMirrors25(ledger); save(); render();
+        toast(proposal?.status === 'proposed' ? 'Ontvangst geboekt; verdelingsvoorstel wacht op goedkeuring.'
+          : proposal ? 'Ontvangst geboekt en automatisch verdeeld.' : 'Ontvangst geboekt.');
+      } catch (error) { toast(error.message || 'De ontvangst kon niet worden geregistreerd.'); }
+      return;
+    }
+    const payBill = event.target.closest('[data-ledger-bill-paid]');
+    if (payBill) {
+      const ledger = ledgerState25(), bill = ledger.recurringBills.find(item => item.id === payBill.dataset.ledgerBillPaid);
+      if (!bill) { toast('Deze vaste last is niet meer beschikbaar.'); return; }
+      const occurrenceDate = payBill.dataset.billOccurrenceDate;
+      const amountField = payBill.closest('.ledger-entry25')?.querySelector('[data-bill-amount]');
+      const amount = amountField?.value;
+      if (!confirm(`Is ${bill.name} op ${occurrenceDate} daadwerkelijk betaald? Dit registreert alleen de uitgave in Samen Thuis; er wordt geen bankbetaling uitgevoerd.`)) return;
+      try {
+        const allPots = ledgerPotHistory25(ledger, ledgerPots25());
+        try {
+          ledgerCore25.recordBillPayment(ledger, { billId: bill.id, occurrenceDate, amount }, allPots);
+        } catch (error) {
+          if (error.code !== 'INSUFFICIENT_FUNDS') throw error;
+          const balance = ledgerCore25.allPotBalances(ledger, allPots)[bill.potId] || 0;
+          if (!confirm(`${error.message} Het saldo van ${moneyLedger25(balance)} is onvoldoende. De betaling toch als negatief potjessaldo registreren?`)) return;
+          ledgerCore25.recordBillPayment(ledger, { billId: bill.id, occurrenceDate, amount }, allPots, { allowOverdraw: true });
+        }
+        syncGoalMirrors25(ledger); save(); render(); toast('Betaling als werkelijk uitgegeven geregistreerd.');
+      } catch (error) { toast(error.message || 'De betaling kon niet worden geregistreerd.'); }
+      return;
+    }
+    const approveDistribution = event.target.closest('[data-ledger-distribution-approve]');
+    if (approveDistribution) {
+      const ledger = ledgerState25();
+      try {
+        if (!ledgerCore25.approveIncomeDistribution(ledger, approveDistribution.dataset.ledgerDistributionApprove, ledgerPotHistory25(ledger, ledgerPots25()))) {
+          toast('Dit verdelingsvoorstel is al afgehandeld.'); return;
+        }
+        syncGoalMirrors25(ledger); save(); render(); toast('Verdeling goedgekeurd en geboekt.');
+      } catch (error) { toast(error.message || 'De verdeling kon niet worden goedgekeurd.'); }
+      return;
+    }
+    const toggleRule = event.target.closest('[data-ledger-rule-toggle]');
+    if (toggleRule) {
+      const ledger = ledgerState25(), rule = ledger.allocationRules.find(item => item.id === toggleRule.dataset.ledgerRuleToggle);
+      if (!rule) return;
+      rule.active = rule.active === false;
+      save(); render(); toast(rule.active ? 'Verdelingsregel ingeschakeld.' : 'Verdelingsregel uitgeschakeld.');
+      return;
+    }
+    if (event.target.closest('[data-ledger-config-cancel]')) {
+      ledgerConfigEdit25 = null; render(); return;
+    }
+    const editConfig = event.target.closest('[data-ledger-config-edit]');
+    if (editConfig) {
+      ledgerConfigEdit25 = { kind: editConfig.dataset.ledgerConfigEdit, id: editConfig.dataset.configId };
+      render(); return;
+    }
+    const toggleSource = event.target.closest('[data-ledger-source-toggle]');
+    if (toggleSource) {
+      const source = ledgerState25().incomeSources.find(item => item.id === toggleSource.dataset.ledgerSourceToggle);
+      if (!source) return;
+      source.active = source.active === false;
+      save(); render(); toast(source.active ? 'Inkomstenbron ingeschakeld.' : 'Inkomstenbron uitgeschakeld.');
+      return;
+    }
+    const toggleBill = event.target.closest('[data-ledger-bill-toggle]');
+    if (toggleBill) {
+      const bill = ledgerState25().recurringBills.find(item => item.id === toggleBill.dataset.ledgerBillToggle);
+      if (!bill) return;
+      bill.active = bill.active === false;
+      save(); render(); toast(bill.active ? 'Vaste last ingeschakeld.' : 'Vaste last uitgeschakeld.');
+      return;
+    }
     const groupBtn = event.target.closest('[data-offer-group]');
     if (groupBtn) {
       const id = groupBtn.dataset.offerGroup;
@@ -7525,6 +7853,14 @@ document.addEventListener('click', event => {
   });
 
   document.addEventListener('change', event => {
+    if (event.target.matches('[data-ledger-mode]')) {
+      try {
+        ledgerCore25.setDistributionMode(ledgerState25(), event.target.value);
+        save(); render();
+        toast(event.target.value === 'automatic' ? 'Automatische verdeling ingeschakeld.' : 'Verdelingen vragen eerst om goedkeuring.');
+      } catch (error) { toast(error.message); }
+      return;
+    }
     if (event.target.matches('[data-ledger-month]')) {
       if (ledgerCore25.validMonth(event.target.value)) { ledgerMonth25 = event.target.value; ledgerEdit25 = null; render(); }
       else toast('Kies een geldige maand.');
@@ -7600,9 +7936,39 @@ document.addEventListener('click', event => {
             if (submit) submit.disabled = false;
             return;
           }
-          ledgerCore25.addIncome(ledger, fields, pots);
+          const income = ledgerCore25.addIncome(ledger, fields, pots);
+          const proposal = ledger.allocationRules.some(rule => rule.active !== false)
+            ? ledgerCore25.proposeIncomeDistribution(ledger, income.id, pots, { automatic: ledger.distributionMode === 'automatic' })
+            : null;
           syncGoalMirrors25(ledger);
-          toast('Inkomstenboeking opgeslagen');
+          toast(proposal?.status === 'proposed' ? 'Inkomstenboeking opgeslagen; verdelingsvoorstel wacht op goedkeuring.'
+            : proposal ? 'Inkomstenboeking opgeslagen en automatisch verdeeld.' : 'Inkomstenboeking opgeslagen');
+        } else if (action === 'income-source') {
+          ledgerCore25.addIncomeSource(ledger, fields, pots);
+          toast('Inkomstenbron opgeslagen');
+        } else if (action === 'edit-income-source') {
+          ledgerCore25.updateIncomeSource(ledger, ledgerForm.dataset.editId, fields, pots);
+          ledgerConfigEdit25 = null; toast('Inkomstenbron bijgewerkt');
+        } else if (action === 'allocation-rule') {
+          const kind = fields.kind;
+          ledgerCore25.addAllocationRule(ledger, {
+            potId: fields.potId, kind, priority: fields.priority,
+            ...(kind === 'fixed' ? { amount: fields.value } : { basisPoints: Number(fields.value) * 100 })
+          }, pots);
+          toast('Verdelingsregel opgeslagen');
+        } else if (action === 'edit-allocation-rule') {
+          const kind = fields.kind;
+          ledgerCore25.updateAllocationRule(ledger, ledgerForm.dataset.editId, {
+            potId: fields.potId, kind, priority: fields.priority,
+            ...(kind === 'fixed' ? { amount: fields.value } : { basisPoints: Number(fields.value) * 100 })
+          }, pots);
+          ledgerConfigEdit25 = null; toast('Verdelingsregel bijgewerkt');
+        } else if (action === 'recurring-bill') {
+          ledgerCore25.addRecurringBill(ledger, fields, pots);
+          toast('Vaste last opgeslagen');
+        } else if (action === 'edit-recurring-bill') {
+          ledgerCore25.updateRecurringBill(ledger, ledgerForm.dataset.editId, fields, pots);
+          ledgerConfigEdit25 = null; toast('Vaste last bijgewerkt');
         } else if (action === 'allocation') {
           const income = ledger.incomes.find(item => item.id === fields.incomeId);
           if (!income) throw new Error('Deze inkomstenboeking bestaat niet meer.');

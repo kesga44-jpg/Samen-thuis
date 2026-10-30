@@ -1738,13 +1738,20 @@ html[data-accent20="custom"] .mobile-nav23 button.active{
 .ledger-negative25{color:var(--red)!important}
 .ledger-plan25{margin:0;padding:12px;border-left:4px solid var(--blue);border-radius:5px;background:var(--blue-soft);font-size:.88rem}
 .ledger-section25{display:grid;gap:10px;padding-top:14px;border-top:1px solid var(--line)}
+.ledger-planning25{min-width:0}
+.ledger-planning25>.card-head{margin:0}
+.ledger-planning25>.small-note{margin:0}
+.ledger-planning25 h3{margin-top:5px}
+.ledger-schedule25{display:grid;gap:8px}
+.ledger-planning25 .ledger-entry25 input:not([type="checkbox"]){min-width:110px;min-height:40px;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--paper);color:var(--ink)}
+.ledger-form25 input[type="checkbox"]{justify-self:start;min-height:22px;width:22px;accent-color:var(--blue)}
 .ledger-forms25{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
 .ledger-form25{display:grid;align-content:start;gap:12px;padding:15px;border:1px solid var(--line);border-radius:13px;background:var(--bg)}
 .ledger-form25 h3{font-size:1rem}
 .ledger-form25 label{display:grid;gap:5px;font-size:.8rem;font-weight:700}
 .ledger-fields25{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
 .ledger-wide25{grid-column:1/-1}
-.ledger-pot25{grid-template-columns:minmax(120px,1.4fr) repeat(4,minmax(105px,1fr));align-items:center;margin-top:8px}
+.ledger-pot25{grid-template-columns:minmax(120px,1.4fr) repeat(6,minmax(90px,1fr));align-items:center;margin-top:8px}
 .ledger-pot25 h3{font-size:.94rem}
 .ledger-pot25 span{display:grid;gap:4px}
 .ledger-pot25.is-negative{border-color:var(--red);background:var(--red-soft,#fce8ea)}
