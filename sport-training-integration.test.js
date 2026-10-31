@@ -49,7 +49,7 @@ test('sport-assets en de nieuwe account-syncbestandsinterface worden geladen en 
   const html = read('index.html');
   const sw = read('sw.js');
   const accountSync = read('account-sync.js');
-  for (const asset of ['sportcoach.css?v=2', 'sportcoach-core.js?v=2', 'sportcoach.js?v=2', 'account-sync.js?v=2']) {
+  for (const asset of ['sportcoach.css?v=2', 'sportcoach-core.js?v=2', 'sportcoach.js?v=3', 'account-sync.js?v=2']) {
     assert.ok(html.includes(asset), `${asset} ontbreekt in index`);
     assert.ok(sw.includes(asset), `${asset} ontbreekt in service worker`);
   }

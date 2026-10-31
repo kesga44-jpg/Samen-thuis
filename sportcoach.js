@@ -355,19 +355,6 @@
 
   function updateSportNavigation() {
     window.__st_current_page__ = 'sportcoach';
-    document.querySelectorAll('[data-nav5]').forEach(button => button.classList.toggle('active', button.dataset.nav5 === 'meer'));
-    const breadcrumb = window.NavCore?.breadcrumb('sportcoach');
-    const bar = document.querySelector('#subnav5');
-    if (!breadcrumb || !bar) return;
-    try {
-      const saved = JSON.parse(sessionStorage.getItem('st-nav5-last') || '{}');
-      saved.meer = 'sportcoach';
-      sessionStorage.setItem('st-nav5-last', JSON.stringify(saved));
-    } catch {}
-    const tabs = breadcrumb.section.pages.length > 1
-      ? `<div class="subnav5-tabs" role="tablist">${breadcrumb.section.pages.map(([key, title]) => `<button role="tab" data-sub5="${escCoach(key)}" aria-selected="${key === 'sportcoach'}" class="${key === 'sportcoach' ? 'active' : ''}">${escCoach(title)}</button>`).join('')}</div>`
-      : '';
-    bar.innerHTML = `<div class="subnav5-crumb"><button data-sub5="${escCoach(breadcrumb.parent)}" aria-label="Terug naar ${escCoach(breadcrumb.section.label)}">‹ ${escCoach(breadcrumb.section.label)}</button><span>${escCoach(breadcrumb.section.label)} › <strong>Sport &amp; Training</strong></span></div>${tabs}`;
   }
 
   function selected(form, name) {
@@ -441,6 +428,7 @@
   }
 
   sections.sportcoach = { label: 'Sport & Training', icon: '🏃' };
+  window.SamenThuisSportAccess = { canManagePerson: person => canManageProfile(person) };
   const baseSportRender = render;
   render = function renderWithSportCoach(...args) {
     if (current === 'sportcoach') {

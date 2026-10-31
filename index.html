@@ -12,10 +12,11 @@
   <link rel="apple-touch-icon" href="icon.svg">
   <link rel="stylesheet" href="css/tokens.css?v=249">
   <link rel="stylesheet" href="css/base.css?v=249">
-  <link rel="stylesheet" href="css/layout.css?v=251">
+  <link rel="stylesheet" href="css/layout.css?v=252">
   <link rel="stylesheet" href="css/components.css?v=249">
   <link rel="stylesheet" href="styles.css?v=256">
   <link rel="stylesheet" href="sportcoach.css?v=2">
+  <link rel="stylesheet" href="shell.css?v=3">
   <title>Samen Thuis</title>
   <meta name="application-version" content="25.2">
 </head>
@@ -37,14 +38,16 @@
 
     <main>
       <header class="topbar">
-        <div><p id="eyebrow">Goedemorgen</p><h1 id="pageTitle">Vandaag</h1></div>
+        <button id="stBack" type="button" class="st-icon-btn st-back" aria-label="Terug" hidden><span data-st-icon="back"></span></button>
+        <div class="st-titles"><p id="eyebrow">Goedemorgen</p><h1 id="pageTitle">Vandaag</h1></div>
         <div class="top-actions">
           <span id="syncState" class="sync-state" title="Synchronisatiestatus">Alleen dit apparaat</span>
           <span id="saveState" class="save-state">Lokaal bewaard</span>
           <button id="laptopSaveBtn" class="secondary laptop-save" aria-label="Back-up opslaan voor laptop">
             <span class="full-label">⇩ Opslaan voor laptop</span><span class="short-label">⇩ Laptop</span>
           </button>
-          <button id="addBtn" class="primary">＋ Toevoegen</button>
+          <button type="button" class="st-icon-btn st-search-btn" data-st-search aria-label="Zoeken" title="Zoeken (Ctrl+K)"><span data-st-icon="search"></span></button>
+          <button id="addBtn" class="primary st-add" aria-label="Toevoegen"><span class="st-add-plus" aria-hidden="true">＋</span><span class="st-add-label"> Toevoegen</span></button>
         </div>
       </header>
       <div id="view" class="view" aria-live="polite"></div>
@@ -104,14 +107,16 @@
   <script src="freezer-core.js?v=1"></script>
   <script src="weather-advice-core.js?v=1"></script>
   <script src="sportcoach-core.js?v=2"></script>
-  <script src="nav-core.js?v=1"></script>
+  <script src="nav-core.js?v=2"></script>
+  <script src="search-core.js?v=1"></script>
   <script src="app.js?v=259"></script>
   <script src="samen-thuis-update-v26-challenges.js?v=260"></script>
   <script src="account-sync.js?v=2"></script>
   <script src="inbox-core.js?v=1"></script>
   <script src="inbox.js?v=1"></script>
   <script src="weather-extras.js?v=1"></script>
-  <script src="nav-groups.js?v=1"></script>
-  <script src="sportcoach.js?v=2"></script>
+  <script src="sportcoach.js?v=3"></script>
+  <script src="nav-groups.js?v=3"></script>
+  <script src="search.js?v=1"></script>
 </body>
 </html>
