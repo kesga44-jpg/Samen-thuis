@@ -123,6 +123,82 @@
     render();
   }
 
+  async function storageContext() {
+    if (!accountMode()) throw new Error('Bestandsopslag vereist actieve accountsynchronisatie.');
+    const session = await AUTH.ready();
+    if (!session?.user?.id) throw new Error('Meld je aan om Sport & Training-bestanden te gebruiken.');
+    if (!st.household) st.household = await cloud().membership();
+    if (!st.household?.id) throw new Error('Dit account is nog geen lid van een huishouden.');
+    return { session, householdId: String(st.household.id) };
+  }
+
+  function storagePathForHousehold(path, householdId) {
+    const value = String(path || '');
+    if (!value.startsWith(`${householdId}/`) || value.split('/').length !== 3
+      || value.split('/').some(part => !part || part === '.' || part === '..')) {
+      throw new Error('Ongeldig of niet-toegestaan huishoudbestandspad.');
+    }
+    return value;
+  }
+
+  function storageObjectUrl(path) {
+    const encoded = path.split('/').map(encodeURIComponent).join('/');
+    return `${authBase25()}/storage/v1/object/sport-training/${encoded}`;
+  }
+
+  async function uploadSportFile(file, itemId) {
+    if (!(file instanceof Blob) || !file.name) throw new Error('Selecteer een geldig bestand.');
+    if (file.size < 1 || file.size > 10 * 1024 * 1024) throw new Error('Bestanden moeten maximaal 10 MB zijn.');
+    if (!['application/pdf', 'image/jpeg', 'image/png', 'image/webp'].includes(file.type)) throw new Error('Alleen PDF, JPG/JPEG, PNG en WebP zijn toegestaan.');
+    const { session, householdId } = await storageContext();
+    const safeName = file.name.normalize('NFKD').replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(-120) || 'bestand';
+    const path = `${householdId}/${String(itemId).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 80)}/${safeName}`;
+    const response = await fetch(storageObjectUrl(path), {
+      method: 'POST',
+      headers: { apikey: DEFAULT_PUBLISHABLE_KEY, Authorization: `Bearer ${session.access_token}`, 'Content-Type': file.type, 'x-upsert': 'false' },
+      body: file
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.message || `Bestand uploaden mislukt (${response.status}); controleer de Storage-migratie.`);
+    }
+    return { path, fileName: file.name, contentType: file.type, size: file.size };
+  }
+
+  async function signedSportFileUrl(path) {
+    const { session, householdId } = await storageContext();
+    const safePath = storagePathForHousehold(path, householdId);
+    const encoded = safePath.split('/').map(encodeURIComponent).join('/');
+    const response = await fetch(`${authBase25()}/storage/v1/object/sign/sport-training/${encoded}`, {
+      method: 'POST',
+      headers: { apikey: DEFAULT_PUBLISHABLE_KEY, Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expiresIn: 120 })
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.message || `Bestand openen mislukt (${response.status}); controleer de Storage-migratie.`);
+    }
+    const result = await response.json();
+    const signed = String(result.signedURL || '');
+    if (!signed) throw new Error('Geen tijdelijke bestandslink ontvangen.');
+    return signed.startsWith('http') ? signed : `${authBase25()}/storage/v1${signed.startsWith('/') ? signed : `/${signed}`}`;
+  }
+
+  async function deleteSportFile(path) {
+    const { session, householdId } = await storageContext();
+    const safePath = storagePathForHousehold(path, householdId);
+    const response = await fetch(`${authBase25()}/storage/v1/object/sport-training`, {
+      method: 'DELETE',
+      headers: { apikey: DEFAULT_PUBLISHABLE_KEY, Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prefixes: [safePath] })
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.message || `Bestand verwijderen mislukt (${response.status}).`);
+    }
+    return true;
+  }
+
   function card() {
     const signed = !!AUTH.session()?.user?.id, on = accountMode();
     const conflicts = st.conflicts.map(c => `<li class="list-item"><div class="item-main"><strong>${esc2(c.section)}</strong><small>Lokaal en cloud verschillen</small></div><button class="secondary" data-acct-resolve="${esc2(c.section)}:local">Mijn versie</button><button class="secondary" data-acct-resolve="${esc2(c.section)}:remote">Cloudversie</button></li>`).join('');
@@ -158,5 +234,8 @@
     else if (e.target.matches('[data-acct-join]')) { e.preventDefault(); household('join', e.target.elements.code.value); }
   });
   window.addEventListener('online', () => { if (accountMode()) accountSync(); });
-  window.SamenThuisAccountSync = { active: accountMode, sync: accountSync, conflicts: () => st.conflicts };
+  window.SamenThuisAccountSync = {
+    active: accountMode, sync: accountSync, conflicts: () => st.conflicts,
+    uploadSportFile, signedSportFileUrl, deleteSportFile
+  };
 })();
