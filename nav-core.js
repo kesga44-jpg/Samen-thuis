@@ -9,7 +9,7 @@
     { key: 'agenda', icon: '▦', label: 'Agenda', pages: [['planning', 'Agenda & planning'], ['ideas', 'Date ideeën']] },
     { key: 'taken', icon: '☑', label: 'Taken', pages: [['tasks', 'Taken']] },
     { key: 'huishouden', icon: '⌂', label: 'Huishouden', pages: [['meals', 'Weekmenu'], ['groceries', 'Boodschappen'], ['offers', 'Aanbiedingen'], ['stock', 'Voorraad & vriezer'], ['chores', 'Routines'], ['home', 'Woning'], ['budget19', 'Financiën']] },
-    { key: 'meer', icon: '≡', label: 'Meer', pages: [['trips', 'Reizen'], ['challenges', 'Challenges'], ['programs', "Programma's"], ['auto24', 'Auto'], ['imports243', 'Importeren'], ['extra19', 'Extra'], ['settings', 'Instellingen']] }
+    { key: 'meer', icon: '≡', label: 'Meer', pages: [['trips', 'Reizen'], ['challenges', 'Challenges'], ['programs', "Programma's"], ['sportcoach', 'Sport & Training'], ['auto24', 'Auto'], ['imports243', 'Importeren'], ['extra19', 'Extra'], ['settings', 'Instellingen']] }
   ];
   function sectionOf(page) { return SECTIONS.find(s => s.pages.some(p => p[0] === page)) || null; }
   function pageLabel(page) { const s = sectionOf(page); const p = s && s.pages.find(x => x[0] === page); return p ? p[1] : ''; }
