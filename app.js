@@ -3714,7 +3714,6 @@ console.info('Samen Thuis update 14.1 geladen');
     trips:['type','trip','section','title','kind','description','startDate','endDate','deadline','location','cost','priority','checkable','done','note']
   };
 
-  const state14 = { target:'planning', text:'', filename:'', preview:[], legacy:false };
 
   const esc14 = value => String(value ?? '')
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
@@ -3919,170 +3918,322 @@ console.info('Samen Thuis update 14.1 geladen');
     };
   }
 
-  function analyse14() {
-    const lines=String(state14.text||'').replace(/\r/g,'').split(/\n+/)
-      .map(x=>x.trim()).filter(Boolean)
-      .filter(x=>!/^#/.test(x));
-
-    const records=lines.map(line=>mapLine14(line,state14.target)).filter(Boolean);
-    state14.preview=records
-      .map(record=>({record,item:makeItem14(record),selected:true}))
-      .filter(x=>x.item);
-
-    render();
-    toast(`${state14.preview.length} items gevonden`);
-  }
-
-  function previewText14(entry) {
-    const r=entry.record;
-    if(r.target==='planning') return `${r.startDate||'geen datum'} ${r.startTime||''}`.trim();
-    if(r.target==='meals') return `${r.date||'geen datum'} · ${r.mealType||'Avondeten'}`;
-    if(r.target==='groceries') return `${r.amount||''} ${r.unit||''} · ${r.category||'Overig'}`.trim();
-    if(r.target==='chores') return `${repeat14(r.repeat)||'geen frequentie'} · ${r.person||'Samen'}`;
-    if(r.target==='stock') return `${r.amount||0} ${r.unit||'stuks'} · min ${r.minimum||0}`;
-    if(r.target==='ideas') return `${r.category||'Thuis'}${r.priority?' · '+priority14(r.priority):''}`;
-    if(r.target==='home') return `${r.category||'Onderhoud'}${r.deadline?' · '+r.deadline:''}`;
-    if(r.target==='trips') return `${r.trip||'Nieuwe reis'} › ${r.section||'Algemeen'}${r.startDate?' · '+r.startDate:''}`;
-    return '';
-  }
-
-  function renderImport14() {
-    return `<div class="import-v13">
-      <section class="card">
-        <div class="card-head">
-          <div><p class="eyebrow">SAMEN THUIS · UNIVERSELE IMPORT</p><h2>Toevoegen & importeren</h2></div>
-          <span class="tag green">v14</span>
-        </div>
-
-        <p>Gebruik <strong>|</strong>, <strong>;</strong>, tabs, <strong> / </strong>, <strong> - </strong> of meerdere spaties. Datums met een koppelteken blijven intact.</p>
-
-        <div class="form-grid">
-          <div class="field">
-            <label>Standaard pagina</label>
-            <select id="v14Target">
-              ${Object.entries(TARGETS14).map(([k,v])=>`<option value="${k}" ${k===state14.target?'selected':''}>${esc14(v)}</option>`).join('')}
-            </select>
-          </div>
-
-          <div class="field">
-            <label>Bestand</label>
-            <input id="v14File" type="file" accept=".pdf,.docx,.xlsx,.xlsm,.xls,.csv,.txt,.md,application/pdf,text/plain">
-          </div>
-
-          <div class="field full">
-            <label>Tekst / lijst</label>
-            <textarea id="v14Text" placeholder="huishouden | Badkamer schoonmaken | Badkamer | wekelijks | Samen ...">${esc14(state14.text)}</textarea>
-          </div>
-        </div>
-
-        ${state14.filename?`<p class="muted">Bron: <strong>${esc14(state14.filename)}</strong></p>`:''}
-
-        <div class="button-row">
-          <button class="primary" data-v14-analyse>Analyseren</button>
-          <button class="secondary" data-v14-clear>Leegmaken</button>
-          <button class="secondary" data-v14-legacy>Oude documentanalyse</button>
-        </div>
-
-        <details>
-          <summary>Vaste volgorde per pagina bekijken</summary>
-          <pre style="white-space:pre-wrap">Agenda: [agenda] | [titel] | [begindatum] | [begintijd] | [einddatum] | [eindtijd] | [hele dag] | [locatie] | [omschrijving] | [herhaling]
-Weekmenu: [weekmenu] | [datum] | [maaltijdmoment] | [gerecht] | [personen] | [ingrediënten] | [notitie]
-Boodschappen: [boodschappen] | [product] | [hoeveelheid] | [eenheid] | [categorie] | [winkel] | [voor weekmenu] | [afgevinkt] | [notitie]
-Huishouden: [huishouden] | [taak] | [ruimte/categorie] | [frequentie] | [toegewezen aan] | [startdatum] | [volgende datum] | [prioriteit] | [afgevinkt] | [omschrijving/subtaken]
-Voorraad: [voorraad] | [product] | [categorie] | [hoeveelheid] | [eenheid] | [minimumvoorraad] | [houdbaar-tot] | [locatie] | [notitie]
-Ideeën: [idee] | [titel] | [categorie] | [omschrijving] | [voor wie] | [prioriteit] | [status] | [datum/deadline] | [link/notitie]
-Woning: [woning] | [titel] | [categorie/ruimte] | [omschrijving] | [type] | [prioriteit] | [startdatum] | [deadline] | [status] | [kosten] | [afgevinkt] | [notitie]
-Reizen: [reizen] | [reis] | [map/onderdeel] | [titel] | [type] | [omschrijving] | [startdatum] | [einddatum] | [deadline] | [locatie] | [kosten] | [prioriteit] | [afvinken] | [afgevinkt] | [notitie/link]</pre>
-        </details>
-      </section>
-
-      ${state14.preview.length?`
-      <section class="card">
-        <div class="card-head">
-          <div><p class="eyebrow">CONTROLE</p><h2>${state14.preview.length} gevonden items</h2></div>
-          <button class="primary" data-v14-commit>Geselecteerde toevoegen</button>
-        </div>
-
-        <div class="v13-preview-list">
-          ${state14.preview.map((entry,i)=>`
-            <article class="v13-card" data-v14-card="${i}">
-              <div class="v13-card-head">
-                <label><input type="checkbox" data-v14-selected ${entry.selected?'checked':''}> Importeren</label>
-              </div>
-              <strong>${esc14(entry.item.title)}</strong><br>
-              <small class="muted">${esc14(TARGETS14[entry.record.target])} · ${esc14(previewText14(entry))}</small>
-            </article>
-          `).join('')}
-        </div>
-      </section>`:
-      '<section class="card"><p class="muted">Nog niets geanalyseerd.</p></section>'}
-    </div>`;
-  }
+  /* ---------- Universele import: invoer -> bestemming -> analyse -> controle -> import ---------- */
+  const Core14 = window.SamenThuisImport, Readers14 = window.SamenThuisImportReaders;
+  const ACCEPT14 = '.pdf,.txt,.md,.docx,.rtf,.csv,.tsv,.xlsx,.xlsm,.xls,.json,.png,.jpg,.jpeg,application/pdf,text/plain,text/csv,application/json,image/png,image/jpeg';
+  const FIELD_LABELS14 = {
+    title:'Titel', startDate:'Datum', endDate:'Einddatum', startTime:'Begintijd', endTime:'Eindtijd', allDay:'Hele dag',
+    location:'Locatie', description:'Omschrijving', repeat:'Herhaling', person:'Persoon', date:'Datum', mealType:'Maaltijd',
+    persons:'Personen', ingredients:'Ingrediënten', note:'Notitie', notes:'Notitie', amount:'Aantal', unit:'Eenheid',
+    category:'Categorie', store:'Winkel', forMeal:'Voor gerecht', done:'Afgevinkt', nextDate:'Volgende datum',
+    priority:'Prioriteit', minimum:'Minimum', bestBefore:'Houdbaar tot', status:'Status', kind:'Type', deadline:'Deadline',
+    cost:'Bedrag (€)', trip:'Reis', section:'Onderdeel', checkable:'Afvinkbaar'
+  };
+  const WIDE14 = new Set(['title','description','note','notes','ingredients']);
+  const OPTIONS14 = () => ({
+    mealType:['Ontbijt','Lunch','Diner','Avondeten','Snack'],
+    priority:['','laag','normaal','hoog'],
+    repeat:['','Eenmalig','Dagelijks','Wekelijks','Elke 2 weken','Elke 4 weken','Maandelijks','Elke 3 maanden','Elke 6 maanden','Jaarlijks','Wanneer nodig'],
+    category:null, kind:null
+  });
+  const FORMAT_EXAMPLES14 = {
+    planning:'Agenda | Tandarts | 2026-10-02 | 09:30 | | 10:00 | | Utrecht',
+    meals:'Weekmenu | 2026-10-05 | Avondeten | Pasta pesto',
+    groceries:'Boodschappen | Melk | 2 | pak | Zuivel & vega',
+    chores:'Huishouden | Badkamer schoonmaken | Badkamer | Wekelijks | Kees | 2026-10-03',
+    stock:'Voorraad | Rijst | Voorraadkast | 2 | pak | 1 | 2027-05-01',
+    ideas:'Samen doen | Museumbezoek | Uitje | Zondagmiddag',
+    home:'Woning | Kit badkamer vervangen | Badkamer | | | hoog | | 2026-11-01',
+    trips:'Reizen | Vietnam 2027 | Vervoer | Vlucht Schiphol-Hanoi | Vervoer | | 2027-01-11'
+  };
+  const state14 = { target:'auto', trip:'', text:'', files:[], entries:[], reports:[], busy:'', legacy:false, committed:'' };
+  const TODAY14 = () => (typeof todayISO === 'function' ? todayISO() : new Date().toISOString().slice(0,10));
+  const STATUS_ICON14 = { ok:'✅', partial:'⚠️', unreadable:'❌', unsupported:'🚫', 'analysis-failed':'❌' };
 
   async function loadScript14(src,test) {
     if(test()) return;
     await new Promise((resolve,reject)=>{
       const s=document.createElement('script');
-      s.src=src;
-      s.onload=resolve;
-      s.onerror=reject;
+      s.src=src; s.onload=resolve; s.onerror=()=>reject(new Error('Bibliotheek kon niet worden geladen (geen internetverbinding?)'));
       document.head.appendChild(s);
     });
   }
 
-  async function readFile14(file) {
-    const ext=file.name.toLowerCase().split('.').pop();
-
-    if(['txt','md','csv'].includes(ext)) return file.text();
-
-    if(ext==='pdf') return extractPdfText(file);
-
-    if(ext==='docx') {
-      await loadScript14(
-        'https://cdn.jsdelivr.net/npm/mammoth@1.12.2/mammoth.browser.min.js',
-        ()=>Boolean(window.mammoth)
-      );
-      return (await window.mammoth.extractRawText({arrayBuffer:await file.arrayBuffer()})).value||'';
+  let ocrWorker14 = null;
+  async function ocrWorker() {
+    if(!ocrWorker14) {
+      await loadScript14('https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js',()=>Boolean(window.Tesseract));
+      ocrWorker14 = window.Tesseract.createWorker('nld+eng');
     }
-
-    if(['xlsx','xlsm','xls'].includes(ext)) {
-      await loadScript14(
-        'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',
-        ()=>Boolean(window.XLSX)
-      );
-      const wb=window.XLSX.read(await file.arrayBuffer(),{type:'array',cellDates:true});
-      return wb.SheetNames.map(n=>window.XLSX.utils.sheet_to_csv(wb.Sheets[n],{FS:'|'})).join('\n');
-    }
-
-    throw new Error('Bestandstype niet ondersteund');
+    return ocrWorker14;
   }
 
-  function bind14() {
-    document.querySelector('#v14Target')?.addEventListener('change',e=>{
-      state14.target=e.target.value;
-      state14.preview=[];
-      render();
-    });
+  const READ_ENV14 = {
+    async loadPdfjs() {
+      const pdfjs = await import(PDFJS_URL);
+      pdfjs.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
+      return pdfjs;
+    },
+    async loadMammoth() {
+      await loadScript14('https://cdn.jsdelivr.net/npm/mammoth@1.12.2/mammoth.browser.min.js',()=>Boolean(window.mammoth));
+      return window.mammoth;
+    },
+    async loadXlsx() {
+      await loadScript14('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',()=>Boolean(window.XLSX));
+      return window.XLSX;
+    },
+    async ocrImage(file) {
+      const worker = await (await ocrWorker());
+      const r = await worker.recognize(file);
+      return { text:r.data.text, confidence:r.data.confidence };
+    },
+    async ocrPdfPage(page) {
+      const viewport = page.getViewport({ scale:2.2 });
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.ceil(viewport.width); canvas.height = Math.ceil(viewport.height);
+      await page.render({ canvasContext:canvas.getContext('2d'), viewport }).promise;
+      const worker = await (await ocrWorker());
+      const r = await worker.recognize(canvas);
+      return { text:r.data.text, confidence:r.data.confidence };
+    }
+  };
 
-    document.querySelector('#v14Text')?.addEventListener('input',e=>{
-      state14.text=e.target.value;
-    });
+  function currentData14() {
+    return { planning:data.planning, meals:data.meals, groceries:data.groceries, chores:data.chores, stock:data.stock, ideas:data.ideas, home:data.home, trips:data.trips, tripFolders:data.tripFolders };
+  }
 
-    document.querySelector('#v14File')?.addEventListener('change',async e=>{
-      const file=e.target.files?.[0];
-      if(!file) return;
-
-      try {
-        state14.filename=file.name;
-        toast('Bestand wordt gelezen…');
-        state14.text=await readFile14(file);
-        analyse14();
-      } catch(err) {
-        console.error(err);
-        toast('Bestand lezen is mislukt');
+  async function analyse14() {
+    if(state14.busy) return;
+    if(!state14.files.length && !String(state14.text||'').trim()) return toast('Voeg een bestand toe of typ tekst');
+    const reads=[];
+    try {
+      for(let i=0;i<state14.files.length;i++) {
+        const file=state14.files[i];
+        state14.busy=`Bestand ${i+1} van ${state14.files.length} wordt gelezen: ${file.name}…`; render();
+        try { reads.push(await Readers14.readFile(file,READ_ENV14)); }
+        catch(err) { reads.push({ name:file.name, type:'', status:'unreadable', message:`Het bestand kon niet worden gelezen: ${err?.message||err}`, warnings:[], segments:[] }); }
       }
-    });
+      if(String(state14.text||'').trim()) reads.push(Core14.textRead(state14.text,'Ingevoerde tekst'));
+      state14.busy='Inhoud wordt geanalyseerd…'; render();
+      const result=Core14.analyse(reads,{ target:state14.target, trip:state14.trip, today:TODAY14(), data:currentData14() });
+      state14.entries=Core14.markDuplicates(result.entries,currentData14());
+      state14.reports=result.reports;
+      state14.committed='';
+    } catch(err) {
+      console.error(err);
+      state14.reports=[{ name:'Import', status:'analysis-failed', message:`De analyse is mislukt: ${err?.message||err}`, warnings:[], count:0 }];
+    }
+    state14.busy=''; render();
+    const n=state14.entries.length;
+    toast(n?`${n} onderdelen gevonden – controleer ze voor je importeert`:'Er zijn geen onderdelen herkend');
   }
+
+  function optionList14(target,key,current) {
+    const o=OPTIONS14();
+    let list=o[key];
+    if(key==='category' && target==='groceries') list=['',...GROCERY_CATEGORIES];
+    if(key==='kind' && target==='trips') list=['',...TRAVEL_TYPES];
+    if(!list) return null;
+    return list.includes(current)||current===''||current==null ? list : [...list,current];
+  }
+
+  function fieldHtml14(e,key) {
+    const v=e.rec[key] ?? '';
+    const name=`data-uni-f="${esc14(e.uid)}|${key}"`;
+    let input;
+    const opts=optionList14(e.target,key,v);
+    if(Core14.DATE_KEYS.includes(key)) input=`<input type="date" ${name} value="${esc14(v)}">`;
+    else if(Core14.TIME_KEYS.includes(key)) input=`<input type="time" ${name} value="${esc14(v)}">`;
+    else if(Core14.NUM_KEYS.includes(key)) input=`<input type="number" step="any" ${name} value="${esc14(v)}">`;
+    else if(Core14.BOOL_KEYS.includes(key)||key==='done') input=`<input type="checkbox" ${name} ${v?'checked':''}>`;
+    else if(opts) input=`<select ${name}>${opts.map(o=>`<option value="${esc14(o)}" ${o===v?'selected':''}>${esc14(o||'—')}</option>`).join('')}</select>`;
+    else if(['description','note','notes','ingredients'].includes(key)) input=`<textarea rows="2" ${name}>${esc14(v)}</textarea>`;
+    else input=`<input type="text" ${name} value="${esc14(v)}">`;
+    return `<label class="field ${WIDE14.has(key)?'full':''}"><span>${esc14(FIELD_LABELS14[key]||key)}</span>${input}</label>`;
+  }
+
+  function entryHtml14(e) {
+    const src=`${e.source?.file||''}${e.source?.where?' · '+e.source.where:''}`;
+    return `<article class="v13-card uni-entry ${e.duplicate?'uni-dup':''}" data-uni-card="${esc14(e.uid)}">
+      <div class="v13-card-head" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <label><input type="checkbox" data-uni-sel="${esc14(e.uid)}" ${e.selected?'checked':''}> Importeren</label>
+        ${e.duplicate?`<span class="tag">Dubbel (${e.dupOf==='bestaand'?'staat al in de app':'komt vaker voor in deze import'})</span>`:''}
+        ${e.uncertain?'<span class="tag">Onzeker – controleer</span>':''}
+        <select data-uni-target="${esc14(e.uid)}" aria-label="Bestemming">${Object.entries(Core14.TARGETS).map(([k,v])=>`<option value="${k}" ${k===e.target?'selected':''}>${esc14(v)}</option>`).join('')}</select>
+        <button class="secondary" data-uni-del="${esc14(e.uid)}" type="button">Verwijderen</button>
+      </div>
+      <small class="muted">Bron: ${esc14(src||'handmatig toegevoegd')}</small>
+      ${(e.warnings||[]).map(w=>`<p class="small-note">⚠️ ${esc14(w)}</p>`).join('')}
+      <div class="form-grid">${Core14.SCHEMAS[e.target].filter(k=>k!=='target').map(k=>fieldHtml14(e,k)).join('')}</div>
+    </article>`;
+  }
+
+  function reportsHtml14() {
+    if(!state14.reports.length) return '';
+    return `<section class="card"><div class="card-head"><div><p class="eyebrow">STAP 3 · LEESRESULTAAT</p><h2>Wat is er gelezen?</h2></div></div>
+      ${state14.reports.map(r=>`<div class="uni-report" data-status="${esc14(r.status)}" style="margin-bottom:10px">
+        <strong>${STATUS_ICON14[r.status]||''} ${esc14(r.name)}</strong> <span class="tag ${r.status==='ok'?'green':''}">${esc14(Core14.describeStatus(r.status))}</span>
+        ${r.type?`<small class="muted"> ${esc14(r.type)}</small>`:''}
+        ${['ok','partial'].includes(r.status)?`<small class="muted"> · ${r.count} onderdelen herkend</small>`:''}
+        ${r.message?`<p class="small-note">${esc14(r.message)}</p>`:''}
+        ${(r.warnings||[]).map(w=>`<p class="small-note">⚠️ ${esc14(w)}</p>`).join('')}
+        ${(r.notes||[]).map(w=>`<p class="small-note">ℹ️ ${esc14(w)}</p>`).join('')}
+      </div>`).join('')}</section>`;
+  }
+
+  function previewHtml14() {
+    if(state14.committed) return `<section class="card"><p class="tag green">${esc14(state14.committed)}</p></section>`;
+    if(!state14.entries.length) return state14.reports.length?'<section class="card"><p class="muted">Er zijn geen onderdelen herkend. Voeg zelf een onderdeel toe of pas de invoer aan.</p>'+addBarHtml14()+'</section>':'';
+    const files=[...new Set(state14.entries.map(e=>e.source?.file||'Handmatig toegevoegd'))];
+    const selected=state14.entries.filter(e=>e.selected).length;
+    const dups=state14.entries.filter(e=>e.duplicate).length;
+    return `<section class="card">
+      <div class="card-head"><div><p class="eyebrow">STAP 4 · CONTROLEREN</p><h2>${state14.entries.length} herkende onderdelen</h2>
+        <p class="muted">${selected} geselecteerd${dups?` · ${dups} mogelijk dubbel (standaard uitgezet)`:''}. Pas alles aan voordat je importeert.</p></div></div>
+      ${files.map(f=>`<h3>${esc14(f)}</h3><div class="v13-preview-list">${state14.entries.filter(e=>(e.source?.file||'Handmatig toegevoegd')===f).map(entryHtml14).join('')}</div>`).join('')}
+      ${addBarHtml14()}
+      <div class="button-row"><button class="primary" data-uni-commit type="button" ${selected?'':'disabled'}>Stap 5 · ${selected} geselecteerde onderdelen importeren</button></div>
+    </section>`;
+  }
+
+  function addBarHtml14() {
+    return `<div class="button-row" style="margin:12px 0"><select data-uni-addtarget aria-label="Bestemming nieuw onderdeel">${Object.entries(Core14.TARGETS).map(([k,v])=>`<option value="${k}">${esc14(v)}</option>`).join('')}</select><button class="secondary" data-uni-add type="button">+ Onderdeel toevoegen</button></div>`;
+  }
+
+  function renderImport14() {
+    const trips=(data.tripFolders||[]).map(f=>f.name);
+    return `<div class="import-v13 uni-import">
+      <section class="card">
+        <div class="card-head"><div><p class="eyebrow">SAMEN THUIS · UNIVERSELE IMPORT</p><h2>Toevoegen & importeren</h2>
+          <p class="muted">1 Invoer → 2 Bestemming → 3 Analyseren → 4 Controleren → 5 Importeren. Er wordt pas iets opgeslagen nadat je bevestigt.</p></div></div>
+        <h3>Stap 1 · Invoer</h3>
+        <div class="form-grid">
+          <div class="field full"><label>Optie 1 – Bestand(en) uploaden</label>
+            <input id="uniFile" data-uni-file type="file" multiple accept="${ACCEPT14}">
+            <small class="muted">PDF (ook scans), Word, TXT, RTF, CSV, Excel, JSON en afbeeldingen met tekst (OCR). Je kunt meerdere bestanden en typen combineren.</small>
+            ${state14.files.length?`<ul>${state14.files.map((f,i)=>`<li>${esc14(f.name)} <small class="muted">(${Math.max(1,Math.round(f.size/1024))} kB)</small> <button class="secondary" data-uni-rmfile="${i}" type="button">Verwijderen</button></li>`).join('')}</ul>`:''}
+          </div>
+          <div class="field full"><label>Optie 2 – Zelf tekst invoeren of plakken</label>
+            <textarea id="uniText" data-uni-text rows="12" style="min-height:220px" placeholder="Typ of plak hier tekst. Eén onderdeel per regel, of een lijst met koppen. Alinea’s en opsommingen blijven behouden.">${esc14(state14.text)}</textarea>
+          </div>
+        </div>
+        <details><summary>Handig invoerformaat per onderdeel (voorbeelden)</summary>
+          <p class="muted">Gebruik per regel: <code>Onderdeel | veld | veld …</code>. Losse zinnen, opsommingen en koppen (bijv. “Boodschappen”, “Recept: …”) worden ook herkend. Velden per onderdeel staan in de volgorde van het voorbeeld; leeg laten mag.</p>
+          ${Object.entries(FORMAT_EXAMPLES14).map(([k,ex])=>`<div style="margin:6px 0"><strong>${esc14(Core14.TARGETS[k])}</strong> <code>${esc14(ex)}</code> <button class="secondary" data-uni-example="${k}" type="button">Voorbeeld invoegen</button></div>`).join('')}
+        </details>
+        <h3>Stap 2 · Bestemming</h3>
+        <div class="form-grid">
+          <div class="field"><label>Waar moet de informatie naartoe?</label>
+            <select id="uniTarget" data-uni-targetsel><option value="auto" ${state14.target==='auto'?'selected':''}>Automatisch verdelen</option>${Object.entries(Core14.TARGETS).map(([k,v])=>`<option value="${k}" ${k===state14.target?'selected':''}>${esc14(v)}</option>`).join('')}</select></div>
+          <div class="field"><label>Reis (voor reisgegevens, optioneel)</label>
+            <input id="uniTrip" data-uni-trip list="uniTripList" value="${esc14(state14.trip)}" placeholder="Bestaande of nieuwe reis">
+            <datalist id="uniTripList">${trips.map(t=>`<option value="${esc14(t)}">`).join('')}</datalist></div>
+        </div>
+        <h3>Stap 3 · Analyseren</h3>
+        <div class="button-row">
+          <button class="primary" data-uni-analyse type="button" ${state14.busy?'disabled':''}>Analyseren</button>
+          <button class="secondary" data-uni-clear type="button">Leegmaken</button>
+          <button class="secondary" data-v14-legacy type="button">Oude documentanalyse / handmatig</button>
+        </div>
+        ${state14.busy?`<p class="muted" role="status">⏳ ${esc14(state14.busy)}</p>`:''}
+      </section>
+      ${reportsHtml14()}
+      ${previewHtml14()}
+    </div>`;
+  }
+
+  function commit14() {
+    const selected=state14.entries.filter(e=>e.selected);
+    if(!selected.length) return toast('Selecteer minimaal één onderdeel');
+    const counts={}, failed=[];
+    let calendarId=findCalendar14('');
+    selected.forEach(e=>{
+      try {
+        const item=Core14.buildItem(e.rec,{ today:TODAY14(), id, calendarId });
+        if(!item) throw new Error('onbekende bestemming');
+        if(e.target==='trips') {
+          const folder=getOrCreateTripFolder14(e.rec.trip||state14.trip);
+          const section=getOrCreateTripSection14(folder.id,e.rec.section);
+          item.tripFolderId=folder.id; item.tripSectionId=section.id;
+          if(item.startDate && !folder.startDate) folder.startDate=item.startDate;
+          if(item.endDate && !folder.endDate) folder.endDate=item.endDate;
+        }
+        data[e.target] ||= [];
+        data[e.target].push(item);
+        counts[e.target]=(counts[e.target]||0)+1;
+        e.imported=true;
+      } catch(err) { failed.push(`${e.rec.title||'(zonder titel)'}: ${err.message}`); }
+    });
+    save();
+    const total=Object.values(counts).reduce((a,b)=>a+b,0);
+    const parts=Object.entries(counts).map(([k,n])=>`${n} × ${Core14.TARGETS[k]}`).join(', ');
+    state14.entries=state14.entries.filter(e=>!e.imported);
+    state14.committed=`${total} onderdelen geïmporteerd (${parts}).${failed.length?' Niet gelukt: '+failed.join('; '):''}`;
+    if(!failed.length) { state14.files=[]; state14.text=''; state14.reports=[]; }
+    render();
+    toast(`${total} onderdelen toegevoegd`);
+  }
+
+  function uniRoot(el) { return el && el.closest ? el.closest('.uni-import') : null; }
+  const uniUid = v => String(v||'').split('|')[0];
+  const findEntry14 = u => state14.entries.find(e=>e.uid===u);
+  function rerenderKeepScroll() { const y=window.scrollY; render(); window.scrollTo(0,y); }
+
+  function refreshDuplicates14() {
+    const before=state14.entries.map(e=>e.duplicate).join();
+    Core14.markDuplicates(state14.entries,currentData14());
+    if(before!==state14.entries.map(e=>e.duplicate).join()) rerenderKeepScroll();
+  }
+
+  document.addEventListener('input',e=>{
+    if(!uniRoot(e.target)) return;
+    if(e.target.matches('[data-uni-text]')) state14.text=e.target.value;
+    else if(e.target.matches('[data-uni-trip]')) state14.trip=e.target.value;
+  },true);
+
+  document.addEventListener('change',async e=>{
+    const t=e.target;
+    if(!uniRoot(t)) return;
+    if(t.matches('[data-uni-file]')) {
+      const known=new Set(state14.files.map(f=>`${f.name}|${f.size}|${f.lastModified}`));
+      [...(t.files||[])].forEach(f=>{ if(!known.has(`${f.name}|${f.size}|${f.lastModified}`)) state14.files.push(f); });
+      render();
+    } else if(t.matches('[data-uni-targetsel]')) { state14.target=t.value; }
+    else if(t.matches('[data-uni-sel]')) { const en=findEntry14(t.dataset.uniSel); if(en) { en.selected=t.checked; en.userTouchedSelection=true; rerenderKeepScroll(); } }
+    else if(t.matches('[data-uni-target]')) {
+      const en=findEntry14(t.dataset.uniTarget);
+      if(en) { en.rec=Core14.convertRecord(en.rec,t.value); en.target=t.value; refreshDuplicates14(); rerenderKeepScroll(); }
+    } else if(t.matches('[data-uni-f]')) {
+      const [u,key]=t.dataset.uniF.split('|'); const en=findEntry14(u);
+      if(!en) return;
+      let v=t.type==='checkbox'?t.checked:t.value;
+      if(Core14.NUM_KEYS.includes(key)) v=v===''?'':Number(v);
+      en.rec[key]=v; en.uncertain=false;
+      refreshDuplicates14();
+    }
+  },true);
+
+  document.addEventListener('click',e=>{
+    if(e.target.closest('[data-v14-new]')) { state14.legacy=false; render(); return; }
+    if(e.target.closest('[data-v14-legacy]')) { current='imports'; state14.legacy=true; render(); return; }
+    if(!uniRoot(e.target)) return;
+    const b=e.target.closest('button'); if(!b) return;
+    if(b.matches('[data-uni-analyse]')) { state14.text=document.querySelector('#uniText')?.value ?? state14.text; analyse14(); }
+    else if(b.matches('[data-uni-clear]')) { Object.assign(state14,{text:'',files:[],entries:[],reports:[],committed:'',busy:''}); render(); }
+    else if(b.matches('[data-uni-rmfile]')) { state14.files.splice(Number(b.dataset.uniRmfile),1); render(); }
+    else if(b.matches('[data-uni-del]')) { state14.entries=state14.entries.filter(x=>x.uid!==b.dataset.uniDel); refreshDuplicates14(); rerenderKeepScroll(); }
+    else if(b.matches('[data-uni-add]')) {
+      const target=document.querySelector('[data-uni-addtarget]')?.value||'chores';
+      const rec=Core14.emptyRecord(target); if(target==='trips') rec.trip=state14.trip;
+      state14.entries.push(Core14.makeEntry(rec,{file:'Handmatig toegevoegd',where:''},{ userTouchedSelection:true })); state14.committed=''; rerenderKeepScroll();
+    }
+    else if(b.matches('[data-uni-example]')) {
+      const ex=FORMAT_EXAMPLES14[b.dataset.uniExample]; state14.text=(document.querySelector('#uniText')?.value||state14.text||'').replace(/\s+$/,'')+(state14.text||document.querySelector('#uniText')?.value?'\n':'')+ex; render();
+    }
+    else if(b.matches('[data-uni-commit]')) commit14();
+  },true);
+
+  window.__samenThuisUniversalImport = { html: renderImport14, env: READ_ENV14 };
 
   function openManualImport14() {
     state14.legacy=true;
@@ -4108,7 +4259,6 @@ Reizen: [reizen] | [reis] | [map/onderdeel] | [titel] | [type] | [omschrijving] 
     if(current==='imports' && !state14.legacy) {
       document.querySelector('#view').innerHTML=renderImport14();
       updateSyncBadge();
-      bind14();
       bindTopAdd14();
       return;
     }
@@ -4126,61 +4276,6 @@ Reizen: [reizen] | [reis] | [map/onderdeel] | [titel] | [type] | [omschrijving] 
       bindTopAdd14();
     }
   };
-
-  document.addEventListener('click',e=>{
-    if(e.target.closest('[data-v14-new]')) {
-      state14.legacy=false;
-      render();
-      return;
-    }
-
-    if(e.target.closest('[data-v14-legacy]')) {
-      state14.legacy=true;
-      render();
-      return;
-    }
-
-    if(current!=='imports' || state14.legacy) return;
-
-    if(e.target.closest('[data-v14-analyse]')) {
-      state14.text=document.querySelector('#v14Text')?.value||state14.text;
-      analyse14();
-      return;
-    }
-
-    if(e.target.closest('[data-v14-clear]')) {
-      state14.text='';
-      state14.filename='';
-      state14.preview=[];
-      render();
-      return;
-    }
-
-    if(e.target.closest('[data-v14-commit]')) {
-      document.querySelectorAll('[data-v14-card]').forEach(card=>{
-        const x=state14.preview[Number(card.dataset.v14Card)];
-        if(x) x.selected=Boolean(card.querySelector('[data-v14-selected]')?.checked);
-      });
-
-      const selected=state14.preview.filter(x=>x.selected);
-      if(!selected.length) return toast('Selecteer minimaal één item');
-
-      selected.forEach(({record,item})=>{
-        data[record.target] ||= [];
-        data[record.target].push(item);
-      });
-
-      save();
-
-      const count=selected.length;
-      state14.preview=[];
-      state14.text='';
-      state14.filename='';
-      render();
-      toast(`${count} items toegevoegd`);
-      return;
-    }
-  },true);
 
   save({touch:false});
 })();
@@ -5688,9 +5783,10 @@ ensureCar24();save({touch:false,sync:false});requestAnimationFrame(()=>{nav24();
 
 /* ===== v24.3 CENTRALE IMPORTPAGINA ===== */
 (()=>{'use strict';if(window.__ST243IMPORT)return;window.__ST243IMPORT=1;
-let importTarget243='backup', importFile243=null;
+let importTarget243='universal', importFile243=null;
 
 const IMPORT243={
+ universal:{label:'Universeel: bestanden of eigen tekst',formats:'PDF · Word · TXT · RTF · CSV · Excel · JSON · afbeelding (OCR) · eigen tekst',example:'',help:'Meerdere bestanden of eigen tekst, met controlevoorbeeld voordat er iets wordt opgeslagen.'},
  backup:{label:'Volledige Samen Thuis back-up',formats:'JSON',example:'samen-thuis-backup-2026-09-24.json',help:'Voegt een Samen Thuis JSON-back-up samen met je huidige gegevens. Bestaande gegevens worden niet verwijderd.'},
  planning:{label:'Agenda',formats:'Excel · CSV · TXT · JSON',example:'title,date,time,endTime,person,calendarId\nTandarts,2026-10-02,09:30,10:00,Kees,persoonlijk',help:'Velden: title, date (YYYY-MM-DD), time, endTime, person, calendarId.'},
  meals:{label:'Weekmenu',formats:'Excel · CSV · TXT · JSON',example:'title,date,type\nCurry,2026-09-25,Avondeten',help:'Velden: title, date (YYYY-MM-DD), type.'},
@@ -5706,6 +5802,7 @@ const IMPORT243={
 
 function esc243(v=''){return String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function renderImport243(){
+ if(importTarget243==='universal'&&window.__samenThuisUniversalImport)return `<div class="import243"><header class="import-head243"><div><p class="eyebrow">SAMEN THUIS · IMPORT</p><h1>Importeren</h1><p>Kies een bestand of typ zelf tekst. <label class="field" style="display:inline-block"><span>Andere importsoort:</span><select data-import243-target>${Object.entries(IMPORT243).map(([k,v])=>`<option value="${k}" ${k===importTarget243?'selected':''}>${esc243(v.label)}</option>`).join('')}</select></label></p></div></header>${window.__samenThuisUniversalImport.html()}</div>`;
  const x=IMPORT243[importTarget243]||IMPORT243.backup;
  return `<div class="import243">
  <header class="import-head243"><div><p class="eyebrow">SAMEN THUIS · IMPORT</p><h1>Importeren</h1><p>Alle imports op één plek. Kies eerst waarvoor de informatie bedoeld is; hieronder staat precies welk formaat wordt verwacht.</p></div></header>
@@ -5721,7 +5818,7 @@ function renderImport243(){
  <section class="card">
   <div class="card-head"><div><p class="eyebrow">FORMAATOVERZICHT</p><h2>Wat kan waar worden ingelezen?</h2></div></div>
   <div class="format-list243">${Object.entries(IMPORT243).map(([k,v])=>`<button data-import243-jump="${k}"><span>${esc243(v.label)}</span><b>${esc243(v.formats)}</b></button>`).join('')}</div>
-  <p class="muted">PDF, Word en Excel worden bewust niet als universeel importformaat gebruikt: CSV/JSON is controleerbaarder en voorkomt dat kolommen verkeerd worden geïnterpreteerd. Excel kun je eerst opslaan als CSV.</p>
+  <p class="muted">Dit zijn de gestructureerde importvormen per onderdeel. PDF, Word, RTF, afbeeldingen en eigen tekst importeer je via “Universeel”, met controlevoorbeeld.</p>
  </section>
  </div>`;
 }
