@@ -4062,7 +4062,7 @@ console.info('Samen Thuis update 14.1 geladen');
         <label><input type="checkbox" data-uni-sel="${esc14(e.uid)}" ${e.selected?'checked':''}> Importeren</label>
         ${e.duplicate?`<span class="tag">Dubbel (${e.dupOf==='bestaand'?'staat al in de app':'komt vaker voor in deze import'})</span>`:''}
         ${e.uncertain?'<span class="tag">Onzeker – controleer</span>':''}
-        <select data-uni-target="${esc14(e.uid)}" aria-label="Bestemming">${Object.entries(Core14.TARGETS).map(([k,v])=>`<option value="${k}" ${k===e.target?'selected':''}>${esc14(v)}</option>`).join('')}</select>
+        <select data-uni-target="${esc14(e.uid)}" aria-label="Bestemming" style="min-height:44px">${Object.entries(Core14.TARGETS).map(([k,v])=>`<option value="${k}" ${k===e.target?'selected':''}>${esc14(v)}</option>`).join('')}</select>
         <button class="secondary" data-uni-del="${esc14(e.uid)}" type="button">Verwijderen</button>
       </div>
       <small class="muted">Bron: ${esc14(src||'handmatig toegevoegd')}</small>
@@ -4100,7 +4100,7 @@ console.info('Samen Thuis update 14.1 geladen');
   }
 
   function addBarHtml14() {
-    return `<div class="button-row" style="margin:12px 0"><select data-uni-addtarget aria-label="Bestemming nieuw onderdeel">${Object.entries(Core14.TARGETS).map(([k,v])=>`<option value="${k}">${esc14(v)}</option>`).join('')}</select><button class="secondary" data-uni-add type="button">+ Onderdeel toevoegen</button></div>`;
+    return `<div class="button-row" style="margin:12px 0"><select data-uni-addtarget aria-label="Bestemming nieuw onderdeel" style="min-height:44px">${Object.entries(Core14.TARGETS).map(([k,v])=>`<option value="${k}">${esc14(v)}</option>`).join('')}</select><button class="secondary" data-uni-add type="button">+ Onderdeel toevoegen</button></div>`;
   }
 
   function renderImport14() {

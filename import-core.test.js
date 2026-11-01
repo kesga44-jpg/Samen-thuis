@@ -257,3 +257,11 @@ test('synchronisatie: alleen gewijzigde secties worden gepusht, budget en instel
     ['budget', 'planning', 'chores'].forEach(k => assert.notEqual(act[k], 'push', k));
   } else assert.ok(plan0.length > 0);
 });
+
+test('praktijktest: "voor <datum>" laat geen losse "voor" in de titel achter; datum en bedrag blijven behouden', () => {
+  const { entries } = run('Huishouden\nDakgoot schoonmaken voor 01-12-2026 € 1.234,56');
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].rec.title, 'Dakgoot schoonmaken');
+  assert.equal(entries[0].rec.startDate, '2026-12-01');
+  assert.match(entries[0].rec.notes, /1234,56/);
+});

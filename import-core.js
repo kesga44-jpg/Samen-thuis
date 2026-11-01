@@ -592,6 +592,7 @@
     const mo = findMoney(t);
     if (mo) { out.money = mo.value; t = t.slice(0, mo.index) + ' ' + t.slice(mo.index + mo.length); }
     t = t.replace(WEEKDAY_STRIP, ' ').replace(/\b(om|op|vanaf|rond|per|tot|t\/m|van|deadline)\s*(?=[-:,.;\s]|$)/gi, ' ');
+    if (out.date || out.endDate) t = t.replace(/\s+(voor|vóór|uiterlijk)\s*[-–:,;.()]*\s*$/i, '');
     t = t.replace(/\s*[-–:,;()]\s*(?=[-–:,;()]|$)/g, ' ').replace(/^[\s\-–:,;()]+|[\s\-–:,;()]+$/g, '').replace(/\s{2,}/g, ' ').trim();
     return { ...out, title: t };
   }
