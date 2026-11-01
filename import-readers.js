@@ -145,6 +145,10 @@
     return segs;
   }
 
+  const LIB_HELP = 'Controleer je internetverbinding en probeer het opnieuw. CSV, TXT, JSON, RTF en zelf getypte tekst werken ook zonder internet.';
+  const libFail = (file, err, type, what) => (err && err.libraryLoad)
+    ? fail(file, 'unreadable', `De leesmodule voor ${what} kon niet worden geladen. ${LIB_HELP}`, type) : null;
+
   async function readPdf(file, bytes, env) {
     const out = result(file, { type: 'PDF' });
     let pdfjs, doc;
@@ -152,11 +156,13 @@
       pdfjs = await env.loadPdfjs();
       doc = await pdfjs.getDocument({ data: new Uint8Array(bytes) }).promise;
     } catch (err) {
+      const lf = libFail(file, err, 'PDF', 'PDF-bestanden'); if (lf) return lf;
       const msg = /password/i.test(String(err && (err.name + err.message))) ? 'Deze PDF is beveiligd met een wachtwoord en kan niet worden gelezen.' : 'Deze PDF kon niet worden geopend (beschadigd of geen geldige PDF).';
       return fail(file, 'unreadable', msg, 'PDF');
     }
     const total = doc.numPages, limit = Math.min(total, MAX_PDF_PAGES);
     const empty = [], ocrDone = [], ocrFailed = [];
+    let ocrOffline = false;
     for (let n = 1; n <= limit; n++) {
       let lines = [], ocrText = '';
       let page;
@@ -171,7 +177,7 @@
           const r = await env.ocrPdfPage(page, pdfjs);
           ocrText = (r && r.text || '').trim();
           if (ocrText.replace(/\s/g, '').length >= 8) ocrDone.push(n); else ocrFailed.push(n);
-        } catch (err) { ocrFailed.push(n); }
+        } catch (err) { ocrFailed.push(n); if (err && err.libraryLoad) ocrOffline = true; }
       }
       if (ocrText.replace(/\s/g, '').length >= 8) out.segments.push({ kind: 'text', file: file.name, location: `pagina ${n} (OCR)`, text: ocrText });
       else if (chars >= 12) out.segments.push(...linesToSegments(lines, file.name, `pagina ${n}`));
@@ -182,10 +188,11 @@
     if (total > limit) { out.warnings.push(`Alleen de eerste ${limit} van ${total} pagina's zijn gelezen.`); }
     if (!out.segments.length) {
       out.status = 'unreadable';
-      out.message = env.ocrPdfPage ? `Er is geen tekst gevonden in de ${total} pagina's, ook niet met OCR. De scan is mogelijk onleesbaar.` : `Er is geen tekst gevonden in deze PDF. Het lijkt een scan; OCR is niet beschikbaar.`;
+      out.message = ocrOffline ? `Deze PDF lijkt een scan, maar de tekstherkenning (OCR) kon niet worden geladen. ${LIB_HELP}` : env.ocrPdfPage ? `Er is geen tekst gevonden in de ${total} pagina's, ook niet met OCR. De scan is mogelijk onleesbaar.` : `Er is geen tekst gevonden in deze PDF. Het lijkt een scan; OCR is niet beschikbaar.`;
     } else if (empty.length) {
       out.status = 'partial';
       out.message = `Pagina ${pageList(empty)} van ${total} bevat geen leesbare tekst en is niet verwerkt.`;
+      if (ocrOffline) out.message += ` De tekstherkenning (OCR) voor gescande pagina's kon niet worden geladen. ${LIB_HELP}`;
     }
     return out;
   }
@@ -246,6 +253,7 @@
       XLSX = await env.loadXlsx();
       wb = XLSX.read(new Uint8Array(bytes), { type: 'array', cellNF: true, cellDates: false });
     } catch (err) {
+      const lf = libFail(file, err, 'Excel', 'Excel-bestanden'); if (lf) return lf;
       return fail(file, 'unreadable', 'Dit Excel-bestand kon niet worden geopend (beschadigd of met wachtwoord beveiligd).', 'Excel');
     }
     const meta = (wb.Workbook && wb.Workbook.Sheets) || [];
@@ -327,7 +335,7 @@
       const ab = bytes instanceof ArrayBuffer ? bytes : bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
       try { res = await mammoth.convertToHtml({ arrayBuffer: ab }); }
       catch (e1) { if (typeof Buffer === 'undefined') throw e1; res = await mammoth.convertToHtml({ buffer: Buffer.from(ab) }); }
-    } catch (err) { return fail(file, 'unreadable', 'Dit Word-bestand kon niet worden geopend (beschadigd of geen geldig .docx-bestand).', 'Word'); }
+    } catch (err) { const lf = libFail(file, err, 'Word', 'Word-bestanden'); if (lf) return lf; return fail(file, 'unreadable', 'Dit Word-bestand kon niet worden geopend (beschadigd of geen geldig .docx-bestand).', 'Word'); }
     out.segments = htmlToSegments(res.value || '', file.name, 'document');
     if (!out.segments.length) return fail(file, 'unreadable', 'In dit Word-document is geen tekst gevonden.', 'Word');
     const tables = out.segments.filter(s => s.kind === 'table').length;
@@ -338,7 +346,7 @@
     const out = result(file, { type: 'Afbeelding (OCR)' });
     if (!env.ocrImage) return fail(file, 'unreadable', 'OCR is niet beschikbaar, dus de tekst in deze afbeelding kan niet worden gelezen.', out.type);
     let r;
-    try { r = await env.ocrImage(file, bytes); } catch (err) { return fail(file, 'unreadable', 'Tekstherkenning (OCR) is mislukt. Controleer je internetverbinding of typ de tekst over.', out.type); }
+    try { r = await env.ocrImage(file, bytes); } catch (err) { return fail(file, 'unreadable', err && err.libraryLoad ? `De tekstherkenning (OCR) kon niet worden geladen. ${LIB_HELP} Of typ de tekst over.` : 'Tekstherkenning (OCR) is mislukt. Controleer je internetverbinding of typ de tekst over.', out.type); }
     const text = (r && r.text || '').trim();
     if (text.replace(/\s/g, '').length < 3) return fail(file, 'unreadable', 'In deze afbeelding is geen tekst herkend.', out.type);
     out.segments = [{ kind: 'text', file: file.name, location: 'afbeelding (OCR)', text }];

@@ -3950,11 +3950,13 @@ console.info('Samen Thuis update 14.1 geladen');
   const TODAY14 = () => (typeof todayISO === 'function' ? todayISO() : new Date().toISOString().slice(0,10));
   const STATUS_ICON14 = { ok:'✅', partial:'⚠️', unreadable:'❌', unsupported:'🚫', 'analysis-failed':'❌' };
 
+  const libError14 = msg => Object.assign(new Error(msg||'Bibliotheek kon niet worden geladen (geen internetverbinding?)'),{ libraryLoad:true });
   async function loadScript14(src,test) {
     if(test()) return;
     await new Promise((resolve,reject)=>{
       const s=document.createElement('script');
-      s.src=src; s.onload=resolve; s.onerror=()=>reject(new Error('Bibliotheek kon niet worden geladen (geen internetverbinding?)'));
+      s.src=src; s.onload=resolve;
+      s.onerror=()=>{ s.remove(); reject(libError14()); };
       document.head.appendChild(s);
     });
   }
@@ -3963,14 +3965,15 @@ console.info('Samen Thuis update 14.1 geladen');
   async function ocrWorker() {
     if(!ocrWorker14) {
       await loadScript14('https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js',()=>Boolean(window.Tesseract));
-      ocrWorker14 = window.Tesseract.createWorker('nld+eng');
+      ocrWorker14 = Promise.resolve(window.Tesseract.createWorker('nld+eng')).catch(err=>{ ocrWorker14=null; throw libError14('OCR-taaldata kon niet worden geladen'); });
     }
     return ocrWorker14;
   }
 
   const READ_ENV14 = {
     async loadPdfjs() {
-      const pdfjs = await import(PDFJS_URL);
+      let pdfjs;
+      try { pdfjs = await import(PDFJS_URL); } catch(err) { throw libError14(); }
       pdfjs.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
       return pdfjs;
     },
@@ -4082,12 +4085,12 @@ console.info('Samen Thuis update 14.1 geladen');
   }
 
   function previewHtml14() {
-    if(state14.committed) return `<section class="card"><p class="tag green">${esc14(state14.committed)}</p></section>`;
-    if(!state14.entries.length) return state14.reports.length?'<section class="card"><p class="muted">Er zijn geen onderdelen herkend. Voeg zelf een onderdeel toe of pas de invoer aan.</p>'+addBarHtml14()+'</section>':'';
+    const banner=state14.committed?`<section class="card"><p class="tag green" role="status">${esc14(state14.committed)}</p></section>`:'';
+    if(!state14.entries.length) return banner||(state14.reports.length?'<section class="card"><p class="muted">Er zijn geen onderdelen herkend. Voeg zelf een onderdeel toe of pas de invoer aan.</p>'+addBarHtml14()+'</section>':'');
     const files=[...new Set(state14.entries.map(e=>e.source?.file||'Handmatig toegevoegd'))];
     const selected=state14.entries.filter(e=>e.selected).length;
     const dups=state14.entries.filter(e=>e.duplicate).length;
-    return `<section class="card">
+    return `${banner}<section class="card">
       <div class="card-head"><div><p class="eyebrow">STAP 4 · CONTROLEREN</p><h2>${state14.entries.length} herkende onderdelen</h2>
         <p class="muted">${selected} geselecteerd${dups?` · ${dups} mogelijk dubbel (standaard uitgezet)`:''}. Pas alles aan voordat je importeert.</p></div></div>
       ${files.map(f=>`<h3>${esc14(f)}</h3><div class="v13-preview-list">${state14.entries.filter(e=>(e.source?.file||'Handmatig toegevoegd')===f).map(entryHtml14).join('')}</div>`).join('')}
@@ -4145,30 +4148,22 @@ console.info('Samen Thuis update 14.1 geladen');
   function commit14() {
     const selected=state14.entries.filter(e=>e.selected);
     if(!selected.length) return toast('Selecteer minimaal één onderdeel');
-    const counts={}, failed=[];
-    let calendarId=findCalendar14('');
-    selected.forEach(e=>{
-      try {
-        const item=Core14.buildItem(e.rec,{ today:TODAY14(), id, calendarId });
-        if(!item) throw new Error('onbekende bestemming');
-        if(e.target==='trips') {
-          const folder=getOrCreateTripFolder14(e.rec.trip||state14.trip);
-          const section=getOrCreateTripSection14(folder.id,e.rec.section);
-          item.tripFolderId=folder.id; item.tripSectionId=section.id;
-          if(item.startDate && !folder.startDate) folder.startDate=item.startDate;
-          if(item.endDate && !folder.endDate) folder.endDate=item.endDate;
-        }
-        data[e.target] ||= [];
-        data[e.target].push(item);
-        counts[e.target]=(counts[e.target]||0)+1;
-        e.imported=true;
-      } catch(err) { failed.push(`${e.rec.title||'(zonder titel)'}: ${err.message}`); }
-    });
-    save();
+    const keys=[...Object.keys(Core14.TARGETS),'tripFolders','tripSections'];
+    const snapshot={}; keys.forEach(k=>{ snapshot[k]=data[k]===undefined?undefined:JSON.parse(JSON.stringify(data[k])); });
+    const calendarId=findCalendar14('');
+    const { counts, failed }=Core14.applyEntries(data,selected,{ today:TODAY14(), id, calendarId, trip:state14.trip });
+    if(save()===false) {
+      keys.forEach(k=>{ if(snapshot[k]===undefined) delete data[k]; else data[k]=snapshot[k]; });
+      selected.forEach(e=>{ delete e.imported; });
+      state14.committed='';
+      render();
+      toast('Importeren is niet gelukt: de gegevens konden niet veilig worden opgeslagen. Er is niets toegevoegd.');
+      return;
+    }
     const total=Object.values(counts).reduce((a,b)=>a+b,0);
     const parts=Object.entries(counts).map(([k,n])=>`${n} × ${Core14.TARGETS[k]}`).join(', ');
     state14.entries=state14.entries.filter(e=>!e.imported);
-    state14.committed=`${total} onderdelen geïmporteerd (${parts}).${failed.length?' Niet gelukt: '+failed.join('; '):''}`;
+    state14.committed=`${total} onderdelen geïmporteerd (${parts}).${failed.length?' Niet gelukt: '+failed.join('; ')+'. Deze staan nog in het overzicht.':''}`;
     if(!failed.length) { state14.files=[]; state14.text=''; state14.reports=[]; }
     render();
     toast(`${total} onderdelen toegevoegd`);

@@ -22,7 +22,7 @@ const env = {
   loadMammoth: async () => mammoth,
   loadXlsx: async () => xlsx,
   ocrImage: tesseract ? async (f, bytes) => {
-    const w = await tesseract.createWorker('nld+eng', 1, { langPath: process.env.IMPORT_TEST_OCR_LANGPATH, gzip: true });
+    const w = await tesseract.createWorker('nld+eng', 1, { langPath: process.env.IMPORT_TEST_OCR_LANGPATH, gzip: true, cachePath: require('node:os').tmpdir() });
     const r = await w.recognize(Buffer.from(bytes)); await w.terminate();
     return { text: r.data.text, confidence: r.data.confidence };
   } : undefined
@@ -125,4 +125,44 @@ test('meerdere verschillende bestanden in één import; een fout blokkeert de re
   const { entries, reports } = await analyse(...reads);
   assert.deepEqual(reports.map(r => r.status), ['ok', 'ok', 'ok', 'unreadable']);
   assert.ok(new Set(entries.map(e => e.source.file)).size >= 3);
+});
+
+/* ===== Eindcontrole PR #5: CDN/offline ===== */
+const offlineErr = () => Object.assign(new Error('geen internet'), { libraryLoad: true });
+const offlineEnv = {
+  loadPdfjs: async () => { throw offlineErr(); },
+  loadMammoth: async () => { throw offlineErr(); },
+  loadXlsx: async () => { throw offlineErr(); },
+  ocrImage: async () => { throw offlineErr(); }
+};
+
+test('zonder internet: PDF, Word, Excel en OCR geven een begrijpelijke melding (geen "beschadigd")', async () => {
+  for (const name of ['reisplan.pdf', 'klus.docx', 'multi.xlsx', 'boodschappen.png']) {
+    const r = await Readers.readFile(mk(name), offlineEnv);
+    assert.equal(r.status, 'unreadable', name);
+    assert.match(r.message, /internetverbinding/, name);
+    assert.doesNotMatch(r.message, /beschadigd/, name);
+  }
+});
+
+test('zonder internet blijven CSV, TXT, JSON, RTF en andere bestanden gewoon werken', async () => {
+  const reads = [];
+  for (const n of ['reisplan.pdf', 'boodschappen.csv', 'notities.txt', 'data.json', 'brief.rtf']) reads.push(await Readers.readFile(mk(n), offlineEnv));
+  const { entries, reports } = await analyse(...reads);
+  assert.deepEqual(reports.map(r => r.status), ['unreadable', 'ok', 'ok', 'ok', 'ok']);
+  assert.ok(entries.length >= 10);
+});
+
+test('gescande PDF: OCR niet te laden geeft een duidelijke melding', { skip: !pdfjsPath && 'pdfjs-dist niet beschikbaar' }, async () => {
+  const r = await Readers.readFile(mk('scan.pdf'), { ...env, ocrPdfPage: async () => { throw offlineErr(); } });
+  assert.equal(r.status, 'unreadable');
+  assert.match(r.message, /OCR/);
+  assert.match(r.message, /internetverbinding/);
+});
+
+test('Excel: elk werkblad staat in de bronvermelding en niets wordt stil overgeslagen', { skip: !xlsx && 'xlsx niet beschikbaar' }, async () => {
+  const r = await Readers.readFile(mk('multi.xlsx'), env);
+  const { reports, entries } = await analyse(r);
+  assert.equal(reports[0].count, entries.length);
+  assert.deepEqual([...new Set(entries.map(e => (e.source.where.match(/werkblad '([^']+)'/) || [])[1]))].sort(), ['Agenda', 'Boodschappen', 'Voorraad']);
 });

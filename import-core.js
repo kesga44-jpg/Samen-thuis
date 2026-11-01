@@ -430,7 +430,12 @@
     if (!titleSet) {
       const idx = headers.findIndex((h, i) => cellText(row[i]) && !concepts[i] && !hasNumber(row[i]) && !findDate(cellText(row[i]), ref));
       if (idx >= 0) { rec.title = cellText(row[idx]); const x = `${headers[idx]}: ${rec.title}`; const j = extras.indexOf(x); if (j >= 0) extras.splice(j, 1); }
-      else if (rec.description || rec.note) rec.title = (rec.description || rec.note).split('\n')[0].slice(0, 80);
+      else if (rec.description || rec.note) {
+        const nk = rec.description ? 'description' : 'note';
+        const full = String(rec[nk]);
+        rec.title = full.split('\n')[0].slice(0, 80);
+        if (full === rec.title) rec[nk] = '';
+      }
     }
     extras.forEach(x => appendNote(rec, x));
     if (target === 'trips' && opts.trip && !rec.trip) rec.trip = opts.trip;
@@ -656,14 +661,14 @@
       if (pers) { rec.persons = pers[1]; rec.title = rec.title.replace(pers[0], '').trim(); }
       addMoney();
     } else if (target === 'groceries' || target === 'stock') {
-      const base = s.replace(/€\s*[\d.,]+|[\d.,]+\s*(?:€|euro)/gi, '').trim();
+      const base = s.replace(/€\s*[\d.,]+|[\d.,]+\s*(?:€|euro)|\s(?:à|a)\s*\d+[.,]\d{2}\b/gi, '').trim();
       const q = parseQuantity(base);
       const best = target === 'stock' ? s.match(/(?:tht|houdbaar tot|best before)\s*:?\s*(.+)$/i) : null;
       let name = q ? q.title : base;
       if (best) { const bd = findDate(best[1], ref); if (bd) { rec.bestBefore = bd.iso; name = name.replace(best[0], '').trim().replace(/[-–,(\s]+$/, ''); } }
       const loc = target === 'stock' ? (s.match(/\bin de (vriezer|koelkast|kast|kelder|voorraadkast|garage)\b/i) || [])[1] : '';
       if (loc) { rec.location = loc[0].toUpperCase() + loc.slice(1); name = name.replace(new RegExp(`\\s*in de ${loc}\\b`, 'i'), '').trim(); }
-      name = name.replace(/[-–,:(\s]+$/, '').replace(/^[-–,:)\s]+/, '');
+      name = name.replace(/\s+(?:à|a|per stuk)\s*$/i, '').replace(/[-–,:(\s]+$/, '').replace(/^[-–,:)\s]+/, '');
       Object.assign(rec, { title: name || base, amount: q ? q.amount : (target === 'groceries' ? 1 : ''), unit: q ? q.unit : '', category: guessGroceryCategory(name) });
       if (target === 'stock' && !rec.unit) rec.unit = 'stuks';
       if (target === 'groceries') { rec.done = st.done; if (ctx.role === 'ingredients' && recipeTitle) rec.forMeal = recipeTitle; if (ctx.store) rec.store = ctx.store; }
@@ -978,8 +983,48 @@
     }
   }
 
+  // Voegt geselecteerde items toe aan `data`. Raakt alleen de lijsten van de gekozen bestemmingen
+  // (en reismappen/-onderdelen) aan; budget, instellingen en overige gegevens blijven onaangeroerd.
+  function applyEntries(data, entries, ctx) {
+    const counts = {}, failed = [];
+    const same = (a, b) => norm(a) === norm(b);
+    const folderFor = name => {
+      data.tripFolders = data.tripFolders || [];
+      const wanted = String(name || '').trim() || 'Nieuwe reis';
+      let f = data.tripFolders.find(x => same(x.name, wanted));
+      if (!f) { f = { id: ctx.id(), name: wanted, startDate: '', endDate: '', note: 'Aangemaakt via universele import' }; data.tripFolders.push(f); }
+      return f;
+    };
+    const sectionFor = (folderId, name) => {
+      data.tripSections = data.tripSections || [];
+      const wanted = String(name || '').trim() || 'Algemeen';
+      let sec = data.tripSections.find(x => x.tripFolderId === folderId && same(x.name, wanted));
+      if (!sec) { sec = { id: ctx.id(), tripFolderId: folderId, name: wanted }; data.tripSections.push(sec); }
+      return sec;
+    };
+    entries.forEach(e => {
+      try {
+        if (!String(e.rec.title || '').trim()) throw new Error('titel ontbreekt');
+        const item = buildItem(e.rec, ctx);
+        if (!item) throw new Error('onbekende bestemming');
+        if (e.target === 'trips') {
+          const folder = folderFor(e.rec.trip || ctx.trip);
+          const sec = sectionFor(folder.id, e.rec.section);
+          item.tripFolderId = folder.id; item.tripSectionId = sec.id;
+          if (item.startDate && !folder.startDate) folder.startDate = item.startDate;
+          if (item.endDate && !folder.endDate) folder.endDate = item.endDate;
+        }
+        if (!Array.isArray(data[e.target])) data[e.target] = [];
+        data[e.target].push(item);
+        counts[e.target] = (counts[e.target] || 0) + 1;
+        e.imported = true;
+      } catch (err) { failed.push(`${e.rec.title || '(zonder titel)'}: ${err.message}`); }
+    });
+    return { counts, failed };
+  }
+
   return {
-    TARGETS, SCHEMAS, DATE_KEYS, TIME_KEYS, NUM_KEYS, BOOL_KEYS, PRIMARY_DATE, TRAVEL_SECTIONS, ALIASES,
+    applyEntries, TARGETS, SCHEMAS, DATE_KEYS, TIME_KEYS, NUM_KEYS, BOOL_KEYS, PRIMARY_DATE, TRAVEL_SECTIONS, ALIASES,
     parseNumber, findDate, findDateRange, findTime, findMoney, toISODate, toTime, toBool, toPriority, toRepeat,
     decodeBytes, parseDelimited, detectDelimiter, headerConcept, targetFromName, rtfToText,
     textToSegments, jsonToSegments, tableToEntries, freeTextEntries, analyse, textRead, describeStatus,
