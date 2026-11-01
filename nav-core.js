@@ -35,7 +35,7 @@
         { key: 'profiel', icon: 'user', label: 'Persoonlijk profiel', desc: 'Thema, accentkleur en weergave', parts: [['.device-settings19']] },
         { key: 'huishouden', icon: 'users', label: 'Huishouden', desc: 'Agenda’s per huishoudlid', parts: [['.settings-card', 'Agenda’s beheren']] },
         { key: 'account', icon: 'lock', label: 'Account en beveiliging', desc: 'Persoonlijk account en aanmelden', parts: [['[data-personal-account25]']] },
-        { key: 'synchronisatie', icon: 'sync', label: 'Synchronisatie', desc: 'Huishoudcode en accountsync', parts: [['.settings-card', 'Versleutelde synchronisatie|Accountsynchronisatie'], ['[data-acct-card]'], ['.sync-conflict-card,[data-sync-conflict]']] },
+        { key: 'synchronisatie', icon: 'sync', label: 'Synchronisatie', desc: 'Huishoudcode en accountsync', parts: [['.settings-card', 'Versleutelde synchronisatie|Accountsynchronisatie'], ['[data-acct-card]'], ['.sync-conflict,[data-sync-conflict]']] },
         { key: 'back-ups', icon: 'database', label: 'Back-ups en herstel', desc: 'Back-up maken en herstellen', parts: [['.settings-card', 'Back-up|Beschadigde gegevens']] },
         { key: 'voorkeuren', icon: 'sliders', label: 'Dashboard en voorkeuren', desc: 'Dashboardonderdelen kiezen', parts: [['.dashboard-editor,.dashboard-editor25']] },
         { key: 'overig', icon: 'more', label: 'Overige instellingen', desc: 'Importformaat en overig', parts: [['.settings-card', 'Eenvoudig tekstformaat']], catchAll: true }
