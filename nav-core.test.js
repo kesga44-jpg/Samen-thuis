@@ -42,6 +42,12 @@ test('Instellingen, Financiën en Sport zijn opgesplitst in subpagina’s', () =
   }
 });
 
+test('conflictscherm voor code-sync blijft zichtbaar in Instellingen > Synchronisatie', () => {
+  const selectors = N.subOf('settings', 'synchronisatie').parts.map(([selector]) => selector).join(',');
+  assert.match(selectors, /\.sync-conflict/);
+  assert.match(read('app.js'), /class="card settings-card sync-conflict"/);
+});
+
 test('terugnavigatie en kruimelpad gaan naar de bovenliggende pagina', () => {
   assert.deepEqual(N.parentOf('settings', 'account'), { page: 'settings', sub: null });
   assert.deepEqual(N.crumbs('settings', 'account').map(c => c.label), ['Meer', 'Instellingen', 'Account en beveiliging']);
