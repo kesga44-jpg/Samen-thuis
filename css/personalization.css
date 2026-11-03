@@ -1,0 +1,635 @@
+:root {
+  --st-nav-bg: #ffffff;
+  --st-nav-text: #17243a;
+  --st-nav-active-text: #ffffff;
+  --st-link: var(--blue);
+  --st-table: var(--paper);
+  --user-font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --user-font-size: 16px;
+  --user-font-weight: 400;
+  --user-line-height: 1.5;
+  --user-radius: 16px;
+  --user-spacing: 1;
+  --user-primary-text: #17243a;
+  --user-secondary-text: #6b7483;
+}
+
+html,
+body {
+  font-family: var(--user-font-family);
+  font-size: var(--user-font-size);
+  line-height: var(--user-line-height);
+}
+
+body,
+.topbar,
+.view {
+  background-color: var(--bg);
+  color: var(--ink);
+}
+
+body.st-glass20 {
+  background:
+    radial-gradient(circle at 92% 4%, color-mix(in srgb, var(--st-accent) 15%, transparent), transparent 27rem),
+    radial-gradient(circle at 10% 38%, color-mix(in srgb, var(--st-icon) 10%, transparent), transparent 32rem),
+    var(--bg) !important;
+}
+
+.sidebar,
+.mobile-nav23,
+.mobile-nav,
+.bottom-nav {
+  background-color: var(--st-nav-bg) !important;
+  color: var(--st-nav-text) !important;
+}
+
+.sidebar .nav-item,
+.mobile-nav23 button,
+.mobile-nav-scroll23 > button {
+  color: var(--st-inactive, var(--st-nav-text)) !important;
+  -webkit-text-fill-color: var(--st-inactive, var(--st-nav-text)) !important;
+}
+
+.sidebar .nav-item.active,
+.sidebar .nav-item:hover,
+.mobile-nav23 button.active,
+.mobile-nav-scroll23 > button.active {
+  background: var(--st-active, var(--blue)) !important;
+  color: var(--st-nav-active-text) !important;
+  -webkit-text-fill-color: var(--st-nav-active-text) !important;
+}
+
+.nav-item span,
+[data-st-icon],
+.st-tile-ico {
+  color: var(--st-icon, var(--blue));
+}
+
+.card,
+.stat,
+.day,
+.idea,
+.table,
+table,
+.profile-editor25,
+.personalization-pane25 {
+  background-color: var(--paper);
+  border-color: var(--line);
+  border-radius: var(--user-radius);
+  color: var(--ink);
+}
+
+body.st-glass20 .card:not(.welcome):not(.hero-card):not(.dark-card),
+body.st-glass20 .stat,
+body.st-glass20 .day,
+body.st-glass20 .idea,
+body.st-glass20 .list-item,
+body.st-glass20 .task,
+body.st-glass20 .trip-card,
+body.st-glass20 .trip-folder,
+body.st-glass20 .trip-section,
+body.st-glass20 .travel-item,
+body.st-glass20 .event,
+body.st-glass20 .settings-card,
+body.st-glass20 .personalization-pane25 {
+  background-color: var(--paper) !important;
+  border-color: var(--line) !important;
+  color: var(--user-primary-text) !important;
+}
+
+html[data-theme20] body.st-glass20 .card:not(.welcome):not(.hero-card):not(.dark-card) h1,
+html[data-theme20] body.st-glass20 .card:not(.welcome):not(.hero-card):not(.dark-card) h2,
+html[data-theme20] body.st-glass20 .card:not(.welcome):not(.hero-card):not(.dark-card) h3,
+html[data-theme20] body.st-glass20 .card:not(.welcome):not(.hero-card):not(.dark-card) h4,
+html[data-theme20] body.st-glass20 .card:not(.welcome):not(.hero-card):not(.dark-card) strong,
+html[data-theme20] body.st-glass20 .card:not(.welcome):not(.hero-card):not(.dark-card) b,
+html[data-theme20] body.st-glass20 .card:not(.welcome):not(.hero-card):not(.dark-card) p:not(.muted):not(.eyebrow),
+html[data-theme20] body.st-glass20 .card:not(.welcome):not(.hero-card):not(.dark-card) label,
+html[data-theme20] body.st-glass20 .item-main strong {
+  color: var(--user-primary-text) !important;
+  -webkit-text-fill-color: var(--user-primary-text) !important;
+}
+
+html[data-theme20] body.st-glass20 .card:not(.welcome):not(.hero-card):not(.dark-card) small,
+html[data-theme20] body.st-glass20 .card:not(.welcome):not(.hero-card):not(.dark-card) .muted,
+html[data-theme20] body.st-glass20 .item-main small {
+  color: var(--user-secondary-text) !important;
+  -webkit-text-fill-color: var(--user-secondary-text) !important;
+}
+
+.card,
+.stat,
+.day,
+.idea,
+table {
+  border-color: var(--line);
+}
+
+.topbar {
+  background: color-mix(in srgb, var(--bg) 94%, transparent);
+}
+
+.primary,
+button.primary,
+.accent-button,
+.filter.active {
+  background: var(--accent-button-bg, var(--blue)) !important;
+  border-radius: var(--user-radius);
+  color: var(--accent-button-text, #fff) !important;
+  -webkit-text-fill-color: var(--accent-button-text, #fff) !important;
+}
+
+.secondary,
+button.secondary {
+  background: color-mix(in srgb, var(--paper) 84%, var(--ink) 16%) !important;
+  border-radius: var(--user-radius);
+  color: var(--ink) !important;
+  -webkit-text-fill-color: var(--ink) !important;
+}
+
+a,
+.text-btn {
+  color: var(--st-link);
+}
+
+table,
+.table,
+th,
+td {
+  background-color: var(--st-table);
+  border-color: var(--line);
+}
+
+.check.done,
+.tag.green {
+  background-color: var(--st-success, var(--green));
+}
+
+.tag.orange {
+  background-color: color-mix(in srgb, var(--st-warning, var(--orange)) 20%, var(--paper));
+  color: var(--st-warning, var(--orange));
+}
+
+.tag.red,
+.danger,
+.error,
+[role="alert"] {
+  color: var(--st-error, var(--red));
+}
+
+.weather-temp-line,
+.weather-temp-dot {
+  stroke: var(--st-chart, var(--blue));
+}
+
+.card,
+.primary,
+.secondary,
+.nav-item,
+.stat,
+.day,
+.list-item,
+.personalization-tabs25 button {
+  font-weight: var(--user-font-weight);
+}
+
+.grid,
+.page-grid,
+.settings-grid,
+.collection-list25 {
+  gap: calc(18px * var(--user-spacing));
+}
+
+:root[data-density20="compact"] .card,
+:root[data-density20="compact"] .stat,
+:root[data-density20="compact"] .day {
+  padding: 12px;
+}
+
+:root[data-density20="spacious"] .card,
+:root[data-density20="spacious"] .stat,
+:root[data-density20="spacious"] .day {
+  padding: 26px;
+}
+
+:root[data-animations="off"] *,
+:root[data-animations="off"] *::before,
+:root[data-animations="off"] *::after {
+  animation-duration: 0s !important;
+  animation-iteration-count: 1 !important;
+  scroll-behavior: auto !important;
+  transition-duration: 0s !important;
+}
+
+.personalization25 {
+  display: grid;
+  gap: 20px;
+  margin-bottom: 18px;
+}
+
+.personalization-head25,
+.preview-head25 {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.personalization-head25 h2 {
+  margin: 0 0 6px;
+}
+
+.personalization-head25 p {
+  max-width: 720px;
+}
+
+.personalization-tabs25 {
+  display: flex;
+  gap: 8px;
+  padding: 4px 2px 10px;
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.personalization-tabs25 button {
+  flex: 0 0 auto;
+  min-height: 44px;
+  padding: 9px 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.personalization-tabs25 button.active {
+  background: var(--st-active, var(--blue));
+  border-color: var(--st-active, var(--blue));
+  color: var(--st-nav-active-text);
+}
+
+.personalization-pane25 {
+  min-height: 210px;
+  padding: 20px;
+}
+
+.personalization-pane25 h3 {
+  margin: 0 0 16px;
+}
+
+.profile-editor25 {
+  display: grid;
+  grid-template-columns: minmax(150px, 220px) minmax(0, 1fr);
+  gap: 28px;
+  padding: 6px;
+}
+
+.profile-photo-column25 {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.profile-avatar25 {
+  display: grid;
+  place-items: center;
+  width: 112px;
+  height: 112px;
+  overflow: hidden;
+  border: 3px solid var(--paper);
+  border-radius: 50%;
+  background-color: var(--blue-soft);
+  background-position: center;
+  background-size: cover;
+  box-shadow: 0 0 0 1px var(--line);
+  color: var(--blue);
+  font-size: 1.7rem;
+  font-weight: 700;
+}
+
+.profile-pick25 {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.profile-zoom25 {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  max-width: 180px;
+  color: var(--muted);
+  font-size: .82rem;
+  text-align: center;
+}
+
+.profile-crop-preview25 {
+  width: 82px;
+  height: 82px;
+  border-radius: 50%;
+  object-fit: cover;
+  object-position: center;
+  overflow: hidden;
+}
+
+.profile-peer25 {
+  padding: 18px 6px 4px;
+  border-top: 1px solid var(--line);
+}
+
+.profile-peer25 h3 {
+  margin: 0 0 10px;
+  font-size: 1rem;
+}
+
+.profile-peer-row25 {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.profile-peer-row25 .profile-avatar25 {
+  width: 52px;
+  height: 52px;
+  font-size: 1rem;
+}
+
+.profile-peer-row25 p {
+  margin: 0;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.profile-fields25 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: start;
+  gap: 14px;
+}
+
+.profile-fields25 .small-note,
+.profile-fields25 button {
+  grid-column: 1 / -1;
+}
+
+.profile-fields25 .field,
+.personalization-controls25 .field,
+.theme-color-field25 {
+  display: grid;
+  gap: 7px;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.profile-fields25 input,
+.personalization-controls25 input,
+.personalization-controls25 select,
+.theme-color-field25 input[type="text"] {
+  width: 100%;
+  min-height: 44px;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.theme-choice-grid25,
+.palette-row25 {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.theme-choice25 {
+  flex: 1 1 150px;
+  cursor: pointer;
+}
+
+.theme-choice25 input {
+  position: absolute;
+  opacity: 0;
+}
+
+.theme-choice25 span {
+  display: grid;
+  gap: 8px;
+  min-height: 88px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--user-radius);
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.theme-choice25 input:checked + span {
+  outline: 2px solid var(--blue);
+  outline-offset: 1px;
+}
+
+.theme-choice25 input:focus-visible + span {
+  outline: 3px solid var(--blue);
+}
+
+.palette-row25 button {
+  min-height: 44px;
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.theme-color-grid25,
+.personalization-controls25 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.theme-color-field25 > span {
+  display: grid;
+  grid-template-columns: 48px minmax(90px, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.theme-color-field25 input[type="color"] {
+  width: 48px;
+  height: 44px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper);
+}
+
+.personalization-controls25 output {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.live-preview25 {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--user-radius);
+  background: var(--bg);
+}
+
+.live-preview25 nav {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 56px;
+  padding: 10px 14px;
+  background: var(--st-nav-bg);
+  color: var(--st-nav-text);
+}
+
+.live-preview25 nav .preview-current25 {
+  margin-left: auto;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: var(--st-active, var(--blue));
+  color: var(--st-nav-active-text);
+}
+
+.preview-logo25,
+.preview-icon25 {
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: var(--st-accent, var(--blue));
+  color: #fff;
+  font-weight: 800;
+}
+
+.live-preview25 article {
+  display: grid;
+  gap: 12px;
+  max-width: 680px;
+  margin: 18px auto;
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-radius: var(--user-radius);
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.live-preview25 article h4,
+.live-preview25 article p {
+  margin: 0;
+}
+
+.live-preview25 article > div {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.live-preview25 article small {
+  color: var(--st-success, var(--green));
+}
+
+html[data-theme20="dark"] body,
+html[data-theme19="dark"] body {
+  background: var(--bg) !important;
+  color: var(--ink) !important;
+}
+
+:root[data-theme20="dark"] body.st-glass20 {
+  background:
+    radial-gradient(circle at 88% 3%, color-mix(in srgb, var(--st-accent) 20%, transparent), transparent 29rem),
+    radial-gradient(circle at 12% 45%, color-mix(in srgb, var(--st-icon) 12%, transparent), transparent 34rem),
+    var(--bg) !important;
+}
+
+body.st-glass20 .sidebar,
+body.st-glass20 .mobile-nav23,
+body.st-glass20 .mobile-nav-scroll23 {
+  background: var(--st-nav-bg) !important;
+  color: var(--st-nav-text) !important;
+}
+
+body.st-glass20 .topbar {
+  background: color-mix(in srgb, var(--bg) 94%, transparent) !important;
+  color: var(--ink) !important;
+}
+
+html[data-theme20="dark"] .topbar,
+html[data-theme20="dark"] .card,
+html[data-theme20="dark"] .stat,
+html[data-theme20="dark"] .day,
+html[data-theme20="dark"] .idea,
+html[data-theme20="dark"] .personalization-pane25,
+html[data-theme20="dark"] .live-preview25 article,
+html[data-theme20="dark"] .theme-choice25 span,
+html[data-theme20="dark"] .personalization-tabs25 button,
+html[data-theme20="dark"] .palette-row25 button {
+  background-color: var(--paper) !important;
+  border-color: var(--line) !important;
+  color: var(--ink) !important;
+}
+
+html[data-theme20="dark"] body.st-glass20 .card,
+html[data-theme20="dark"] body.st-glass20 .panel,
+html[data-theme20="dark"] body.st-glass20 .section-card,
+html[data-theme20="dark"] body.st-glass20 .daily-question,
+html[data-theme20="dark"] body.st-glass20 .settings-card {
+  background: var(--paper) !important;
+  background-color: var(--paper) !important;
+  color: var(--ink) !important;
+}
+
+html[data-theme20="dark"] .mobile-nav23,
+html[data-theme20="dark"] .mobile-nav-scroll23 > button,
+html[data-theme19="dark"] .mobile-nav23,
+html[data-theme19="dark"] .mobile-nav-scroll23 > button {
+  background-color: var(--st-nav-bg) !important;
+  color: var(--st-inactive, var(--st-nav-text)) !important;
+  -webkit-text-fill-color: var(--st-inactive, var(--st-nav-text)) !important;
+}
+
+html[data-theme20="dark"] .mobile-nav-scroll23 > button.active,
+html[data-theme19="dark"] .mobile-nav-scroll23 > button.active {
+  background: var(--st-active, var(--blue)) !important;
+  color: var(--st-nav-active-text) !important;
+  -webkit-text-fill-color: var(--st-nav-active-text) !important;
+}
+
+html[data-theme20="dark"] .sidebar .nav-item,
+html[data-theme20="dark"] .sidebar .brand,
+html[data-theme20="dark"] .sidebar .nav-item span {
+  color: var(--st-nav-text) !important;
+}
+
+@media (max-width: 650px) {
+  .personalization-pane25 {
+    padding: 12px 4px;
+  }
+
+  .profile-editor25 {
+    grid-template-columns: 1fr;
+    gap: 20px;
+  }
+
+  .profile-fields25,
+  .theme-color-grid25,
+  .personalization-controls25 {
+    grid-template-columns: 1fr;
+  }
+
+  .personalization-head25,
+  .preview-head25 {
+    flex-direction: column;
+  }
+
+  .live-preview25 nav {
+    gap: 8px;
+    font-size: .82rem;
+  }
+}
