@@ -28,6 +28,7 @@ const startOfWeek = value => {
 const weekDates = start => Array.from({ length: 7 }, (_, index) => addDays(start, index));
 const weekdayIndex = value => (parseDate(value).getDay() + 6) % 7;
 const daysBetween = (from, to) => Math.round((parseDate(to) - parseDate(from)) / 86400000);
+const householdPersonName = person => window.SamenThuisProfile25?.displayHouseholdPerson(person) || person;
 
 const CALENDAR_COLORS = ['#315f86', '#e98248', '#2e7d67', '#9b59b6', '#b84f58', '#8a6f3e'];
 const GROCERY_CATEGORIES = ['Groente', 'Fruit', 'Brood & wraps', 'Zuivel & vega', 'Vlees & vis', 'Diepvries', 'Voorraadkast', 'Kruiden & sauzen', 'Drinken', 'Schoonmaak', 'Overig'];
@@ -131,6 +132,38 @@ function migrateLegacyFreezerStock(target) {
   target.freezer = result.freezer.map(item => item && typeof item === 'object'
     ? freezerCore.normalize(item, todayISO())
     : item);
+}
+async function pollPersonalPreferences25() {
+  if (!authSession25?.user?.id || !personalPreferencesReady25 || personalSaveTimer25 || personalWriteInFlight25 || document.hidden) return;
+  try {
+    const session = await readySession25();
+    const response = await fetch(`${authBase25()}/rest/v1/personal_preferences?select=ui_config,dashboard_config,profile_config&user_id=eq.${encodeURIComponent(session.user.id)}&limit=1`, {
+      headers: authHeaders25(session.access_token)
+    });
+    if (!response.ok) throw new Error(`Persoonlijke voorkeuren controleren mislukt (${response.status}).`);
+    const rows = await response.json(), row = Array.isArray(rows) ? rows[0] : null;
+    if (!row) return;
+    const remote = personalPreferencesCore25.normalize({
+      ui: row.ui_config, dashboard: row.dashboard_config, profile: row.profile_config
+    }, DASH_DEFAULTS, dashboardCore, DASH_DEFAULT_VISIBLE);
+    const local = personalPreferencesCore25.normalize({
+      ui: window.SamenThuisPersonalUi20?.get(),
+      dashboard: window.SamenThuisDashboardPreferences25?.get(),
+      profile: profile25
+    }, DASH_DEFAULTS, dashboardCore, DASH_DEFAULT_VISIBLE);
+    if (JSON.stringify(remote) === JSON.stringify(local)) return;
+    setPersonalPreferences25(remote);
+    localStorage.setItem(personalPreferencesCore25.storageKey(session.user.id), JSON.stringify(remote));
+    await loadHouseholdProfiles25();
+    window.SamenThuisProfile25?.refresh();
+    render();
+  } catch (error) {
+    console.error('Persoonlijke voorkeuren van een ander apparaat ophalen mislukt', error);
+  }
+}
+function startPersonalPreferencePolling25() {
+  if (personalPollTimer25) return;
+  personalPollTimer25 = setInterval(pollPersonalPreferences25, 45000);
 }
 const groupBy = (items, keyFn) => items.reduce((groups, item) => {
   const key = keyFn(item);
@@ -394,11 +427,11 @@ function renderDailyQuestion() {
   const answers = data.dailyAnswers[todayISO()] || {};
   const bothAnswered = Boolean(answers.Kees && answers.Daphne);
   const personButton = person => answers[person]
-    ? `<button class="secondary" disabled>${bothAnswered ? `${person}: antwoord staat vast` : `${person} heeft geantwoord`}</button>`
-    : `<button class="primary" data-answer-person="${person}">${person} beantwoordt</button>`;
+    ? `<button class="secondary" disabled>${bothAnswered ? `${esc(householdPersonName(person))}: antwoord staat vast` : `${esc(householdPersonName(person))} heeft geantwoord`}</button>`
+    : `<button class="primary" data-answer-person="${person}">${esc(householdPersonName(person))} beantwoordt</button>`;
   return `<section class="card daily-question" data-widget18="dailyQuestion">
     <div class="card-head"><div><p class="eyebrow">Vraag van vandaag</p><h2>${esc(questionForDate(todayISO()))}</h2></div><span class="daily-icon">?</span></div>
-    ${bothAnswered ? `<div class="answer-grid"><article><span>Kees</span><p>${esc(answers.Kees.answer)}</p></article><article><span>Daphne</span><p>${esc(answers.Daphne.answer)}</p></article></div>` : `<p class="question-hint">Antwoorden blijven verborgen tot jullie allebei hebben geantwoord. ${answers.Kees || answers.Daphne ? 'Eén antwoord is binnen.' : ''}</p>`}
+    ${bothAnswered ? `<div class="answer-grid"><article><span>${esc(householdPersonName('Kees'))}</span><p>${esc(answers.Kees.answer)}</p></article><article><span>${esc(householdPersonName('Daphne'))}</span><p>${esc(answers.Daphne.answer)}</p></article></div>` : `<p class="question-hint">Antwoorden blijven verborgen tot jullie allebei hebben geantwoord. ${answers.Kees || answers.Daphne ? 'Eén antwoord is binnen.' : ''}</p>`}
     <div class="button-row">${personButton('Kees')}${personButton('Daphne')}</div>${bothAnswered ? '<p class="answer-locked">Beide antwoorden zijn definitief en kunnen niet meer worden gewijzigd.</p>' : ''}
   </section>`;
 }
@@ -522,7 +555,7 @@ function renderPlanning() {
 
 function calendarEvent(item) {
   const calendar = calendarById(item.calendarId);
-  return `<div class="calendar-event" style="--event-color:${esc(calendar.color)}"><small>${esc(item.time || 'Hele dag')}${item.endTime ? `–${esc(item.endTime)}` : ''}</small><strong>${esc(item.title)}</strong><span>${esc(calendar.name)}${item.person ? ` · ${esc(item.person)}` : ''}</span><button class="delete" data-delete="planning:${item.id}" aria-label="Verwijderen">×</button></div>`;
+  return `<div class="calendar-event" style="--event-color:${esc(calendar.color)}"><small>${esc(item.time || 'Hele dag')}${item.endTime ? `–${esc(item.endTime)}` : ''}</small><strong>${esc(item.title)}</strong><span>${esc(calendar.name)}${item.person ? ` · ${esc(householdPersonName(item.person))}` : ''}</span><button class="delete" data-delete="planning:${item.id}" aria-label="Verwijderen">×</button></div>`;
 }
 
 function renderMeals() {
@@ -589,7 +622,7 @@ function choreOccurrenceRow(chore, date, compact = false) {
   const done = isChoreDone(chore, date);
   return `<div class="${compact ? 'chore-chip' : 'list-item'} ${done ? 'is-done' : ''}">
     <button class="check ${done ? 'done' : ''}" data-chore-date="${chore.id}:${date}" aria-label="${done ? 'Opnieuw openen' : 'Afronden'}">${done ? '✓' : ''}</button>
-    <div class="item-main"><strong class="${done ? 'done-text' : ''}">${esc(chore.title)}</strong>${compact ? `<small>${esc(chore.person)} · ${esc(chore.repeat)}</small>` : `<small>${esc(chore.person)} · ${esc(repeatLabel(chore))}</small>`}</div>
+    <div class="item-main"><strong class="${done ? 'done-text' : ''}">${esc(chore.title)}</strong>${compact ? `<small>${esc(householdPersonName(chore.person))} · ${esc(chore.repeat)}</small>` : `<small>${esc(householdPersonName(chore.person))} · ${esc(repeatLabel(chore))}</small>`}</div>
   </div>`;
 }
 
@@ -607,7 +640,7 @@ function renderChores() {
       }).join('')}</div>
     </section>
     <div class="templates-head"><div><p class="eyebrow">Taakregels</p><h2>Herhalingen beheren</h2></div><button class="primary" data-open-add>＋ Taak toevoegen</button></div>
-    <div class="grid three">${['Kees', 'Daphne', 'Samen'].map(person => `<section class="card"><div class="card-head"><h2>${person}</h2><span class="tag ${person === 'Samen' ? 'green' : ''}">${data.chores.filter(chore => chore.person === person).length}</span></div><div class="list">${data.chores.filter(chore => chore.person === person).sort((a, b) => a.due.localeCompare(b.due)).map(choreTemplateRow).join('') || empty('Geen taakregels')}</div></section>`).join('')}</div>`;
+    <div class="grid three">${['Kees', 'Daphne', 'Samen'].map(person => `<section class="card"><div class="card-head"><h2>${esc(householdPersonName(person))}</h2><span class="tag ${person === 'Samen' ? 'green' : ''}">${data.chores.filter(chore => chore.person === person).length}</span></div><div class="list">${data.chores.filter(chore => chore.person === person).sort((a, b) => a.due.localeCompare(b.due)).map(choreTemplateRow).join('') || empty('Geen taakregels')}</div></section>`).join('')}</div>`;
 }
 
 function choreTemplateRow(chore) {
@@ -4810,7 +4843,7 @@ console.info('Samen Thuis update 16.0 geladen');
       <div style="display:flex;gap:12px;justify-content:space-between;align-items:flex-start">
         <div>
           <strong>${esc16(chore.title)}</strong>
-          <div class="muted" style="margin-top:4px">${esc16(chore.person||'Samen')} · ${esc16(chore.repeat||'')}</div>
+          <div class="muted" style="margin-top:4px">${esc16(householdPersonName(chore.person||'Samen'))} · ${esc16(chore.repeat||'')}</div>
         </div>
         <button class="primary" data-v16-done="${esc16(chore.id)}" style="white-space:nowrap">✓ Gedaan</button>
       </div>
@@ -5062,11 +5095,43 @@ function extraPage19(){
 function settingsPanel19(){
  if(current!=='settings')return;
  const v=document.querySelector('#view');if(!v||v.querySelector('[data-v19-device-settings]'))return;
- v.insertAdjacentHTML('afterbegin',`<section class="card device-settings19" data-v19-device-settings><div class="card-head"><div><p class="eyebrow">WEERGAVEVOORKEUREN</p><h2>Thema & weergave</h2></div><span class="tag">Persoonlijk</span></div><p class="muted">Zonder persoonlijk account worden voorkeuren op dit apparaat bewaard. Meld je aan om ze per account tussen apparaten te synchroniseren.</p>
- <div class="settings-grid19"><label>Thema<select data-v19-theme><option value="system">Systeem</option><option value="light">Licht</option><option value="dark">Donker</option></select></label>
- <label class="accent-control20">Accentkleur <input type="color" data-accent-color aria-label="Kies je eigen accentkleur"><span class="accent-preview20" data-accent-preview aria-live="polite"></span></label>
- <label>Weergave<select data-v19-density><option value="comfortable">Ruim</option><option value="compact">Compact</option></select></label></div></section>`);
- v.querySelector('[data-v19-theme]').value=ui19.theme;v.querySelector('[data-v19-density]').value=ui19.density;
+ const ui=window.SamenThuisPersonalUi20?.get()||{};
+ const profile=window.SamenThuisProfile25?.get()||{};
+ const profileSignedIn=window.SamenThuisProfile25?.signedIn();
+ const colors=[
+  ['background','Algemene achtergrond'],['card','Kaarten'],['textColor','Primaire tekst'],['secondaryTextColor','Secundaire tekst'],
+  ['accent','Accent'],['button','Knoppen'],['buttonText','Knoptekst'],['navigation','Navigatiebalk'],
+  ['activeItem','Actief menu-item'],['inactiveItem','Inactief menu-item'],['icon','Iconen'],['border','Randen en scheidingslijnen'],
+  ['link','Links'],['table','Tabellen'],['chart','Grafieken'],['success','Succesmeldingen'],['warning','Waarschuwingen'],['error','Foutmeldingen']
+ ];
+ const colorsMarkup=colors.map(([key,label])=>{const value=key==='textColor'?ui.textColor:key==='secondaryTextColor'?ui.secondaryTextColor:(ui.colors||{})[key];return`<label class="theme-color-field25">${label}<span><input type="color" data-theme-color="${key}" value="${value||'#7057d9'}" aria-label="${label} kleur"><input type="text" data-theme-hex="${key}" value="${value||'#7057d9'}" maxlength="7" pattern="#[0-9A-Fa-f]{6}" aria-label="${label} HEX-kleur"></span></label>`}).join('');
+ v.insertAdjacentHTML('afterbegin',`<section class="card device-settings19 personalization25" data-v19-device-settings>
+  <div class="personalization-head25"><div><p class="eyebrow">PERSOONLIJKE INSTELLINGEN</p><h2>Maak Samen Thuis van jou</h2><p class="muted">Je profiel en vormgeving zijn optioneel en persoonlijk. Alleen je naam en profielfoto zijn zichtbaar voor je huisgenoot. Zonder account wordt de vormgeving alleen op dit apparaat bewaard.</p></div><span class="tag">${profileSignedIn?'Per account':'Dit apparaat'}</span></div>
+  <nav class="personalization-tabs25" aria-label="Persoonlijke instellingen">
+   ${[['profile','Mijn profiel'],['theme','Thema'],['colors','Kleuren'],['type','Typografie'],['display','Weergave'],['preview','Voorbeeld']].map(([id,label],i)=>`<button type="button" class="${i===0?'active':''}" role="tab" aria-selected="${i===0}" data-settings-tab="${id}">${label}</button>`).join('')}
+  </nav>
+  <section class="personalization-pane25 active" role="tabpanel" data-settings-pane="profile">
+   <div class="profile-editor25"><div class="profile-photo-column25"><div class="profile-avatar25" data-profile-avatar25>${window.SamenThuisProfile25?.displayName(profile)?window.SamenThuisProfile25.displayName(profile).split(/\\s+/).map(x=>x[0]).join('').slice(0,2).toUpperCase():'•'}</div><label class="secondary profile-pick25">Foto kiezen<input type="file" data-profile-file accept="image/jpeg,image/png,image/webp" hidden></label><button type="button" class="text-btn" data-profile-remove>Foto verwijderen</button><label class="profile-zoom25">Bijsnijden<input type="range" min="1" max="2.5" step=".05" value="1" data-avatar-zoom aria-label="Profielfoto bijsnijden"></label><img class="profile-crop-preview25" data-profile-crop hidden alt="Voorbeeld uitsnede profielfoto"></div>
+    <form class="profile-fields25" data-profile-form><label class="field">Voornaam<input name="firstName" maxlength="80" autocomplete="given-name" value="${esc(profile.firstName||'')}"></label><label class="field">Achternaam<input name="lastName" maxlength="80" autocomplete="family-name" value="${esc(profile.lastName||'')}"></label><label class="field">Bijnaam of weergavenaam<input name="nickname" maxlength="80" autocomplete="nickname" value="${esc(profile.nickname||'')}"></label><label class="field">Koppeling met bestaande taken en sport<select name="personKey"><option value="">Niet gekoppeld</option><option value="Kees" ${profile.personKey==='Kees'?'selected':''}>Kees</option><option value="Daphne" ${profile.personKey==='Daphne'?'selected':''}>Daphne</option></select></label><p class="small-note">Alle profielvelden zijn optioneel. Je bijnaam wordt gebruikt als weergavenaam; anders je voor- en achternaam. Koppel je profiel eventueel aan je bestaande naam bij persoonlijke taken en sport.${profileSignedIn?'':` <a href="#/settings/account">Meld je aan via Account en beveiliging</a> om je profiel op te slaan.`}</p><button class="primary" type="submit" data-profile-save>Profiel opslaan</button></form>
+   </div>
+   <div class="profile-peer25" data-profile-peer25 hidden></div>
+  </section>
+  <section class="personalization-pane25" role="tabpanel" data-settings-pane="theme" hidden><h3>Thema</h3><div class="theme-choice-grid25">${[['light','Licht','☀'],['dark','Donker','☾'],['system','Automatisch','◐']].map(([value,label,icon])=>`<label class="theme-choice25"><input type="radio" name="personal-theme" value="${value}" data-pref-key="theme" ${ui.theme===value?'checked':''}><span>${icon}<strong>${label}</strong></span></label>`).join('')}</div><p class="small-note">Automatisch volgt de licht- of donkerinstelling van dit apparaat.</p></section>
+  <section class="personalization-pane25" role="tabpanel" data-settings-pane="colors" hidden><h3>Kleurenpalet</h3><div class="palette-row25"><button type="button" data-color-preset="lavender">Lavendel</button><button type="button" data-color-preset="ocean">Oceaan</button><button type="button" data-color-preset="forest">Bos</button><button type="button" data-color-preset="sunset">Zonsondergang</button></div><h3>Eigen kleuren</h3><div class="theme-color-grid25">${colorsMarkup}</div></section>
+  <section class="personalization-pane25" role="tabpanel" data-settings-pane="type" hidden><h3>Typografie</h3><div class="personalization-controls25">
+   <label class="field">Lettertype<select data-pref-key="fontFamily">${[['system','Systeemstandaard'],['Inter','Inter'],['Roboto','Roboto'],['Arial','Arial'],['Poppins','Poppins'],['Nunito','Nunito']].map(([value,label])=>`<option value="${value}" ${ui.fontFamily===value?'selected':''}>${label}</option>`).join('')}</select></label>
+   <label class="field">Lettergrootte <output data-pref-output="fontSize">${ui.fontSize||16}px</output><input type="range" min="12" max="24" step="1" value="${ui.fontSize||16}" data-pref-key="fontSize"></label>
+   <label class="field">Letterdikte<select data-pref-key="fontWeight">${[[400,'Normaal'],[500,'Medium'],[600,'Halfvet'],[700,'Vet']].map(([value,label])=>`<option value="${value}" ${Number(ui.fontWeight||400)===value?'selected':''}>${label}</option>`).join('')}</select></label>
+   <label class="field">Regelafstand<input type="range" min="1.2" max="2" step=".05" value="${ui.lineHeight||1.5}" data-pref-key="lineHeight"></label>
+   </div><p class="small-note">Tekstkleuren stel je in via Kleuren. Lettertypes gebruiken waar mogelijk de geïnstalleerde systeemvariant.</p></section>
+  <section class="personalization-pane25" role="tabpanel" data-settings-pane="display" hidden><h3>Weergave</h3><div class="personalization-controls25">
+   <label class="field">Dichtheid<select data-pref-key="density"><option value="compact" ${ui.density==='compact'?'selected':''}>Compact</option><option value="comfortable" ${!ui.density||ui.density==='comfortable'?'selected':''}>Normaal</option><option value="spacious" ${ui.density==='spacious'?'selected':''}>Ruim</option></select></label>
+   <label class="field">Afgeronde hoeken <output data-pref-output="radius">${ui.radius??16}px</output><input type="range" min="0" max="28" step="2" value="${ui.radius??16}" data-pref-key="radius"></label>
+   <label class="field">Ruimte tussen onderdelen <output data-pref-output="spacing">${ui.spacing??1}×</output><input type="range" min=".75" max="1.5" step=".05" value="${ui.spacing??1}" data-pref-key="spacing"></label>
+   <label class="field">Animaties<select data-pref-key="animations"><option value="true" ${ui.animations!==false?'selected':''}>Aan</option><option value="false" ${ui.animations===false?'selected':''}>Uit</option></select></label>
+   </div><p class="small-note">Kaarten en knoppen volgen dezelfde instelling voor hoekafronding.</p></section>
+  <section class="personalization-pane25" role="tabpanel" data-settings-pane="preview" hidden><div class="preview-head25"><div><h3>Live voorbeeld</h3><p class="muted">Wijzigingen zijn meteen zichtbaar in de app en dit voorbeeld.</p></div><button type="button" class="secondary" data-personal-reset>Standaard herstellen</button></div><div class="live-preview25"><nav><span class="preview-logo25">S</span><strong>Samen Thuis</strong><span class="preview-current25">Vandaag</span><span>Agenda</span></nav><article><span class="preview-icon25">✦</span><h4>Een fijn thuis, samen ingericht</h4><p>Dit is een voorbeeld van tekst, kaarten, kleuren en typografie.</p><div><button type="button" class="primary">Primaire knop</button><button type="button" class="secondary">Secundaire knop</button><a href="#settings">Voorbeeldlink</a></div><small>Succesvol bijgewerkt · Voorbeeldmelding</small></article></div></section>
+ </section>`);
 }
 function editBudget19(index=null){
  data.budget ||= {income:0,expenses:[]}; data.budget.expenses ||= [];
@@ -5109,6 +5174,103 @@ document.addEventListener('change',e=>{
  if(e.target.matches('[data-v19-theme]')){ui19.theme=e.target.value;saveUi19()}
  if(e.target.matches('[data-v19-density]')){ui19.density=e.target.value;saveUi19()}
 });
+function updatePersonalUi25(patch){
+ const currentUi=window.SamenThuisPersonalUi20?.get()||{};
+ window.SamenThuisPersonalUi20?.set({...currentUi,...patch});
+}
+function setPersonalColor25(key,value){
+ if(!/^#[0-9a-f]{6}$/i.test(value))return;
+ const ui=window.SamenThuisPersonalUi20?.get()||{};
+ if(key==='textColor'||key==='secondaryTextColor')updatePersonalUi25({[key]:value});
+ else updatePersonalUi25({colors:{...(ui.colors||{}),[key]:value},...(key==='accent'?{accentColor:value}:{})});
+ const picker=document.querySelector(`[data-theme-color="${key}"]`),hex=document.querySelector(`[data-theme-hex="${key}"]`);
+ if(picker)picker.value=value;if(hex)hex.value=value.toUpperCase();
+}
+document.addEventListener('click',e=>{
+ const tab=e.target.closest('[data-settings-tab]');
+ if(tab){
+  const box=tab.closest('[data-v19-device-settings]');
+  box.querySelectorAll('[data-settings-tab]').forEach(button=>{const active=button===tab;button.classList.toggle('active',active);button.setAttribute('aria-selected',String(active))});
+  box.querySelectorAll('[data-settings-pane]').forEach(pane=>{const active=pane.dataset.settingsPane===tab.dataset.settingsTab;pane.hidden=!active;pane.classList.toggle('active',active)});
+  return;
+ }
+ const preset=e.target.closest('[data-color-preset]');
+ if(preset){
+  const palettes={
+   lavender:{accent:'#7057d9',button:'#7057d9',activeItem:'#7057d9',icon:'#7057d9',chart:'#7057d9',link:'#6046c2'},
+   ocean:{accent:'#167da5',button:'#126b8e',activeItem:'#126b8e',icon:'#167da5',chart:'#167da5',link:'#126b8e'},
+   forest:{accent:'#43805e',button:'#316a4a',activeItem:'#316a4a',icon:'#43805e',chart:'#43805e',link:'#316a4a'},
+   sunset:{accent:'#c45c45',button:'#a94837',activeItem:'#a94837',icon:'#c45c45',chart:'#c45c45',link:'#a94837'}
+  };
+  const ui=window.SamenThuisPersonalUi20?.get()||{};
+  updatePersonalUi25({colors:{...(ui.colors||{}),...palettes[preset.dataset.colorPreset]}});
+  Object.entries(palettes[preset.dataset.colorPreset]).forEach(([key,value])=>setPersonalColor25(key,value));
+  return;
+ }
+ if(e.target.closest('[data-personal-reset]')){
+  updatePersonalUi25(window.SamenThuisPersonalPreferences.DEFAULT_UI);
+  if(current==='settings')render();
+  return;
+ }
+ if(e.target.closest('[data-profile-remove]')){
+  if(!window.SamenThuisProfile25?.signedIn()){toast('Meld je aan via Account en beveiliging om je profielfoto te verwijderen.');return}
+  window.SamenThuisProfile25?.removePhoto().then(()=>{if(current==='settings')render()}).catch(error=>toast(error.message||'Profielfoto verwijderen is mislukt.'));
+ }
+});
+document.addEventListener('input',e=>{
+ const target=e.target;
+ if(target.matches('[data-pref-key]')){
+  const key=target.dataset.prefKey;
+  const value=target.type==='range'?Number(target.value):target.value==='true'?true:target.value==='false'?false:target.value;
+  updatePersonalUi25({[key]:value});
+  const output=document.querySelector(`[data-pref-output="${key}"]`);
+  if(output)output.textContent=key==='fontSize'?`${value}px`:key==='radius'?`${value}px`:key==='spacing'?`${value}×`:String(value);
+ }
+ if(target.matches('[data-theme-color]'))setPersonalColor25(target.dataset.themeColor,target.value);
+ if(target.matches('[data-theme-hex]')&&/^#[0-9a-f]{6}$/i.test(target.value))setPersonalColor25(target.dataset.themeHex,target.value);
+ if(target.matches('[data-avatar-zoom]')){
+  const image=document.querySelector('[data-profile-crop]');
+  if(image)image.style.transform=`scale(${target.value})`;
+ }
+});
+document.addEventListener('change',e=>{
+ const target=e.target;
+ if(target.matches('[data-profile-file]')){
+  const file=target.files?.[0],preview=document.querySelector('[data-profile-crop]');
+  if(!file||!preview)return;
+  if(!/^image\/(jpeg|png|webp)$/.test(file.type)||file.size>10*1024*1024){toast('Kies een JPG-, PNG- of WebP-afbeelding van maximaal 10 MB.');target.value='';return}
+  if(preview.dataset.objectUrl)URL.revokeObjectURL(preview.dataset.objectUrl);
+  const url=URL.createObjectURL(file);preview.dataset.objectUrl=url;preview.src=url;preview.hidden=false;
+ }
+});
+document.addEventListener('submit',async e=>{
+ const form=e.target.closest('[data-profile-form]');
+ if(!form)return;
+ e.preventDefault();
+ if(!window.SamenThuisProfile25?.signedIn()){toast('Meld je aan met je persoonlijke account om je profiel op te slaan.');return}
+ const button=form.querySelector('[data-profile-save]');button.disabled=true;
+ try{
+  await window.SamenThuisProfile25.save(Object.fromEntries(['firstName','lastName','nickname','personKey'].map(key=>[key,form.elements[key].value])));
+  const file=form.closest('.profile-editor25').querySelector('[data-profile-file]').files?.[0];
+  if(file){
+   const image=new Image(),url=URL.createObjectURL(file);
+   try{
+    image.src=url;await image.decode();
+    const side=Math.min(image.naturalWidth,image.naturalHeight)/Number(form.closest('.profile-editor25').querySelector('[data-avatar-zoom]').value||1);
+    const x=(image.naturalWidth-side)/2,y=(image.naturalHeight-side)/2,canvas=document.createElement('canvas');
+    canvas.width=512;canvas.height=512;
+    const context=canvas.getContext('2d');if(!context)throw new Error('Afbeelding bijsnijden wordt niet ondersteund op dit apparaat.');
+    context.drawImage(image,x,y,side,side,0,0,512,512);
+    const cropped=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',.88));
+    if(!cropped)throw new Error('De profielfoto kon niet worden verwerkt.');
+    await window.SamenThuisProfile25.upload(cropped);
+   }finally{URL.revokeObjectURL(url)}
+  }
+  toast('Profiel opgeslagen en gesynchroniseerd.');
+  render();
+ }catch(error){toast(error.message||'Profiel opslaan is mislukt.')}
+ finally{button.disabled=false}
+});
 requestAnimationFrame(()=>{nav19();settingsPanel19();applyUi19()});
 })();
 
@@ -5122,7 +5284,7 @@ if (window.__ST_V20__) return;
 window.__ST_V20__ = true;
 
 const KEY20 = 'samenThuisDeviceUiV20';
-const FALLBACK20 = { theme:'system', accent:'purple', accentColor:'#7057d9', density:'comfortable' };
+const FALLBACK20 = window.SamenThuisPersonalPreferences?.DEFAULT_UI || { theme:'system', accent:'purple', accentColor:'#7057d9', density:'comfortable' };
 const ACCENT_PRESETS20 = { bluePurple:'#5f63d8', blue:'#315f86', purple:'#7057d9', orange:'#d56e38' };
 
 function get20(){
@@ -5130,11 +5292,14 @@ function get20(){
     const old = JSON.parse(localStorage.getItem('samenThuisDeviceUiV19') || '{}');
     const now = JSON.parse(localStorage.getItem(KEY20) || '{}');
     const saved = {...FALLBACK20, ...old, ...now};
+    if (!old.colors && !now.colors && /^#[0-9a-f]{6}$/i.test(saved.accentColor || '')) {
+      saved.colors = { ...FALLBACK20.colors, accent: saved.accentColor };
+    }
     if (!/^#[0-9a-f]{6}$/i.test(saved.accentColor || '')) saved.accentColor = ACCENT_PRESETS20[saved.accent] || FALLBACK20.accentColor;
     return saved;
   } catch (_) { return {...FALLBACK20}; }
 }
-let ui20 = get20();
+let ui20 = window.SamenThuisPersonalPreferences?.normalize({ ui: get20() }, []).ui || get20();
 
 function apply20(){
   const systemDark = window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches;
@@ -5147,7 +5312,19 @@ function apply20(){
   html.dataset.density19 = ui20.density || 'comfortable';
   html.dataset.density20 = ui20.density || 'comfortable';
   html.style.colorScheme = dark ? 'dark' : 'light';
-  const hex = /^#[0-9a-f]{6}$/i.test(ui20.accentColor || '') ? ui20.accentColor : FALLBACK20.accentColor;
+  const color = { ...(ui20.colors || FALLBACK20.colors) };
+  const defaultColors = window.SamenThuisPersonalPreferences?.DEFAULT_UI.colors || {};
+  if (dark) {
+    const darkDefaults = {
+      background: '#101a28', card: '#17263a', navigation: '#17263a', table: '#17263a',
+      border: '#35465d', textColor: '#f0f3f7', secondaryTextColor: '#b5c0ce',
+      inactiveItem: '#b5c0ce'
+    };
+    Object.entries(darkDefaults).forEach(([key, value]) => {
+      if (color[key] === defaultColors[key]) color[key] = value;
+    });
+  }
+  const hex = /^#[0-9a-f]{6}$/i.test(color.accent || '') ? color.accent : ui20.accentColor;
   const channels = value => [1, 3, 5].map(i => parseInt(value.slice(i, i + 2), 16));
   const mix = (rgb, target, amount) => '#' + rgb.map((c, index) =>
     Math.round(c + ((Array.isArray(target) ? target[index] : target) - c) * amount).toString(16).padStart(2, '0')).join('');
@@ -5160,6 +5337,11 @@ function apply20(){
     const [a, b] = [luminance(foreground), luminance(background)].sort((x, y) => y - x);
     return (a + 0.05) / (b + 0.05);
   };
+  const readableAcross = (foreground, backgrounds) => {
+    const minimum = value => Math.min(...backgrounds.map(background => contrast(value, background)));
+    if (minimum(foreground) >= 4.5) return foreground;
+    return ['#000000', '#ffffff'].sort((a, b) => minimum(b) - minimum(a))[0];
+  };
   const readableOn = (background, target) => {
     for (let amount = 0; amount <= 1; amount += 0.01) {
       const candidate = mix(baseRgb, target, amount);
@@ -5167,14 +5349,52 @@ function apply20(){
     }
     return target === 0 ? '#000000' : '#ffffff';
   };
-  const darkSurface = '#0d273e';
-  const accentText = contrast('#ffffff', hex) >= contrast('#17243a', hex) ? '#ffffff' : '#17243a';
-  html.style.setProperty('--blue', readableOn(dark ? darkSurface : '#ffffff', dark ? 255 : 0));
-  html.style.setProperty('--blue-soft', mix(baseRgb, dark ? channels(darkSurface) : 255, 0.88));
-  html.style.setProperty('--dark-accent-text', readableOn(darkSurface, 255));
-  html.style.setProperty('--dark-muted-text', '#c7d8e8');
-  html.style.setProperty('--accent-button-bg', hex);
-  html.style.setProperty('--accent-button-text', accentText);
+  const background = color.background, paper = color.card;
+  const foreground = readableAcross(ui20.textColor, [background, paper]);
+  const secondary = readableAcross(ui20.secondaryTextColor, [background, paper]);
+  const buttonText = contrast(color.buttonText, color.button) >= 4.5
+    ? color.buttonText : readableOn(color.button, luminance(color.button) > 0.45 ? 0 : 255);
+  const rootStyle = html.style;
+  rootStyle.setProperty('--bg', background);
+  rootStyle.setProperty('--paper', paper);
+  rootStyle.setProperty('--ink', foreground);
+  rootStyle.setProperty('--muted', secondary);
+  rootStyle.setProperty('--user-primary-text', foreground);
+  rootStyle.setProperty('--user-secondary-text', secondary);
+  rootStyle.setProperty('--line', color.border);
+  rootStyle.setProperty('--blue', color.button);
+  rootStyle.setProperty('--blue-soft', mix(channels(color.accent), dark ? channels(background) : 255, dark ? 0.72 : 0.88));
+  rootStyle.setProperty('--green', color.success);
+  rootStyle.setProperty('--red', color.error);
+  rootStyle.setProperty('--orange', color.warning);
+  rootStyle.setProperty('--accent-button-bg', color.button);
+  rootStyle.setProperty('--accent-button-text', buttonText);
+  rootStyle.setProperty('--st-accent', color.accent);
+  rootStyle.setProperty('--st-nav-bg', color.navigation);
+  rootStyle.setProperty('--st-nav-text', readableOn(color.navigation, luminance(color.navigation) > 0.45 ? 0 : 255));
+  rootStyle.setProperty('--st-nav-active-text', readableOn(color.activeItem, luminance(color.activeItem) > 0.45 ? 0 : 255));
+  rootStyle.setProperty('--st-icon', color.icon);
+  rootStyle.setProperty('--st-link', color.link);
+  rootStyle.setProperty('--st-active', color.activeItem);
+  rootStyle.setProperty('--st-inactive', color.inactiveItem);
+  rootStyle.setProperty('--st-table', color.table);
+  rootStyle.setProperty('--st-chart', color.chart);
+  rootStyle.setProperty('--st-success', color.success);
+  rootStyle.setProperty('--st-warning', color.warning);
+  rootStyle.setProperty('--st-error', color.error);
+  rootStyle.setProperty('--dock20', `color-mix(in srgb, ${color.navigation} 82%, transparent)`);
+  rootStyle.setProperty('--dock20-active', `color-mix(in srgb, ${color.activeItem} 20%, transparent)`);
+  rootStyle.setProperty('--user-font-family', ui20.fontFamily === 'system'
+    ? '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+    : `"${ui20.fontFamily}", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`);
+  rootStyle.setProperty('--user-font-size', `${ui20.fontSize}px`);
+  rootStyle.setProperty('--user-font-weight', String(ui20.fontWeight));
+  rootStyle.setProperty('--user-line-height', String(ui20.lineHeight));
+  rootStyle.setProperty('--user-radius', `${ui20.radius}px`);
+  rootStyle.setProperty('--user-spacing', String(ui20.spacing));
+  rootStyle.setProperty('--dark-accent-text', readableOn(background, 255));
+  rootStyle.setProperty('--dark-muted-text', secondary);
+  html.dataset.animations = ui20.animations ? 'on' : 'off';
   html.dataset.accent20 = html.dataset.accent19 = 'custom';
   document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#081b2d' : '#eef3f9');
 }
@@ -5190,13 +5410,7 @@ window.SamenThuisPersonalUi20 = {
   get() { return { ...ui20 }; },
   set(value) {
     const next = value && typeof value === 'object' ? value : {};
-    ui20 = {
-      theme: ['system', 'light', 'dark'].includes(next.theme) ? next.theme : 'system',
-      accent: ['bluePurple', 'blue', 'purple', 'orange'].includes(next.accent) ? next.accent : 'purple',
-      density: ['comfortable', 'compact'].includes(next.density) ? next.density : 'comfortable',
-      accentColor: typeof next.accentColor === 'string' && /^#[0-9a-f]{6}$/i.test(next.accentColor)
-        ? next.accentColor : ACCENT_PRESETS20[next.accent] || FALLBACK20.accentColor
-    };
+    ui20 = window.SamenThuisPersonalPreferences?.normalize({ ui: next }, []).ui || { ...FALLBACK20, ...next };
     save20();
   }
 };
@@ -7330,6 +7544,9 @@ document.addEventListener('click', event => {
   let authBusy25 = false;
   let personalPreferencesReady25 = false;
   let personalSaveTimer25;
+  let personalPollTimer25 = null;
+  let personalWriteInFlight25 = false;
+  let applyingRemotePreferences25 = false;
   try { authSession25 = JSON.parse(localStorage.getItem(AUTH_KEY25) || 'null'); } catch (_) {}
 
   function authBase25() { return String(syncConfig.projectUrl || DEFAULT_PROJECT_URL).replace(/\/$/, ''); }
@@ -7353,11 +7570,17 @@ document.addEventListener('click', event => {
     return authSession25;
   }
   window.SamenThuisAuth25 = { session: () => authSession25, ready: readySession25 };
-  function uiDefault25() { return { theme: 'system', accent: 'purple', accentColor: '#7057d9', density: 'comfortable' }; }
+  function uiDefault25() { return personalPreferencesCore25?.DEFAULT_UI || { theme: 'system', accent: 'purple', accentColor: '#7057d9', density: 'comfortable' }; }
+  let profile25 = personalPreferencesCore25?.normalizeProfile();
+  let householdProfiles25 = [];
   function setPersonalPreferences25(value) {
     const normalized = personalPreferencesCore25?.normalize(value, DASH_DEFAULTS, dashboardCore, DASH_DEFAULT_VISIBLE) || value || {};
-    window.SamenThuisPersonalUi20?.set(normalized.ui || uiDefault25());
-    window.SamenThuisDashboardPreferences25?.set(normalized.dashboard || dashboardCore?.defaults(DASH_DEFAULTS));
+    applyingRemotePreferences25 = true;
+    try {
+      window.SamenThuisPersonalUi20?.set(normalized.ui || uiDefault25());
+      window.SamenThuisDashboardPreferences25?.set(normalized.dashboard || dashboardCore?.defaults(DASH_DEFAULTS));
+      profile25 = personalPreferencesCore25.normalizeProfile(normalized.profile);
+    } finally { applyingRemotePreferences25 = false; }
   }
   function localAccountPreferences25(userId) {
     try { return JSON.parse(localStorage.getItem(personalPreferencesCore25.storageKey(userId)) || 'null'); } catch (_) { return null; }
@@ -7365,6 +7588,7 @@ document.addEventListener('click', event => {
   function saveLocalAccountPreferences25(userId) {
     const preferences = {
       ui: window.SamenThuisPersonalUi20?.get() || uiDefault25(),
+      profile: profile25,
       dashboard: window.SamenThuisDashboardPreferences25?.get() || dashboardCore?.defaults(DASH_DEFAULTS)
     };
     localStorage.setItem(personalPreferencesCore25.storageKey(userId), JSON.stringify(preferences));
@@ -7373,24 +7597,27 @@ document.addEventListener('click', event => {
   async function writePersonalPreferences25(preferences) {
     const session = await readySession25();
     if (!session?.user?.id) throw new Error('Meld je opnieuw aan om voorkeuren te synchroniseren.');
-    const response = await fetch(`${authBase25()}/rest/v1/personal_preferences?on_conflict=user_id`, {
-      method: 'POST',
-      headers: { ...authHeaders25(session.access_token), Prefer: 'resolution=merge-duplicates,return=minimal' },
-      body: JSON.stringify({
-        user_id: session.user.id, ui_config: preferences.ui,
-        dashboard_config: preferences.dashboard, updated_at: new Date().toISOString()
-      })
-    });
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({}));
-      throw new Error(error.message || `Persoonlijke voorkeuren opslaan mislukt (${response.status}).`);
-    }
-    localStorage.setItem(personalPreferencesCore25.storageKey(session.user.id), JSON.stringify(preferences));
+    personalWriteInFlight25 = true;
+    try {
+      const response = await fetch(`${authBase25()}/rest/v1/personal_preferences?on_conflict=user_id`, {
+        method: 'POST',
+        headers: { ...authHeaders25(session.access_token), Prefer: 'resolution=merge-duplicates,return=minimal' },
+        body: JSON.stringify({
+          user_id: session.user.id, ui_config: preferences.ui, profile_config: preferences.profile,
+          dashboard_config: preferences.dashboard, updated_at: new Date().toISOString()
+        })
+      });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.message || `Persoonlijke voorkeuren opslaan mislukt (${response.status}).`);
+      }
+      localStorage.setItem(personalPreferencesCore25.storageKey(session.user.id), JSON.stringify(preferences));
+    } finally { personalWriteInFlight25 = false; }
   }
   async function loadPersonalPreferences25() {
     const session = await readySession25();
     if (!session?.user?.id) return;
-    const response = await fetch(`${authBase25()}/rest/v1/personal_preferences?select=ui_config,dashboard_config&user_id=eq.${encodeURIComponent(session.user.id)}&limit=1`, {
+    const response = await fetch(`${authBase25()}/rest/v1/personal_preferences?select=ui_config,dashboard_config,profile_config,updated_at&user_id=eq.${encodeURIComponent(session.user.id)}&limit=1`, {
       headers: authHeaders25(session.access_token)
     });
     if (!response.ok) {
@@ -7399,15 +7626,33 @@ document.addEventListener('click', event => {
     }
     const rows = await response.json();
     const saved = Array.isArray(rows) ? rows[0] : null;
-    if (saved) setPersonalPreferences25({ ui: saved.ui_config, dashboard: saved.dashboard_config });
+    if (saved) setPersonalPreferences25({ ui: saved.ui_config, dashboard: saved.dashboard_config, profile: saved.profile_config });
     else {
       const local = localAccountPreferences25(session.user.id);
       setPersonalPreferences25(local || { ui: uiDefault25(), dashboard: dashboardCore?.defaults(DASH_DEFAULTS) });
       await writePersonalPreferences25(saveLocalAccountPreferences25(session.user.id));
     }
     personalPreferencesReady25 = true;
+    await loadHouseholdProfiles25();
+    window.SamenThuisProfile25?.refresh();
+    startPersonalPreferencePolling25();
     authNotice25 = 'Persoonlijke voorkeuren zijn geladen en worden per account gesynchroniseerd.';
     if (current === 'settings') render();
+  }
+  async function loadHouseholdProfiles25() {
+    const session = await readySession25();
+    if (!session?.user?.id) { householdProfiles25 = []; return; }
+    const response = await fetch(`${authBase25()}/rest/v1/rpc/household_profile_list`, {
+      method: 'POST', headers: authHeaders25(session.access_token), body: '{}'
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.message || `Profielen van je huishouden ophalen mislukt (${response.status}); controleer de profielmigratie.`);
+    }
+    const rows = await response.json();
+    householdProfiles25 = Array.isArray(rows) ? rows.map(row => ({
+      userId: row.user_id, ...personalPreferencesCore25.normalizeProfile(row.profile_config)
+    })) : [];
   }
   async function authenticate25(action) {
     if (authBusy25) return;
@@ -7452,7 +7697,8 @@ document.addEventListener('click', event => {
       const session = await readySession25();
       if (session) await authRequest25('/auth/v1/logout', {}, session.access_token);
     } catch (_) {}
-    authSession25 = null; personalPreferencesReady25 = false;
+    clearTimeout(personalSaveTimer25); personalSaveTimer25 = null;
+    authSession25 = null; personalPreferencesReady25 = false; householdProfiles25 = [];
     localStorage.removeItem(AUTH_KEY25);
     authNotice25 = 'Je bent afgemeld. Lokale voorkeuren blijven op dit apparaat staan.';
     if (current === 'settings') render();
@@ -7463,17 +7709,152 @@ document.addEventListener('click', event => {
     if (!view || view.querySelector('[data-personal-account25]')) return;
     const email = authSession25?.user?.email || '';
     const account = email
-      ? `<p class="muted">Aangemeld als <strong>${esc(email)}</strong>. Je accentkleur en dashboardindeling worden afzonderlijk per account bewaard.</p><button type="button" class="secondary" data-personal-sign-out>Afmelden</button>`
+      ? `<p class="muted">Aangemeld als <strong>${esc(email)}</strong>. Je profiel, vormgeving en dashboardindeling worden afzonderlijk per account bewaard.</p><button type="button" class="secondary" data-personal-sign-out>Afmelden</button>`
       : `<form class="form-grid" data-personal-auth25><label class="field">E-mailadres<input type="email" name="email" autocomplete="username" required></label><label class="field">Wachtwoord<input type="password" name="password" autocomplete="current-password" minlength="8" required></label><div class="button-row"><button type="button" class="primary" data-personal-auth="sign-in" ${authBusy25 ? 'disabled' : ''}>Aanmelden</button><button type="button" class="secondary" data-personal-auth="sign-up" ${authBusy25 ? 'disabled' : ''}>Account maken</button></div></form>`;
-    view.insertAdjacentHTML('beforeend', `<section class="card settings-card" data-personal-account25><div class="card-head"><div><p class="eyebrow">PERSOONLIJK ACCOUNT</p><h2>Voorkeuren op al je apparaten</h2></div></div><p class="muted">De huishoudcode blijft alleen voor gedeelde huishoudgegevens. Een persoonlijk Supabase-account scheidt accentkleur en dashboardindeling per gebruiker. Vereist de persoonlijke-voorkeurenmigratie in Supabase.</p>${account}${authNotice25 ? `<p class="notice" role="status">${esc(authNotice25)}</p>` : ''}</section>`);
+    view.insertAdjacentHTML('beforeend', `<section class="card settings-card" data-personal-account25><div class="card-head"><div><p class="eyebrow">PERSOONLIJK ACCOUNT</p><h2>Profiel en voorkeuren op al je apparaten</h2></div></div><p class="muted">Persoonlijke gegevens en vormgeving worden per account bewaard. Je naam en profielfoto zijn zichtbaar voor je huisgenoot; je vormgeving blijft privé. Vereist de persoonlijke-voorkeuren- en profielmigraties in Supabase.</p>${account}${authNotice25 ? `<p class="notice" role="status">${esc(authNotice25)}</p>` : ''}</section>`);
   }
+  window.SamenThuisProfile25 = {
+    get() { return { ...profile25 }; },
+    signedIn() { return !!authSession25?.user?.id; },
+    getHousehold() { return householdProfiles25.map(profile => ({ ...profile })); },
+    displayName(profile = profile25) { return profile.nickname || [profile.firstName, profile.lastName].filter(Boolean).join(' '); },
+    displayHouseholdPerson(person) {
+      if (person === 'Samen') return person;
+      const matches = [profile25, ...householdProfiles25].filter(profile => profile.personKey === person && this.displayName(profile));
+      return matches.length === 1 ? this.displayName(matches[0]) : person;
+    },
+    async save(profile) {
+      profile25 = personalPreferencesCore25.normalizeProfile(profile);
+      if (authSession25?.user?.id) {
+        clearTimeout(personalSaveTimer25);
+        personalSaveTimer25 = null;
+        await writePersonalPreferences25(saveLocalAccountPreferences25(authSession25.user.id));
+      }
+      this.refresh();
+    },
+    async refresh() {
+      const box = document.querySelector('[data-profile-avatar25]');
+      if (box) {
+        box.textContent = this.displayName() ? this.displayName().split(/\s+/).map(part => part[0]).join('').slice(0, 2).toUpperCase() : '•';
+        box.removeAttribute('style');
+        const path = profile25.avatarPath;
+        if (path && authSession25?.user?.id) {
+          const url = await signedProfilePhoto25(path).catch(error => {
+            authNotice25 = error.message || 'Profielfoto kon niet worden geladen.';
+            return '';
+          });
+          if (url && box.isConnected) {
+            box.style.backgroundImage = `url("${url.replace(/["\\]/g, '')}")`;
+            box.style.color = 'transparent';
+          }
+        }
+      }
+      document.querySelectorAll('[data-household-profile25]').forEach(node => {
+        const person = householdProfiles25.find(profile => profile.userId === node.dataset.householdProfile25);
+        if (person) {
+          node.textContent = this.displayName(person) || '•';
+          node.dataset.profilePhoto = person.avatarPath || '';
+        }
+      });
+      const peerBox = document.querySelector('[data-profile-peer25]');
+      if (peerBox) {
+        const peer = householdProfiles25[0];
+        peerBox.hidden = !peer;
+        if (peer) {
+          peerBox.replaceChildren();
+          const title = document.createElement('h3');
+          title.textContent = 'Profiel van je huisgenoot';
+          const row = document.createElement('div');
+          row.className = 'profile-peer-row25';
+          const avatar = document.createElement('div');
+          avatar.className = 'profile-avatar25';
+          const name = this.displayName(peer);
+          avatar.textContent = name ? name.split(/\s+/).map(part => part[0]).join('').slice(0, 2).toUpperCase() : '•';
+          const label = document.createElement('p');
+          label.textContent = name;
+          row.append(avatar, label);
+          peerBox.append(title, row);
+          if (peer.avatarPath) {
+            signedProfilePhoto25(peer.avatarPath).then(url => {
+              if (!url || !avatar.isConnected) return;
+              avatar.style.backgroundImage = `url("${url.replace(/["\\]/g, '')}")`;
+              avatar.style.color = 'transparent';
+            }).catch(error => {
+              authNotice25 = error.message || 'Profielfoto van je huisgenoot kon niet worden geladen.';
+            });
+          }
+        }
+      }
+    }
+  };
+  async function signedProfilePhoto25(path) {
+    const session = await readySession25();
+    if (!session?.user?.id || !/^[0-9a-f-]{36}\/profile\.jpg$/i.test(path)) throw new Error('Ongeldig profielfotopad.');
+    const response = await fetch(`${authBase25()}/storage/v1/object/sign/profile-photos/${path.split('/').map(encodeURIComponent).join('/')}`, {
+      method: 'POST', headers: { ...authHeaders25(session.access_token), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expiresIn: 3600 })
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.message || `Profielfoto ophalen mislukt (${response.status}); controleer de profielmigratie.`);
+    }
+    const result = await response.json();
+    const signed = String(result.signedURL || '');
+    if (!signed) throw new Error('Geen tijdelijke profielfotolink ontvangen.');
+    return signed.startsWith('http') ? signed : `${authBase25()}/storage/v1${signed}`;
+  }
+  window.SamenThuisProfile25.upload = async file => {
+    const session = await readySession25();
+    if (!session?.user?.id) throw new Error('Meld je aan om een profielfoto op te slaan.');
+    if (!(file instanceof Blob) || file.type !== 'image/jpeg' || file.size < 1 || file.size > 5 * 1024 * 1024) {
+      throw new Error('Selecteer een JPG-profielfoto van maximaal 5 MB.');
+    }
+    const path = `${session.user.id}/profile.jpg`;
+    const response = await fetch(`${authBase25()}/storage/v1/object/profile-photos/${path}`, {
+      method: 'POST',
+      headers: { apikey: DEFAULT_PUBLISHABLE_KEY, Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'image/jpeg', 'x-upsert': 'true' },
+      body: file
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.message || `Profielfoto uploaden mislukt (${response.status}); controleer de profielmigratie.`);
+    }
+    profile25.avatarPath = path;
+    await window.SamenThuisProfile25.save(profile25);
+  };
+  window.SamenThuisProfile25.removePhoto = async () => {
+    if (profile25.avatarPath && authSession25?.user?.id) {
+      const session = await readySession25(), path = `${session.user.id}/profile.jpg`;
+      const response = await fetch(`${authBase25()}/storage/v1/object/profile-photos`, {
+        method: 'DELETE', headers: { ...authHeaders25(session.access_token), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prefixes: [path] })
+      });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.message || `Profielfoto verwijderen mislukt (${response.status}).`);
+      }
+    }
+    profile25.avatarPath = '';
+    await window.SamenThuisProfile25.save(profile25);
+  };
   window.addEventListener('samenThuisPreferencesChange', () => {
-    if (!authSession25?.user?.id || !personalPreferencesReady25) return;
+    if (applyingRemotePreferences25 || !authSession25?.user?.id || !personalPreferencesReady25) return;
     clearTimeout(personalSaveTimer25);
     personalSaveTimer25 = setTimeout(async () => {
+      personalSaveTimer25 = null;
       try { await writePersonalPreferences25(saveLocalAccountPreferences25(authSession25.user.id)); }
-      catch (error) { authNotice25 = error.message || 'Persoonlijke voorkeuren konden niet worden gesynchroniseerd.'; }
+      catch (error) {
+        authNotice25 = error.message || 'Persoonlijke voorkeuren konden niet worden gesynchroniseerd.';
+        toast(authNotice25);
+        if (current === 'settings') render();
+      }
     }, 500);
+  });
+  window.addEventListener('focus', () => {
+    if (!authSession25?.user?.id) return;
+    pollPersonalPreferences25().catch(error => {
+      authNotice25 = error.message || 'Persoonlijke instellingen konden niet worden bijgewerkt.';
+    });
   });
   document.addEventListener('click', event => {
     const auth = event.target.closest('[data-personal-auth]');

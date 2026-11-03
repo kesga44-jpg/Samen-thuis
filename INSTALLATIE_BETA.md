@@ -33,9 +33,9 @@ De beta maakt een ander record-id dan productie, ook wanneer je dezelfde huishou
 
 ### Persoonlijke accentkleur en dashboardindeling
 
-Voor synchronisatie van persoonlijke voorkeuren voer je daarnaast `supabase/migrations/20261012000000_personal_preferences.sql` uit via de Supabase SQL Editor. Schakel e-mail/wachtwoordaanmelding in onder **Supabase → Authentication → Providers** en stel de Site URL/redirect-URL in op de gepubliceerde app. Iedere gebruiker meldt zich aan met een eigen account; de huishoudcode blijft uitsluitend voor gedeelde huishoudgegevens.
+Voor synchronisatie van persoonlijke voorkeuren voer je daarnaast `supabase/migrations/20261012000000_personal_preferences.sql` en daarna `supabase/migrations/20261103000000_personal_profiles.sql` uit via de Supabase SQL Editor. De tweede migratie voegt profielgegevens en private, huishoudtoegankelijke profielfoto-opslag toe. Schakel e-mail/wachtwoordaanmelding in onder **Supabase → Authentication → Providers** en stel de Site URL/redirect-URL in op de gepubliceerde app. Iedere gebruiker meldt zich aan met een eigen account; de huishoudcode blijft uitsluitend voor gedeelde huishoudgegevens.
 
-De migratie maakt een afzonderlijke tabel met RLS-beleid dat alleen de ingelogde gebruiker toestaat zijn eigen voorkeuren te lezen en te wijzigen. Zonder migratie of account blijven de accentkleur en dashboardindeling alleen op dit apparaat bewaard.
+De bestaande `personal_preferences`-tabel blijft de opslag voor persoonlijke voorkeuren en wordt uitgebreid met profielvelden. RLS laat voorkeuren alleen door de ingelogde eigenaar lezen en wijzigen; de profiel-RPC deelt alleen naam- en fotopadvelden met een huisgenoot. Zonder account blijven vormgevingsvoorkeuren alleen op dit apparaat bewaard.
 
 ## 4. Prijsfunctie deployen
 

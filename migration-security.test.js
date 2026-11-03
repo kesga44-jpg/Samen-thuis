@@ -2,6 +2,7 @@ const test = require('node:test'), assert = require('node:assert');
 const fs = require('node:fs');
 const d = __dirname + '/supabase/';
 const up = fs.readFileSync(d + 'migrations/20261014000000_household_state_sync.sql', 'utf8').replace(/--.*$/gm, '');
+const profile = fs.readFileSync(d + 'migrations/20261103000000_personal_profiles.sql', 'utf8').replace(/--.*$/gm, '');
 test('household_state: RLS aan, geen anon, geen directe schrijfrechten', () => {
   assert.match(up, /enable row level security/);
   assert.match(up, /revoke all on public\.household_state from anon, authenticated/);
@@ -38,3 +39,17 @@ test('import_legacy: lidmaatschapscontrole, id-formaat, claim-tabel en geen over
   assert.match(sql, /household_legacy_imports/); assert.match(sql, /on conflict do nothing/); assert.doesNotMatch(sql, /update public\.household_data|delete from/i);
 });
 test('ledenlimiet gebruikt een advisory lock', () => assert.match(up, /pg_advisory_xact_lock/));
+test('profiel-RPC deelt alleen begrensde profielvelden met een huisgenoot', () => {
+  assert.match(profile, /add column if not exists profile_config jsonb/);
+  assert.match(profile, /security definer[\s\S]*set search_path = public/i);
+  assert.match(profile, /join public\.household_members mine on mine\.user_id = auth\.uid\(\)/i);
+  assert.match(profile, /jsonb_build_object\([\s\S]*'firstName'[\s\S]*'lastName'[\s\S]*'nickname'[\s\S]*'personKey'[\s\S]*'avatarPath'/i);
+  assert.doesNotMatch(profile.slice(profile.indexOf('create or replace function'), profile.indexOf('$$;')), /ui_config|dashboard_config/i);
+  assert.match(profile, /revoke all on function public\.household_profile_list\(\) from public, anon/i);
+});
+test('profielfotoopslag is privé, beperkt tot JPG en schrijft alleen binnen eigen accountmap', () => {
+  assert.match(profile, /values \('profile-photos', 'profile-photos', false, 5242880, array\['image\/jpeg'\]\)/i);
+  assert.match(profile, /member\.user_id::text = \(storage\.foldername\(name\)\)\[1\]/i);
+  assert.match(profile, /\(storage\.foldername\(name\)\)\[1\] = auth\.uid\(\)::text/i);
+  assert.match(profile, /name = auth\.uid\(\)::text \|\| '\/profile\.jpg'/i);
+});
