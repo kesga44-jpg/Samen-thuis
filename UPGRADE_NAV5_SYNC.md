@@ -21,7 +21,7 @@ Geen pagina verwijderd. Deep links/`SamenThuisGo(key)` werken ongewijzigd; `nav-
 
 ## Gewijzigd/toegevoegd
 `nav-core.js`, `nav-groups.js`, `css/layout.css`, `index.html`, `sw.js`, `nav-core.test.js`, `migration-security.test.js`,
-`supabase/migrations/20261014000000_household_state_sync.sql` (+ `.rollback.sql`), `supabase/manual/phase3_revoke_anon_household_data.sql`.
+`supabase/migrations/20261014000000_household_state_sync.sql` (+ `supabase/rollbacks/…rollback.sql`), `supabase/manual/phase3_revoke_anon_household_data.sql`.
 
 ## Migraties (handmatig, volgorde)
 **Verplichte startgate — begin NIET aan 20261012 voordat alle punten geslaagd zijn** (zie ook "0. Vóór alles — back-ups" onderaan):
@@ -35,7 +35,7 @@ Daarna, in deze volgorde en elk apart (controles na iedere migratie: zie "3. Con
 1. `20261012000000_personal_preferences.sql` → `20261013000000_chalkboard.sql` → `20261014000000_household_state_sync.sql` → `20261103000000_personal_profiles.sql`.
    `20261014000000_household_state_sync.sql` voegt `household_state` (RLS, alleen leden lezen), `household_legacy_imports`, `put_household_state` (versiecontrole, SQLSTATE 40001 bij conflict) en `import_legacy_household_data` (kopieert, wijzigt niets) toe, en beperkt huishoudens tot twee leden.
    De profielmigratie daarna voegt de profielkolom toe aan `personal_preferences`, een RPC die alleen profielvelden van de huisgenoot retourneert en een private Storage-bucket voor profielfoto’s.
-2. Rollback (alleen 20261014): `20261014000000_household_state_sync.rollback.sql`. Oude sync blijft intussen ongewijzigd werken.
+2. Rollback (alleen 20261014): `supabase/rollbacks/20261014000000_household_state_sync.rollback.sql`. Oude sync blijft intussen ongewijzigd werken.
 3. Fase 3 (pas na bewezen werking op 2 apparaten): `supabase/manual/phase3_revoke_anon_household_data.sql`.
 
 ## Testen op twee apparaten
@@ -92,7 +92,7 @@ Statusweergave (badge): Alleen dit apparaat · Offline · Synchroniseren… · A
 **5. Acceptatiecriteria**: (1) alle bestaande gegevens zichtbaar op A en B, vergeleken met de back-up; (2) wijziging op A binnen ~1 min zichtbaar op B en omgekeerd; (3) wijziging van verschillende onderdelen op beide apparaten gaat niets verloren; (4) zelfde onderdeel op beide gewijzigd → conflictkeuze, geen stille overschrijving; (5) offline wijzigen en online zetten synchroniseert zonder verlies; (6) afmelden → status "Aanmelden vereist", lokale data intact; (7) een derde, niet-gekoppeld account ziet niets (probeer in de REST-API: `household_state` leeg); (8) `household_data` rijen onveranderd; (9) back-up maken/herstellen werkt nog op beide apparaten; (10) alle 19 pagina's bereikbaar.
 **6. Fase 3 (anon intrekken) — alleen als**: stap 5 volledig geslaagd op BEIDE apparaten gedurende meerdere dagen, verse export van `household_data`/`coach_data` gemaakt, géén apparaat meer op de oude code-sync staat. Voer dan `supabase/manual/phase3_revoke_anon_household_data.sql` uit; het script weigert zelf als de migratie of een gebruikt 2-ledenhuishouden ontbreekt. Test daarna opnieuw stap 5 (2) en (5). Rollback fase 3: de GRANT/POLICY-regels onderaan het script.
 **Fase 3 – veilige uitvoering**: het script bestaat uit één `DO`-blok dat eerst de voorwaarden controleert (migratieobjecten aanwezig; ≥1 huishouden met exact 2 leden én een niet-`legacy_full`-onderdeel in `household_state`) en pas daarna in hetzelfde blok de 3 anon-policies verwijdert en `select, insert, update` voor anon op `household_data` intrekt. Eén statement is atomair: faalt de controle, dan wordt niets gewijzigd, ook niet als de runner na een fout doorgaat (eerdere versie had losse statements na het blok). Plak het hele bestand in één keer; voeg er geen losse statements aan toe. Faalt het met "Fase 3 geweigerd": er is niets gewijzigd; controleer `select count(*) from pg_policies where tablename='household_data'` (moet 3 blijven), of migratie 20261014 volledig is toegepast en of beide accounts echt onderdelen hebben gesynchroniseerd. Lokaal bewezen op PostgreSQL (psql zonder ON_ERROR_STOP en als één query); in de Supabase SQL-editor niet getest — controleer daar na afloop de policy-telling.
-**Rollback migratie 3**: in de app op beide apparaten "Terug naar oude code-sync" (kiest bij verschil bewust; veiligheidskopieën in `samenThuisPreAccountSyncBackup[Off]`), daarna `20261014000000_household_state_sync.rollback.sql` (verwijdert alleen `household_state`, `household_legacy_imports` en bijbehorende functies/trigger; export `household_state` eerst als je de onderdelen wilt bewaren). Migraties 1 en 2 zijn additief; verwijder die alleen met een eigen, gecontroleerde `drop` als dat nodig is. Herstel altijd vanuit de back-ups uit stap 0.
+**Rollback migratie 3**: in de app op beide apparaten "Terug naar oude code-sync" (kiest bij verschil bewust; veiligheidskopieën in `samenThuisPreAccountSyncBackup[Off]`), daarna `supabase/rollbacks/20261014000000_household_state_sync.rollback.sql` (verwijdert alleen `household_state`, `household_legacy_imports` en bijbehorende functies/trigger; export `household_state` eerst als je de onderdelen wilt bewaren). Migraties 1 en 2 zijn additief; verwijder die alleen met een eigen, gecontroleerde `drop` als dat nodig is. Herstel altijd vanuit de back-ups uit stap 0.
 
 ## Resterende risico's
 - Live gedrag niet getest (zie boven); de oude anon-policies blijven tot fase 3 en tot dan kan iedereen met de huishoudcode-hash de oude rij lezen/schrijven.
@@ -100,3 +100,6 @@ Statusweergave (badge): Alleen dit apparaat · Offline · Synchroniseren… · A
 - Onderdelen worden per top-level sleutel gesynchroniseerd: twee wijzigingen in verschillende items van dezelfde lijst geven een conflict (geen automatische itemmerge).
 - Meldingen en voorkeuren voor meldingen zijn lokaal per account; na aanmelden begint de inbox leeg.
 - Pushmeldingen buiten scope.
+
+## Migratieversies en rollbacks (duplicate key `schema_migrations_pkey`)
+Rollback-scripts staan in `supabase/rollbacks/` en NIET in `supabase/migrations/`: de Supabase CLI leidt de versie uit het bestandsnaam-prefix af, waardoor `20261014000000_….rollback.sql` dezelfde versie als de migratie zelf zou registreren (`Key (version)=(20261014000000) already exists`). Rollbacks voer je alleen handmatig uit. Controleer vóór `supabase db push` met `supabase migration list` wat remote al is toegepast; gebruik `supabase migration repair` alleen als je zeker weet dat de registratie niet klopt. `profile_config` komt uit `20261103000000_personal_profiles.sql` (idempotent: `add column if not exists`); bestaat de kolom live niet, dan is die migratie daar nog niet toegepast.

@@ -136,7 +136,7 @@ test('fase 3 regressie: bij falende controle blijven alle anon-policies en -rech
   ok(psql(`drop policy "other anon keep" on household_data`));
 });
 test('rollback-bestand verwijdert alleen de nieuwe objecten en laat household_data intact', { skip }, () => {
-  ok(file(root + 'migrations/20261014000000_household_state_sync.rollback.sql'));
+  ok(file(root + 'rollbacks/20261014000000_household_state_sync.rollback.sql'));
   assert.equal(psql(`select to_regclass('public.household_state') is null`).out, 't');
   assert.equal(psql(`select count(*) from household_data`).out, '1');
   assert.equal(psql(`select to_regclass('public.household_members') is not null`).out, 't');
@@ -207,7 +207,7 @@ test('financiën: privé-gegevens in personal_preferences blijven eigen rij; rol
   ok(psql(`insert into personal_preferences(user_id, finance_config) values ('${A}', '{"pots":[{"name":"privé"}]}')`, A));
   assert.equal(psql(`select count(*) from personal_preferences where finance_config <> '{}'`, B).out, '0');
   assert.equal(psql(`select finance_config->'pots'->0->>'name' from personal_preferences`, A).out, 'privé');
-  ok(file(root + 'migrations/20261104000000_finance_confirmations.rollback.sql'), 'rollback');
+  ok(file(root + 'rollbacks/20261104000000_finance_confirmations.rollback.sql'), 'rollback');
   assert.equal(psql(`select to_regclass('public.finance_distributions') is null`).out, 't');
   assert.equal(psql(`select count(*) from personal_preferences where finance_config <> '{}'`).out, '1');
   ok(file(root + 'migrations/20261104000000_finance_confirmations.sql'), 'opnieuw toepassen');
