@@ -22,7 +22,7 @@ test('Sport & Training blijft onderdeel van de bestaande versleutelde huishoudsy
 
 test('Storage-migratie is privaat en beperkt iedere objectactie tot huishoudleden', () => {
   const migration = read('supabase/migrations/20261015000000_sport_training_storage.sql');
-  const rollback = read('supabase/migrations/20261015000000_sport_training_storage.rollback.sql');
+  const rollback = read('supabase/rollbacks/20261015000000_sport_training_storage.rollback.sql');
   assert.match(migration, /'sport-training',\s*'sport-training',\s*false/);
   assert.match(migration, /file_size_limit[\s\S]*10485760/);
   assert.match(migration, /array\['application\/pdf', 'image\/jpeg', 'image\/png', 'image\/webp'\]/);

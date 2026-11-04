@@ -66,7 +66,7 @@ household membership. Signed URLs are temporary. Removing a library reference
 does not automatically delete the stored object.
 
 Apply the additive migration with the project's normal Supabase migration
-process. `20261015000000_sport_training_storage.rollback.sql` removes only the
+process. `supabase/rollbacks/20261015000000_sport_training_storage.rollback.sql` removes only the
 module's Storage policies and intentionally leaves the private bucket and its
 files intact. The migration has not been applied to a live Supabase project as
 part of this implementation.

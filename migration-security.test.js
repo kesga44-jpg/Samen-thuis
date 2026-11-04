@@ -23,7 +23,7 @@ test('schrijffunctie controleert lidmaatschap en versie', () => {
 test('anon-revoke staat buiten migrations (handmatige fase 3)', () => {
   assert.ok(fs.existsSync(d + 'manual/phase3_revoke_anon_household_data.sql'));
   for (const f of fs.readdirSync(d + 'migrations').filter(n => !n.includes('rollback'))) assert.doesNotMatch(fs.readFileSync(d + 'migrations/' + f, 'utf8').replace(/--.*$/gm, ''), /revoke[^;]*public\.household_data\b/i, f);
-  assert.ok(fs.existsSync(d + 'migrations/20261014000000_household_state_sync.rollback.sql'));
+  assert.ok(fs.existsSync(d + 'rollbacks/20261014000000_household_state_sync.rollback.sql'));
 });
 test('fase 3 is bewaakt, trekt niets in binnen migrations en raakt coach_data niet aan', () => {
   const p3 = fs.readFileSync(d + 'manual/phase3_revoke_anon_household_data.sql', 'utf8');
@@ -63,5 +63,15 @@ test('financiële migratie: RLS, geen directe schrijfrechten, append-only en rol
   assert.match(fin, /finance_block_update/);
   assert.match(fin, /add column if not exists finance_config jsonb/i);
   assert.doesNotMatch(fin, /drop table|delete from|truncate/i);
-  assert.ok(fs.existsSync(d + 'migrations/20261104000000_finance_confirmations.rollback.sql'));
+  assert.ok(fs.existsSync(d + 'rollbacks/20261104000000_finance_confirmations.rollback.sql'));
+});
+
+test('migratieversies zijn uniek en rollbacks staan buiten supabase/migrations (anders dubbele schema_migrations-versie)', () => {
+  const files = fs.readdirSync(d + 'migrations');
+  assert.ok(files.every(f => /^\d{14}_[a-z0-9_]+\.sql$/.test(f)), files.join(', '));
+  const versions = files.map(f => f.slice(0, 14));
+  assert.equal(new Set(versions).size, versions.length);
+  assert.ok(versions.includes('20261014000000'));
+  assert.equal(files.filter(f => f.startsWith('20261014000000')).length, 1);
+  assert.ok(fs.readdirSync(d + 'rollbacks').every(f => f.endsWith('.rollback.sql')));
 });
