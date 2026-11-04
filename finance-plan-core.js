@@ -194,7 +194,7 @@
   // ---- Centrale maandberekening en status ----------------------------------------------------------
   // people: [{ key, label, netCents, entered, confirmed }] — precies twee personen.
   // distribution: laatste definitieve (bevestigde) verdeling voor deze maand of null.
-  function evaluateMonth({ month, shareBp: bp, people, lines, remainderName = REMAINDER_NAME, distribution = null }) {
+  function evaluateMonth({ month, shareBp: bp, people, lines, remainderName = REMAINDER_NAME, distribution = null, processed = false }) {
     if (!validMonth(month)) throw new Error('Kies een geldige maand.');
     const rate = Math.trunc(Number(bp));
     if (!Number.isInteger(rate) || rate < 0 || rate > 10000) throw new Error('Ongeldig afdraagpercentage.');
@@ -230,33 +230,37 @@
     const distributionState = !distribution ? 'none' : distribution.inputHash === inputHash ? 'confirmed' : 'stale';
     const remainderCents = Math.max(0, rawRemainder);
     const reasons = [];
+    // Financiële status: alleen de sluitendheid van de berekening, los van bevestigingen.
     let status;
-    if (everyoneEntered && shortfallCents > 0) {
-      status = 'red';
-      reasons.push(`Tekort van ${eur(shortfallCents)}: de gezamenlijke bijdrage dekt niet alle vaste allocaties.`);
-    } else {
-      persons.forEach(person => {
-        if (!person.entered) reasons.push(`${person.label} heeft nog geen netto-inkomen ingevoerd.`);
-        else if (!person.confirmed) reasons.push(`${person.label} moet het inkomen nog bevestigen.`);
-      });
-      if (persons.length !== 2) reasons.push('Er zijn twee personen nodig voor de verdeling.');
-      if (everyoneConfirmed && distributionState === 'stale') reasons.push('Er is iets gewijzigd: de verdeling moet opnieuw worden bevestigd.');
-      if (everyoneConfirmed && distributionState === 'none') reasons.push('De verdeling is nog niet definitief bevestigd.');
-      status = everyoneConfirmed && distributionState === 'confirmed' ? 'green' : 'orange';
-    }
+    if (!everyoneEntered) status = 'orange';
+    else status = shortfallCents > 0 ? 'red' : 'green';
+    if (persons.length !== 2) reasons.push('Er zijn twee personen nodig voor de verdeling.');
+    persons.forEach(person => {
+      if (!person.entered) reasons.push(`${person.label} heeft nog geen netto-inkomen ingevoerd.`);
+      else if (!person.confirmed) reasons.push(`${person.label} moet het inkomen nog bevestigen.`);
+    });
+    if (everyoneEntered && shortfallCents > 0) reasons.unshift(`Tekort van ${eur(shortfallCents)}: de gezamenlijke bijdrage dekt niet alle vaste allocaties.`);
+    if (everyoneConfirmed && distributionState === 'stale') reasons.push('Er is iets gewijzigd: de verdeling moet opnieuw worden bevestigd.');
+    if (everyoneConfirmed && distributionState === 'none') reasons.push('De verdeling is nog niet definitief bevestigd.');
+    // Verwerkingsstatus: voortgang van bevestiging en verwerking, los van de financiële status.
+    let processing;
+    if (distributionState === 'confirmed') processing = processed ? 'processed' : 'confirmed';
+    else if (!everyoneConfirmed) processing = 'waiting';
+    else processing = shortfallCents === 0 ? 'ready' : 'incomes_confirmed';
     const calculationOk = everyoneConfirmed && shortfallCents === 0
       && covered.reduce((sum, line) => sum + line.coveredCents, 0) + remainderCents === totalContributionCents;
     return {
       month, shareBp: rate, persons, lines: covered, remainderName, remainderCents,
       totalContributionCents, fixedTotalCents, shortfallCents, shortfallItems,
-      allConfirmed: everyoneConfirmed, calculationOk, status, reasons, inputHash,
+      allConfirmed: everyoneConfirmed, calculationOk, status, processing, reasons, inputHash,
       distributionState, distributionRevision: distribution ? distribution.revision : 0,
       // Een tekort blokkeert de definitieve verdeling; er wordt nooit automatisch gekort of een buffer aangesproken.
       canConfirm: calculationOk && distributionState !== 'confirmed'
     };
   }
 
-  const STATUS_TEXT = { green: 'Groen · verdeling sluitend en bevestigd', orange: 'Oranje · actie nodig', red: 'Rood · tekort' };
+  const STATUS_TEXT = { green: 'Groen · berekening sluitend, alle vaste allocaties gedekt', orange: 'Oranje · berekening nog niet vast te stellen', red: 'Rood · tekort' };
+  const PROCESSING_TEXT = { waiting: 'Wachten op inkomensbevestigingen', incomes_confirmed: 'Beide inkomens bevestigd', ready: 'Klaar om gezamenlijk te bevestigen', confirmed: 'Definitief bevestigd', processed: 'Verwerkt' };
   const STATUS_ICON = { green: '✔', orange: '!', red: '✖' };
 
   // Wat de database bewaart bij definitieve bevestiging; de RPC controleert dit opnieuw.
@@ -350,7 +354,7 @@
   }
 
   return {
-    KINDS, REMAINDER_ID, REMAINDER_NAME, STATUS_TEXT, STATUS_ICON,
+    KINDS, REMAINDER_ID, REMAINDER_NAME, STATUS_TEXT, STATUS_ICON, PROCESSING_TEXT,
     shareBp, contributionCents, normalizePot, validatePots, ensureRemainderPot, activeInMonth,
     reservationForMonth, reservedToDate, reservationOverview, allocationLines, fingerprint,
     evaluateMonth, distributionSnapshot, applyDistribution, incomeAction, visibleExpenses, sharedExpenses,

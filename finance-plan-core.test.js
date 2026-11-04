@@ -36,13 +36,15 @@ test('2 percentage-wijziging voert nooit automatisch een verdeling uit en maakt 
   b.contributionPct = 80;
   const e2 = evaluate(b, people(), confirmed);
   assert.equal(e2.distributionState, 'stale');
-  assert.equal(e2.status, 'orange');
+  assert.equal(e2.status, 'green'); // financieel nog steeds sluitend
+  assert.equal(e2.processing, 'ready'); // maar opnieuw bevestigen nodig
   assert.equal(e2.canConfirm, true); // pas na expliciete bevestiging, evaluate boekt niets
 });
 
 test('5 ontbrekende inkomensbevestiging geeft oranje en blokkeert bevestigen', () => {
   const e = evaluate(budget({ finPots: [pot('a', 1000)] }), people(300000, 200000, true, false));
-  assert.equal(e.status, 'orange');
+  assert.equal(e.status, 'green'); // financieel sluitend, alleen verwerking wacht
+  assert.equal(e.processing, 'waiting');
   assert.equal(e.canConfirm, false);
   assert.match(e.reasons.join(' '), /Daphne moet het inkomen nog bevestigen/);
 });
@@ -68,7 +70,8 @@ test('7 beide bevestigd en sluitend: bevestigbaar, na bevestiging groen', () => 
   const e = evaluate(b);
   assert.equal(e.calculationOk, true);
   assert.equal(e.canConfirm, true);
-  assert.equal(e.status, 'orange'); // nog niet definitief bevestigd
+  assert.equal(e.status, 'green'); // sluitend vóór definitieve bevestiging
+  assert.equal(e.processing, 'ready');
   assert.equal(evaluate(b, people(), { revision: 1, inputHash: e.inputHash }).status, 'green');
 });
 
@@ -256,4 +259,22 @@ test('16 bestaande budgetgegevens blijven ongewijzigd en worden niet gemuteerd',
   const legacy = L.normalize({ incomes: [{ id: 'old', amountCents: 100 }], expenses: [], transfers: [] });
   assert.equal(legacy.adjustments.length, 0);
   assert.equal(legacy.incomes[0].id, 'old');
+});
+
+test('financiële status en verwerkingsstatus zijn gescheiden', () => {
+  const b = budget({ finPots: [pot('a', 100000)] });
+  const e = evaluate(b);
+  const dist = { revision: 1, inputHash: e.inputHash };
+  const run = (p, d, processed) => F.evaluateMonth({ month: MONTH, shareBp: F.shareBp(b.contributionPct), people: p, lines: F.allocationLines(b, MONTH, null), distribution: d, processed });
+  assert.equal(run(people(300000, 200000, false, false), null).processing, 'waiting');
+  assert.equal(run(people(), null).processing, 'ready');
+  assert.equal(run(people(), dist).processing, 'confirmed');
+  assert.equal(run(people(), dist, true).processing, 'processed');
+  assert.equal(run(people(), dist, true).status, 'green');
+  const missing = run([{ key: 'A', label: 'Kees', netCents: 0, entered: false, confirmed: false }, people()[1]], null);
+  assert.equal(missing.status, 'orange');
+  const short = evaluate(budget({ finPots: [pot('a', 900000)] }), people(300000, 200000, false, false));
+  assert.equal(short.status, 'red');
+  assert.equal(short.processing, 'waiting');
+  assert.equal(short.canConfirm, false);
 });
