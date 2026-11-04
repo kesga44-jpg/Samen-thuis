@@ -53,3 +53,15 @@ test('profielfotoopslag is privé, beperkt tot JPG en schrijft alleen binnen eig
   assert.match(profile, /\(storage\.foldername\(name\)\)\[1\] = auth\.uid\(\)::text/i);
   assert.match(profile, /name = auth\.uid\(\)::text \|\| '\/profile\.jpg'/i);
 });
+
+const fin = fs.readFileSync(d + 'migrations/20261104000000_finance_confirmations.sql', 'utf8').replace(/--.*$/gm, '');
+test('financiële migratie: RLS, geen directe schrijfrechten, append-only en rollback aanwezig', () => {
+  ['finance_income_months', 'finance_income_history', 'finance_distributions'].forEach(table => {
+    assert.match(fin, new RegExp(`alter table public\\.${table} enable row level security`, 'i'));
+    assert.match(fin, new RegExp(`revoke all on [^;]*public\\.${table}[^;]* from anon, authenticated`, 'i'));
+  });
+  assert.match(fin, /finance_block_update/);
+  assert.match(fin, /add column if not exists finance_config jsonb/i);
+  assert.doesNotMatch(fin, /drop table|delete from|truncate/i);
+  assert.ok(fs.existsSync(d + 'migrations/20261104000000_finance_confirmations.rollback.sql'));
+});

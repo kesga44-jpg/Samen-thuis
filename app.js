@@ -6387,6 +6387,15 @@ document.addEventListener('click', event => {
       label: item.title || `Spaardoel ${index + 1}`, kind: 'goal',
       plannedCents: Math.round((Number(item.monthly) || 0) * 100)
     }));
+    const finance = window.SamenThuisFinance;
+    if (finance) {
+      (Array.isArray(budget.finPots) ? budget.finPots : []).map(finance.normalizePot).forEach(pot => {
+        if (pot.kind !== 'remainder') pots.push({ id: `pot:${pot.id}`, label: pot.name, kind: pot.kind, plannedCents: pot.monthlyCents });
+      });
+      pots.push({ id: 'pot:house-budget', label: 'Huisbudget', kind: 'house', plannedCents: Math.round((Number(budget.houseBudget) || 0) * 100) });
+      pots.push({ id: 'pot:investing', label: 'Beleggen', kind: 'investment', plannedCents: Math.round((Number(budget.investing) || 0) * 100) });
+      pots.push({ id: `pot:${finance.REMAINDER_ID}`, label: finance.REMAINDER_NAME, kind: 'remainder', plannedCents: 0 });
+    }
     return pots;
   }
 
@@ -6436,6 +6445,34 @@ document.addEventListener('click', event => {
     budget.financialLedger = ledger;
     if (changed) save({ touch: false });
     return ledger;
+  }
+
+  function mountFinance25() {
+    const ui = window.SamenThuisFinanceUi, finance = window.SamenThuisFinance;
+    if (!ui || !finance || !ledgerCore25) return;
+    const ctx = {
+      budget: ledgerBudget25, ledger: () => ledgerState25(), pots: () => ledgerPots25(),
+      save: () => save(), render: () => render(), today: todayISO,
+      trips: () => data.tripFolders || [],
+      auth: window.SamenThuisAuth25,
+      names: () => ({
+        self: window.SamenThuisProfile25?.displayName() || 'Ik',
+        other: householdProfiles25.map(p => window.SamenThuisProfile25.displayName(p)).find(Boolean) || 'Huisgenoot'
+      }),
+      syncMirrors: () => syncGoalMirrors25(ledgerState25()),
+      applyDistributions(rows) {
+        const ledger = ledgerState25(); let changed = false;
+        const pots = ledgerPots25();
+        const byMonth = {};
+        rows.forEach(row => { (byMonth[row.month] = byMonth[row.month] || []).push(row); });
+        Object.values(byMonth).forEach(list => list.sort((a, b) => a.revision - b.revision).forEach((row, index) => {
+          if (finance.applyDistribution(ledger, row, pots, index ? list[index - 1] : null).applied) changed = true;
+        }));
+        if (changed) { syncGoalMirrors25(ledger); save(); }
+        return changed;
+      }
+    };
+    ui.mount(ctx);
   }
 
   function ledgerPotHistory25(ledger, activePots) {
@@ -6866,8 +6903,23 @@ document.addEventListener('click', event => {
         { value: 'monthly', label: 'Maandelijks', selected: !billEdit || billEdit.frequency === 'monthly' },
         { value: 'quarterly', label: 'Per kwartaal', selected: billEdit?.frequency === 'quarterly' },
         { value: 'semiannual', label: 'Halfjaarlijks', selected: billEdit?.frequency === 'semiannual' },
-        { value: 'yearly', label: 'Jaarlijks', selected: billEdit?.frequency === 'yearly' }
+        { value: 'yearly', label: 'Jaarlijks', selected: billEdit?.frequency === 'yearly' },
+        { value: 'custom', label: 'Eigen interval', selected: billEdit?.frequency === 'custom' }
       ])),
+      ledgerField25('Eigen interval (maanden)', ledgerInput25('intervalMonths', 'number', { min: '1', max: '120', step: '1', value: billEdit?.intervalMonths || '' })),
+      ledgerField25('Gezamenlijk of persoonlijk', ledgerSelect25('scope', [
+        { value: 'joint', label: 'Gezamenlijk', selected: billEdit?.scope !== 'personal' },
+        { value: 'personal', label: 'Persoonlijk', selected: billEdit?.scope === 'personal' }
+      ])),
+      ledgerField25('Wie betaalt', ledgerInput25('payer', 'text', { maxlength: '60', value: billEdit?.payer || '' })),
+      ledgerField25('Reserveringsmethode', ledgerSelect25('reserveMethod', [
+        { value: 'monthly', label: 'Maandelijks reserveren', selected: !billEdit || (billEdit.reserveMethod || 'monthly') === 'monthly' },
+        { value: 'full', label: 'Volledig reserveren in de betaalmaand', selected: billEdit?.reserveMethod === 'full' },
+        { value: 'schedule', label: 'Eigen reserveringsschema', selected: billEdit?.reserveMethod === 'schedule' }
+      ])),
+      ledgerField25('Schema: startmaand', ledgerInput25('reserveStartMonth', 'month', { value: billEdit?.reserveSchedule?.startMonth || '' })),
+      ledgerField25('Schema: aantal maanden', ledgerInput25('reserveMonths', 'number', { min: '1', max: '120', step: '1', value: billEdit?.reserveSchedule?.months || '' })),
+      ledgerField25('Schema: bedrag per maand (€)', ledgerInput25('reserveAmount', 'number', { inputmode: 'decimal', min: '0.01', step: '0.01', value: billEdit?.reserveSchedule ? decimalLedger25(billEdit.reserveSchedule.amountCents) : '' })),
       ledgerField25('Eerstvolgende afschrijving', ledgerInput25('expectedDate', 'date', { value: billEdit?.expectedDate || ledgerDate, required: true })),
       ledgerField25('Startdatum', ledgerInput25('startDate', 'date', { value: billEdit?.startDate || ledgerDate, required: true })),
       ledgerField25('Einddatum (optioneel)', ledgerInput25('endDate', 'date', { value: billEdit?.endDate || '' })),
@@ -7569,7 +7621,7 @@ document.addEventListener('click', event => {
     localStorage.setItem(AUTH_KEY25, JSON.stringify(authSession25));
     return authSession25;
   }
-  window.SamenThuisAuth25 = { session: () => authSession25, ready: readySession25 };
+  window.SamenThuisAuth25 = { session: () => authSession25, ready: readySession25, base: authBase25, headers: authHeaders25 };
   function uiDefault25() { return personalPreferencesCore25?.DEFAULT_UI || { theme: 'system', accent: 'purple', accentColor: '#7057d9', density: 'comfortable' }; }
   let profile25 = personalPreferencesCore25?.normalizeProfile();
   let householdProfiles25 = [];
@@ -8081,6 +8133,7 @@ document.addEventListener('click', event => {
       if (current === 'budget19' && !document.querySelector('#view .ledger25')) {
         document.querySelector('#view')?.append(ledgerMarkup25());
       }
+      if (current === 'budget19') mountFinance25();
       const settings = document.querySelector('#view .settings-grid');
       if (current === 'settings' && settings && !settings.querySelector('.dashboard-editor25')) {
         settings.insertAdjacentHTML('beforeend', dashboardEditor25());
@@ -8405,6 +8458,11 @@ document.addEventListener('click', event => {
         }
         const action = ledgerForm.dataset.ledgerForm;
         if (action === 'income') {
+          const alreadyDistributed = fields.type === 'salary' && ledger.incomes.some(item => item.id === `dist:${fields.month}:r1`);
+          if (alreadyDistributed && !confirm(`Voor ${fields.month} is al een gezamenlijke maandverdeling verwerkt. Een extra salarisboeking telt dit geld dubbel mee. Toch registreren?`)) {
+            if (submit) submit.disabled = false;
+            return;
+          }
           if (!confirm(`Inkomsten registreren: ${moneyLedger25(ledgerCore25.cents(fields.amount))} van ${String(fields.source).trim()}, geboekt in ${fields.month}?`)) {
             if (submit) submit.disabled = false;
             return;

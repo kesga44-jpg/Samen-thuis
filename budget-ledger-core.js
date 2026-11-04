@@ -22,7 +22,7 @@
   const id = () => globalThis.crypto?.randomUUID?.() || `ledger-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
   const clone = value => JSON.parse(JSON.stringify(value));
   const empty = () => ({
-    incomes: [], expenses: [], transfers: [], openingBalances: {}, goalSnapshots: {}, potSnapshots: {},
+    incomes: [], expenses: [], transfers: [], adjustments: [], openingBalances: {}, goalSnapshots: {}, potSnapshots: {},
     incomeSources: [], allocationRules: [], recurringBills: [], pendingDistributions: [], distributionMode: 'approval'
   });
 
@@ -33,6 +33,7 @@
       incomes: Array.isArray(ledger.incomes) ? ledger.incomes.filter(item => item && typeof item === 'object') : [],
       expenses: Array.isArray(ledger.expenses) ? ledger.expenses.filter(item => item && typeof item === 'object') : [],
       transfers: Array.isArray(ledger.transfers) ? ledger.transfers.filter(item => item && typeof item === 'object') : [],
+      adjustments: Array.isArray(ledger.adjustments) ? ledger.adjustments.filter(item => item && typeof item === 'object') : [],
       openingBalances: ledger.openingBalances && typeof ledger.openingBalances === 'object' && !Array.isArray(ledger.openingBalances) ? ledger.openingBalances : {},
       goalSnapshots: ledger.goalSnapshots && typeof ledger.goalSnapshots === 'object' && !Array.isArray(ledger.goalSnapshots) ? ledger.goalSnapshots : {},
       potSnapshots: ledger.potSnapshots && typeof ledger.potSnapshots === 'object' && !Array.isArray(ledger.potSnapshots) ? ledger.potSnapshots : {},
@@ -71,7 +72,7 @@
     const amountCents = positiveCents(input.amount);
     const date = String(input.date || '');
     requireDate(date);
-    const type = ['salary', 'benefit', 'other'].includes(input.type) ? input.type : '';
+    const type = ['salary', 'benefit', 'other', 'contribution'].includes(input.type) ? input.type : '';
     if (!type) throw new Error('Kies een geldig type inkomsten.');
     const source = String(input.source || '').trim().slice(0, 80);
     const description = String(input.description || '').trim().slice(0, 160);
@@ -106,7 +107,8 @@
   }
 
   const FREQUENCIES = ['weekly', 'monthly', 'quarterly', 'semiannual', 'yearly', 'once'];
-  const BILL_FREQUENCIES = FREQUENCIES.filter(value => value !== 'once');
+  const BILL_FREQUENCIES = [...FREQUENCIES.filter(value => value !== 'once'), 'custom'];
+  const RESERVE_METHODS = ['monthly', 'full', 'schedule'];
   const cleanLabel = (value, limit = 100) => String(value || '').trim().slice(0, limit);
 
     function addIncomeSource(ledger, input, pots, sourceId = id()) {
@@ -251,10 +253,27 @@
         requireDate(endDate);
         if (endDate < startDate) throw new Error('De einddatum kan niet voor de startdatum liggen.');
       }
+      const intervalMonths = frequency === 'custom' ? Math.trunc(Number(input.intervalMonths)) : 0;
+      if (frequency === 'custom' && !(intervalMonths >= 1 && intervalMonths <= 120)) {
+        throw new Error('Kies een eigen interval van 1 tot 120 maanden.');
+      }
+      const reserveMethod = input.reserveMethod === undefined || input.reserveMethod === '' ? 'monthly' : String(input.reserveMethod);
+      if (!RESERVE_METHODS.includes(reserveMethod)) throw new Error('Kies een geldige reserveringsmethode.');
+      let reserveSchedule = null;
+      if (reserveMethod === 'schedule') {
+        const months = Math.trunc(Number(input.reserveMonths));
+        const startMonth = String(input.reserveStartMonth || monthOf(startDate));
+        if (!(months >= 1 && months <= 120) || !validMonth(startMonth)) throw new Error('Vul een geldig reserveringsschema in (aantal maanden en startmaand).');
+        reserveSchedule = { startMonth, months, amountCents: positiveCents(input.reserveAmount) };
+      }
+      const scope = input.scope === 'personal' ? 'personal' : 'joint';
       const bill = {
         id: billId, name, amountCents, potId, frequency, expectedDate, startDate, endDate,
         variable: Boolean(input.variable), active: input.active !== false,
-        note: cleanLabel(input.note, 240)
+        note: cleanLabel(input.note, 240), scope, payer: cleanLabel(input.payer, 80),
+        reserveMethod, ...(intervalMonths ? { intervalMonths } : {}),
+        ...(reserveSchedule ? { reserveSchedule } : {}),
+        ...(input.replacesFixedId ? { replacesFixedId: cleanLabel(input.replacesFixedId, 120) } : {})
       };
       target.recurringBills.push(bill);
       Object.assign(ledger, target);
@@ -280,7 +299,7 @@
       return `${first.getUTCFullYear()}-${String(first.getUTCMonth() + 1).padStart(2, '0')}-${String(Math.min(day, lastDay)).padStart(2, '0')}`;
     }
 
-    function occurrencesInMonth(anchor, frequency, month) {
+    function occurrencesInMonth(anchor, frequency, month, intervalMonths) {
       if (!validDate(anchor) || !validMonth(month)) return [];
       const first = `${month}-01`, last = addMonths(first, 1);
       if (frequency === 'weekly') {
@@ -295,8 +314,8 @@
         }
         return dates;
       }
-      const step = { monthly: 1, quarterly: 3, semiannual: 6, yearly: 12 }[frequency];
-      if (!step) return [];
+      const step = frequency === 'custom' ? Number(intervalMonths) : { monthly: 1, quarterly: 3, semiannual: 6, yearly: 12 }[frequency];
+      if (!Number.isInteger(step) || step < 1) return [];
       const [anchorYear, anchorMonth] = anchor.slice(0, 7).split('-').map(Number);
       const [targetYear, targetMonth] = month.split('-').map(Number);
       const monthDifference = (targetYear - anchorYear) * 12 + targetMonth - anchorMonth;
@@ -321,7 +340,7 @@
       const end = bill.endDate || '9999-12-31';
       const anchor = bill.expectedDate || start;
       if (!validDate(start) || !validDate(anchor)) return [];
-      return occurrencesInMonth(anchor, bill.frequency, month).filter(date => date >= start && date <= end);
+      return occurrencesInMonth(anchor, bill.frequency, month, bill.intervalMonths).filter(date => date >= start && date <= end);
     }
 
     function monthPlan(ledger, month, pots) {
@@ -423,6 +442,7 @@
     Object.entries(target.openingBalances).forEach(([potId, value]) => add(potId, value));
     target.incomes.forEach(income => incomeAllocations(income).forEach(allocation => add(allocation.potId, allocation.amountCents)));
     target.expenses.forEach(expense => add(expense.potId, -round(expense.amountCents)));
+    target.adjustments.forEach(adjustment => add(adjustment.potId, adjustment.amountCents));
     target.transfers.forEach(transfer => {
       add(transfer.fromPotId, -round(transfer.amountCents));
       add(transfer.toPotId, round(transfer.amountCents));
@@ -436,7 +456,8 @@
     const opening = Object.values(target.openingBalances).reduce((sum, value) => sum + round(value), 0);
     const income = target.incomes.reduce((sum, item) => sum + round(item.amountCents), 0);
     const expenses = target.expenses.reduce((sum, item) => sum + round(item.amountCents), 0);
-    return opening + income - expenses;
+    const adjustments = target.adjustments.reduce((sum, item) => sum + round(item.amountCents), 0);
+    return opening + income + adjustments - expenses;
   }
 
   function addExpense(ledger, input, pots, options = {}) {
@@ -460,6 +481,8 @@
     const entry = {
       id: input.id || id(), amountCents, date, month: monthOf(date), category, potId,
       description, person: source, externalId,
+      scope: input.scope === 'personal' ? 'personal' : 'joint',
+      ...(input.link && input.link.module && input.link.id ? { links: [{ module: cleanLabel(input.link.module, 40), id: cleanLabel(input.link.id, 120) }] } : {}),
       ...(input.fixedBillId ? { fixedBillId: String(input.fixedBillId) } : {}),
       ...(input.billOccurrenceDate ? { billOccurrenceDate: String(input.billOccurrenceDate) } : {})
     };
@@ -562,7 +585,44 @@
     };
   }
 
+  function addAdjustment(ledger, input, pots) {
+    const target = normalize(ledger);
+    const amountCents = cents(String(input.amount).replace('-', '')) * (String(input.amount).trim().startsWith('-') ? -1 : 1);
+    if (!amountCents) throw new Error('Het correctiebedrag mag niet nul zijn.');
+    const date = String(input.date || '');
+    requireDate(date);
+    const potId = requirePot(pots, input.potId);
+    const entryId = input.id || id();
+    if (target.adjustments.some(item => item.id === entryId)) return target.adjustments.find(item => item.id === entryId);
+    const entry = {
+      id: entryId, potId, amountCents, date, month: monthOf(date),
+      reason: cleanLabel(input.reason, 160), distributionId: cleanLabel(input.distributionId, 120)
+    };
+    target.adjustments.push(entry);
+    Object.assign(ledger, target);
+    return entry;
+  }
+
+  // Koppelt een bestaande transactie aan een andere module zonder duplicaat.
+  function linkExpense(ledger, expenseId, link) {
+    const target = normalize(ledger);
+    const expense = target.expenses.find(item => item.id === expenseId);
+    if (!expense) throw new Error('Deze uitgave bestaat niet meer.');
+    const module = cleanLabel(link?.module, 40), linkId = cleanLabel(link?.id, 120);
+    if (!module || !linkId) throw new Error('Kies een module en onderdeel om aan te koppelen.');
+    const links = Array.isArray(expense.links) ? expense.links : [];
+    if (!links.some(item => item.module === module && item.id === linkId)) expense.links = [...links, { module, id: linkId }];
+    Object.assign(ledger, target);
+    return expense;
+  }
+
+  function expensesForLink(ledger, module, linkId) {
+    return normalize(ledger).expenses.filter(expense =>
+      (Array.isArray(expense.links) ? expense.links : []).some(item => item.module === module && item.id === linkId));
+  }
+
   return {
+    addAdjustment, linkExpense, expensesForLink, RESERVE_METHODS, BILL_FREQUENCIES,
     addAllocationRule, addExpense, addIncome, addIncomeSource, addRecurringBill, addTransfer,
     allocateIncome, allPotBalances, availableCashCents, approveIncomeDistribution,
     billOccurrences, monthPlan, proposeIncomeDistribution, recordBillPayment, setDistributionMode,

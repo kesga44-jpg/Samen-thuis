@@ -1,0 +1,52 @@
+/* Financieel systeem: tabbladen, status, tabellen. Mobiel eerst (iPhone), daarna iPad en desktop. */
+.fin-shell { display: grid; gap: 14px; margin-top: 14px; }
+.fin-grid { display: grid; gap: 14px; }
+.fin-two { display: grid; gap: 14px; grid-template-columns: 1fr; }
+.fin-card { background: var(--card, #fff); border: 1px solid var(--line, #d8dce6); border-radius: 16px; padding: 16px; display: grid; gap: 10px; min-width: 0; }
+.fin-card h3, .fin-card h4 { margin: 0; }
+.fin-card b { font-size: 1.4rem; }
+.fin-income.is-confirmed { border-color: #2e9d5b; }
+.fin-note { margin: 0; padding: 10px 12px; border-radius: 12px; background: var(--orange-soft, #fff0e8); }
+.fin-status { display: flex; gap: 12px; align-items: flex-start; padding: 14px 16px; border-radius: 16px; border: 2px solid; }
+.fin-status ul, .fin-status p { margin: 4px 0 0; padding-left: 18px; }
+.fin-status p { padding: 0; }
+.fin-icon { font-size: 1.6rem; line-height: 1; }
+.fin-status-green { background: #e6f5ec; border-color: #2e9d5b; color: #124d2a; }
+.fin-status-orange { background: #fff0e0; border-color: #d9822b; color: #6b3a08; }
+.fin-status-red { background: #fce8ea; border-color: #b84f58; color: #7a1d26; }
+.fin-shortfall { padding: 12px; border-radius: 12px; background: #fce8ea; border: 1px solid #b84f58; color: #7a1d26; }
+.fin-pill { display: inline-block; width: fit-content; padding: 4px 10px; border-radius: 999px; font-size: .8rem; font-weight: 650; margin: 0; }
+.fin-pill.ok { background: #e6f5ec; color: #124d2a; }
+.fin-pill.wait { background: #fff0e0; color: #6b3a08; }
+.fin-table-wrap { overflow-x: auto; }
+.fin-table { width: 100%; border-collapse: collapse; font-size: .92rem; }
+.fin-table th, .fin-table td { padding: 8px 6px; text-align: left; border-bottom: 1px solid var(--line, #d8dce6); vertical-align: top; }
+.fin-table td:not(:first-child) { text-align: right; white-space: nowrap; }
+.fin-table small, .fin-row small { display: block; color: var(--muted, #667); font-weight: 400; }
+.fin-remainder th, .fin-remainder td { background: #e6f5ec; }
+.fin-form, .fin-percent, .fin-income-form { display: grid; gap: 10px; grid-template-columns: 1fr; }
+.fin-form label, .fin-percent label, .fin-income-form label, .fin-reason, .fin-month { display: grid; gap: 4px; font-weight: 600; }
+.fin-form input, .fin-form select, .fin-percent input, .fin-income-form input, .fin-reason input, .fin-month input { min-height: 44px; font-size: 16px; padding: 0 10px; }
+.fin-check { display: flex !important; align-items: center; gap: 8px; }
+.fin-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.fin-actions button, .fin-card button, .fin-form button { min-height: 44px; }
+.fin-list { display: grid; gap: 8px; }
+.fin-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; padding: 10px; border: 1px solid var(--line, #d8dce6); border-radius: 12px; }
+.fin-row .fin-actions { grid-column: 1 / -1; }
+.fin-history { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+.fin-legacy { border: 1px dashed var(--line, #d8dce6); border-radius: 12px; padding: 8px 12px; margin-top: 14px; }
+.fin-legacy summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; font-weight: 650; }
+.fin-remainder-card { border-color: #2e9d5b; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+@media (min-width: 700px) {
+  .fin-two { grid-template-columns: 1fr 1fr; }
+  .fin-form { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; }
+  .fin-row { grid-template-columns: 1fr auto auto; }
+  .fin-row .fin-actions { grid-column: auto; }
+  .fin-tabs { flex-wrap: wrap; overflow: visible; }
+}
+@media (min-width: 1100px) {
+  .fin-form { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+.fin-table { display: table; width: 100%; }
+.fin-pane button:disabled { opacity: .5; cursor: not-allowed; }
