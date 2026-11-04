@@ -101,14 +101,16 @@
     return {
       people, latest, evaluation: F.evaluateMonth({
         month: state.month, shareBp: bp, people, lines: F.allocationLines(budget, state.month, ledger),
-        distribution: latest ? { revision: latest.revision, inputHash: latest.input_hash } : null
+        distribution: latest ? { revision: latest.revision, inputHash: latest.input_hash } : null,
+        processed: Boolean(latest && ledger.incomes?.some(item => item.id === `dist:${state.month}:r${latest.revision}`))
       }), reservations: F.reservationOverview(ledger, ledger.recurringBills, state.month, ctx.today())
     };
   }
 
   // ---- Weergave --------------------------------------------------------------------------------------
   const statusBox = e => `<div class="fin-status fin-status-${e.status}" role="status"><span class="fin-icon" aria-hidden="true">${F.STATUS_ICON[e.status]}</span>
-    <div><strong>${F.STATUS_TEXT[e.status]}</strong>${e.reasons.length ? `<ul>${e.reasons.map(r => `<li>${esc(r)}</li>`).join('')}</ul>` : '<p>Beide inkomens zijn bevestigd en de verdeling is definitief vastgelegd.</p>'}</div></div>`;
+    <div><strong>${F.STATUS_TEXT[e.status]}</strong>${e.reasons.length ? `<ul>${e.reasons.map(r => `<li>${esc(r)}</li>`).join('')}</ul>` : '<p>De berekening is sluitend.</p>'}</div></div>
+    <div class="fin-status fin-status-${e.processing === 'processed' || e.processing === 'confirmed' ? 'green' : 'orange'}" role="status"><div><strong>Verwerking: ${F.PROCESSING_TEXT[e.processing]}</strong></div></div>`;
 
   function incomeCard(person) {
     const row = person.row;
