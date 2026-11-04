@@ -44,11 +44,13 @@
     budget19: {
       title: 'Financiën',
       subs: [
+        { key: 'inkomstenverdeling', icon: 'users', label: 'Inkomstenverdeling', desc: 'Inkomens bevestigen, percentage en maandverdeling', parts: [['.fin-pane[data-fin-pane="verdeling"]']] },
         { key: 'dashboard', icon: 'chart', label: 'Financieel dashboard', desc: 'Inkomen, verdeling en kerncijfers', parts: [['.budget-title23'], ['.kpis23'], ['.budget-sheet23', 'INKOMEN|MAANDELIJKSE GELDVERDELING']], catchAll: true },
-        { key: 'transacties', icon: 'receipt', label: 'Transacties', desc: 'Inkomsten, uitgaven en verschuivingen boeken', parts: [['.ledger25 > .card-head'], ['.ledger25 > .muted'], ['.ledger-section25', 'Registreren']] },
-        { key: 'budgetten', icon: 'pie', label: 'Budgetten', desc: 'Huisbudget en potjessaldi', parts: [['.budget-sheet23', 'HUISBUDGET'], ['.ledger-section25', 'Potjes']] },
-        { key: 'vaste-lasten', icon: 'repeat', label: 'Vaste lasten', desc: 'Vaste lasten en maandplanning', parts: [['.budget-sheet23', 'VASTE LASTEN'], ['.ledger-section25', 'Maandplanning']] },
+        { key: 'transacties', icon: 'receipt', label: 'Transacties', desc: 'Inkomsten, uitgaven en verschuivingen boeken', parts: [['.fin-pane[data-fin-pane="transacties"]'], ['.ledger25 > .card-head'], ['.ledger25 > .muted'], ['.ledger-section25', 'Registreren']] },
+        { key: 'budgetten', icon: 'pie', label: 'Budgetten', desc: 'Huisbudget en potjessaldi', parts: [['.fin-pane[data-fin-pane="potjes"]'], ['.budget-sheet23', 'HUISBUDGET'], ['.ledger-section25', 'Potjes']] },
+        { key: 'vaste-lasten', icon: 'repeat', label: 'Vaste lasten', desc: 'Vaste lasten en maandplanning', parts: [['.fin-pane[data-fin-pane="vastelasten"]'], ['.budget-sheet23', 'VASTE LASTEN'], ['.ledger-section25', 'Maandplanning']] },
         { key: 'spaardoelen', icon: 'piggy', label: 'Spaardoelen', desc: 'Doelen, prognose en slim sparen', parts: [['.budget-sheet23', 'SPAARDOELEN|SLIM SPAREN|SPAARGELD PER DOEL']] },
+        { key: 'beleggen', icon: 'chart', label: 'Beleggen en vermogen', desc: 'Gepland, gereserveerd en daadwerkelijk ingelegd', parts: [['.fin-pane[data-fin-pane="beleggen"]']] },
         { key: 'overzichten', icon: 'list', label: 'Financiële overzichten', desc: 'Kerncijfers en maandoverzichten', parts: [['.ledger-kpis25'], ['.ledger-plan25'], ['.ledger-section25', '^(Inkomsten|Uitgaven|Verschuivingen) van'], ['.ledger25 > .small-note']] }
       ]
     },

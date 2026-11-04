@@ -31,7 +31,7 @@ test('routes worden gelezen en geschreven', () => {
 test('Instellingen, Financiën en Sport zijn opgesplitst in subpagina’s', () => {
   const keys = p => N.HUBS[p].subs.map(s => s.key);
   assert.deepEqual(keys('settings'), ['profiel', 'huishouden', 'account', 'synchronisatie', 'back-ups', 'voorkeuren', 'overig']);
-  assert.deepEqual(keys('budget19'), ['dashboard', 'transacties', 'budgetten', 'vaste-lasten', 'spaardoelen', 'overzichten']);
+  assert.deepEqual(keys('budget19'), ['inkomstenverdeling', 'dashboard', 'transacties', 'budgetten', 'vaste-lasten', 'spaardoelen', 'beleggen', 'overzichten']);
   assert.deepEqual(keys('sportcoach'), ['profielen', 'schemas', 'oefeningen', 'planning', 'geschiedenis', 'voortgang']);
   for (const [page, hub] of Object.entries(N.HUBS)) {
     assert.ok(N.isHub(page));
