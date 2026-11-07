@@ -1,0 +1,49 @@
+# Draait de bestaande testsuite (node:test) bij elke pull request en push naar main.
+# Alleen lezen: geen deploy, geen secrets, geen verbinding met Supabase.
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: node --test (incl. SQL-tests op lokale PostgreSQL)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Code ophalen
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Node.js instellen
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          package-manager-cache: false
+
+      # migrations-pg.test.js slaat de SQL-tests over als initdb ontbreekt.
+      # Deze stap faalt in dat geval, zodat de SQL-tests nooit ongemerkt wegvallen.
+      - name: PostgreSQL-binaries controleren
+        run: |
+          if ! ls /usr/lib/postgresql/{16,15,14}/bin/initdb >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends postgresql
+          fi
+          ls /usr/lib/postgresql/*/bin/initdb
+
+      - name: Syntaxcontrole
+        run: node --check app.js
+
+      - name: Tests uitvoeren
+        run: node --test *.test.js
