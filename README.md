@@ -27,7 +27,7 @@ GitHub Actions (`.github/workflows/tests.yml`) draait dezelfde suite bij elke pu
 
 - `node --check app.js` en daarna `node --test *.test.js` op Node.js 22 (Ubuntu 24.04);
 - de SQL-tests in `migrations-pg.test.js` draaien op een tijdelijke lokale PostgreSQL in de runner. De workflow faalt als PostgreSQL ontbreekt, zodat deze tests niet ongemerkt worden overgeslagen;
-- vier importtests (XLSX, XLS, DOCX, OCR) worden overgeslagen omdat `xlsx`, `mammoth` en Tesseract niet als Node-afhankelijkheid in de repository staan. Dat is ongewijzigd ten opzichte van lokaal draaien;
+- acht importtests (PDF, XLSX, XLS, DOCX, OCR) worden overgeslagen omdat `pdfjs-dist`, `xlsx`, `mammoth` en Tesseract geen Node-afhankelijkheid van de repository zijn. Lokaal kunnen er minder worden overgeslagen als die bibliotheken globaal geïnstalleerd zijn;
 - de workflow heeft alleen leesrechten, gebruikt geen secrets en maakt geen verbinding met Supabase.
 
 Lokaal de SQL-tests draaien vereist PostgreSQL 14–16 en een gebruiker zonder rootrechten (`initdb` weigert root).
