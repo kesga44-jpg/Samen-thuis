@@ -1,0 +1,1443 @@
+From d9de42775bfa80c60cfbb9641277fce68aedcbd4 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 8 Nov 2026 15:14:10 +0100
+Subject: [PATCH] Documentatie, CI-syntaxcontrole en beleidstests voor 26.0-rc1
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01DXboTXW7c38F7h8Qy7T4q3
+---
+ .env.example                  |  18 ++++++
+ .github/workflows/tests.yml   |   8 ++-
+ AGENTS.md                     |   5 ++
+ CHANGELOG.md                  |  52 ++++++++++++++++++
+ CLAUDE.md                     |  38 +++++++++++++
+ INTEGRATIE-STATUS.md          |   2 +
+ README.md                     |  61 ++++++++++++++-------
+ UPLOAD_MANIFEST.md            |  76 ++++++++++++++++++++++++++
+ docs/API_INTEGRATIONS.md      |  67 +++++++++++++++++++++++
+ docs/ARCHITECTURE.md          |  72 ++++++++++++++++++++++++
+ docs/DATA_MODEL.md            |  95 ++++++++++++++++++++++++++++++++
+ docs/IMPLEMENTATION_STATUS.md | 100 ++++++++++++++++++++++++++++++++++
+ docs/INSTALLATION.md          |  52 ++++++++++++++++++
+ docs/MIGRATIONS.md            |  45 +++++++++++++++
+ docs/RC_VALIDATION.md         |  50 +++++++++++++++++
+ docs/SECURITY.md              |  58 ++++++++++++++++++++
+ docs/TESTING_AND_RELEASE.md   |  62 +++++++++++++++++++++
+ docs/pr/PR-1.md               |  31 +++++++++++
+ docs/pr/PR-2.md               |  33 +++++++++++
+ docs/pr/PR-3.md               |  35 ++++++++++++
+ docs/pr/PR-4.md               |  32 +++++++++++
+ docs/pr/PR-5.md               |  37 +++++++++++++
+ docs/pr/PR-6.md               |  36 ++++++++++++
+ docs/pr/PR-7.md               |  46 ++++++++++++++++
+ docs/pr/PR-8.md               |  44 +++++++++++++++
+ integrations-policy.test.js   |  50 +++++++++++++++++
+ 26 files changed, 1183 insertions(+), 22 deletions(-)
+ create mode 100644 .env.example
+ create mode 100644 AGENTS.md
+ create mode 100644 CHANGELOG.md
+ create mode 100644 CLAUDE.md
+ create mode 100644 UPLOAD_MANIFEST.md
+ create mode 100644 docs/API_INTEGRATIONS.md
+ create mode 100644 docs/ARCHITECTURE.md
+ create mode 100644 docs/DATA_MODEL.md
+ create mode 100644 docs/IMPLEMENTATION_STATUS.md
+ create mode 100644 docs/INSTALLATION.md
+ create mode 100644 docs/MIGRATIONS.md
+ create mode 100644 docs/RC_VALIDATION.md
+ create mode 100644 docs/SECURITY.md
+ create mode 100644 docs/TESTING_AND_RELEASE.md
+ create mode 100644 docs/pr/PR-1.md
+ create mode 100644 docs/pr/PR-2.md
+ create mode 100644 docs/pr/PR-3.md
+ create mode 100644 docs/pr/PR-4.md
+ create mode 100644 docs/pr/PR-5.md
+ create mode 100644 docs/pr/PR-6.md
+ create mode 100644 docs/pr/PR-7.md
+ create mode 100644 docs/pr/PR-8.md
+ create mode 100644 integrations-policy.test.js
+
+diff --git a/.env.example b/.env.example
+new file mode 100644
+index 0000000..e97e372
+--- /dev/null
++++ b/.env.example
+@@ -0,0 +1,18 @@
++# Samen Thuis — voorbeeldconfiguratie. Bevat GEEN echte waarden.
++# De frontend gebruikt dit bestand niet: de app heeft geen geheime configuratie.
++# Deze variabelen horen uitsluitend als Supabase Edge Function secrets (npx supabase secrets set …)
++# of lokaal voor de Supabase CLI. Nooit committen met echte waarden, nooit in frontendcode.
++
++# Publiek (staat al in app.js; ter informatie)
++SUPABASE_PROJECT_REF=vwfuetxgapzfivydzhxc
++SUPABASE_URL=https://vwfuetxgapzfivydzhxc.supabase.co
++SUPABASE_PUBLISHABLE_KEY=sb_publishable_VUL_IN_UIT_DASHBOARD
++
++# Edge Functions (secrets)
++ALLOWED_ORIGINS=https://kesga44-jpg.github.io
++NED_API_KEY=VUL_IN
++TANKERKOENIG_API_KEY=VUL_IN
++PRIJS_PROFEET_API_KEY=
++
++# NOOIT hier of ergens in de repository:
++# SUPABASE_SERVICE_ROLE_KEY / sb_secret_… / databasewachtwoord / pooler-URL
+diff --git a/.github/workflows/tests.yml b/.github/workflows/tests.yml
+index 8136679..b9123f2 100644
+--- a/.github/workflows/tests.yml
++++ b/.github/workflows/tests.yml
+@@ -43,7 +43,13 @@ jobs:
+           ls /usr/lib/postgresql/*/bin/initdb
+ 
+       - name: Syntaxcontrole
+-        run: node --check app.js
++        run: |
++          node --check app.js
++          for f in cdn-libs.js food-facts-core.js nutrition-core.js osta-exchange-core.js nutrition.js quotes-core.js sw.js; do node --check "$f"; done
++
++      # edge-guard.test.js importeert supabase/functions/_shared/guard.ts direct (type stripping, Node >= 22.18).
++      - name: Node-versie controleren
++        run: node -e "const [a,b]=process.versions.node.split('.').map(Number); if(a<22||(a===22&&b<18)){console.error('Node >= 22.18 vereist');process.exit(1)}"
+ 
+       - name: Tests uitvoeren
+         run: node --test *.test.js
+diff --git a/AGENTS.md b/AGENTS.md
+new file mode 100644
+index 0000000..12133e7
+--- /dev/null
++++ b/AGENTS.md
+@@ -0,0 +1,5 @@
++# AGENTS.md
++
++Instructies voor AI-codeassistenten in deze repository staan in [CLAUDE.md](CLAUDE.md) en gelden voor elke assistent (Claude, Copilot, Codex en andere). De centrale ecosysteemregels in `kesga44-jpg/personal-ecosystem/CLAUDE.md` gaan voor.
++
++Kort: vanilla JS zonder build, geen frameworkmigratie, geen gegevens wissen, geen productie-Supabase-wijzigingen, geen secrets, één onderwerp per PR, `node --test *.test.js` groen vóór oplevering.
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+new file mode 100644
+index 0000000..1c721e4
+--- /dev/null
++++ b/CHANGELOG.md
+@@ -0,0 +1,52 @@
++# Changelog Samen Thuis
++
++Indeling volgens [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/). Eerdere versies staan in de losse `*_V*.md`/`UPDATE_*.md`-notities.
++
++## [26.0-rc1] — 2026-11-08 (releasekandidaat, gesplitst in 8 PR's, niet gemerged)
++
++### Gewijzigd ten opzichte van de eerste versie hieronder
++- **Voedingsarchitectuur gecorrigeerd** (ADR 0001, geaccepteerd): Osta is de primaire plek voor recepten. Samen Thuis maakt geen recepten meer aan (formulier verwijderd), toont receptinhoud alleen-lezen ("Receptkopieën uit Osta") en legt alleen voedingsannotaties vast (productkoppeling, gram waar de bron geen gewicht geeft, porties voor planning). Bij opnieuw importeren wint de bron; wat de bron niet meer levert blijft behouden en wordt gemeld; vervallen ingrediënten en koppelingen worden genoemd. Twijfelgevallen worden standaard als aparte kopie toegevoegd.
++- Centrale documentatiepatch voor `personal-ecosystem` (`docs/personal-ecosystem-voeding.patch`).
++
++### Toegevoegd
++- **Synchronisatie: wijzigingen van beide huisgenoten automatisch samenvoegen** (oude code-sync en accountsync). Alleen bij hetzelfde veld aan beide kanten anders gewijzigd vraagt de app een keuze; nieuwe knop **Beide samenvoegen** (ook voor conflicten die al openstonden). Lokale basiskopie per route; opslag vol → basis wordt opgeruimd en de app valt terug op kiezen.
++- Browsertests: `e2e/sync-merge.mjs` (twee apparaten), `e2e/import-browser.mjs` (PDF, DOCX, XLSX, XLS, OCR, manipulatietest SRI).
++- `scripts/sync-sw-assets.mjs`; tests `sync-merge.test.js`, `weather-attribution.test.js`; `docs/RC_VALIDATION.md`.
++
++### Versies
++- Gewijzigde scripts hebben een hogere `?v=`; service worker per PR een nieuwe cachenaam (eindstand `samen-thuis-v43-voeding`).
++
++## [26.0] — 2026-11-08 (eerste versie, vervangen door rc1)
++
++### Toegevoegd
++- **Voeding** (Meer → Huishouden → Voeding) met vier subpagina's:
++  - *Productinformatie*: Open Food Facts op barcode of naam (alleen na klik), voedingswaarden per 100 g en per portie, ingrediënten, allergenen en sporen in het Nederlands, Nutri-Score/NOVA, kwaliteitsscore met concrete tekortkomingen, handmatig product van het etiket. Ontbrekend wordt "onbekend", nooit 0.
++  - *Recepten*: (in rc1 vervangen door alleen-lezen receptkopieën) ingrediënten koppelen aan producten en grammen; voedingswaarde per portie met dekking ("≥" bij onvolledige gegevens); opgegeven waarden van de bron apart zichtbaar; naar boodschappen.
++  - *Voeding bij het weekmenu*: per maaltijd de waarde per portie, recept koppelen (of voorstel op titel), handmatig te starten regelgebaseerde voedingscontrole, ingrediënten van de week naar boodschappen.
++  - *Osta en recepten uitwisselen*: gedeelde Osta-tekst, schema.org/Recipe JSON-LD en eigen formaat `samen-thuis.recipes` v1; altijd voorbeeld vóór opslaan; dubbelen herkend; geen verlies van voedingsinformatie; export in eigen formaat en schema.org.
++- `food-facts-core.js`, `nutrition-core.js`, `osta-exchange-core.js`, `nutrition.js`, `css/nutrition.css`.
++- Centrale zoekfunctie doorzoekt recepten (ook op ingrediënt) en producten.
++- `cdn-libs.js`: register van externe bibliotheken met exacte versie en SHA-384; `scripts/verify-sri.mjs`.
++- `supabase/functions/_shared/guard.ts`: JWT-controle, CORS-allowlist, groottelimiet, limiet per gebruiker.
++- Lokale "gedachte van de dag" (eigen teksten).
++- Tests: 71 nieuwe (`food-facts-core`, `nutrition-core`, `osta-exchange-core`, `nutrition-integration`, `edge-guard`, `cdn-libs`, `sw-assets`, `integrations-policy`, uitbreiding `quotes-core`); optionele browsertest `e2e/smoke.mjs`.
++- Documentatie: `CLAUDE.md`, `AGENTS.md`, `docs/ARCHITECTURE.md`, `docs/API_INTEGRATIONS.md`, `docs/DATA_MODEL.md`, `docs/MIGRATIONS.md`, `docs/SECURITY.md`, `docs/TESTING_AND_RELEASE.md`, `docs/INSTALLATION.md`, `docs/IMPLEMENTATION_STATUS.md`, `docs/adr/0001-voedingsplanning-in-samen-thuis.md` (voorgesteld), `.env.example`, `UPLOAD_MANIFEST.md`.
++
++### Gewijzigd
++- Edge Functions `grocery-prices` en `data-sources` vereisen een aangemelde gebruiker en accepteren alleen toegestane origins (R7). De app stuurt het sessietoken mee. **Actief na redeploy.** Foutmeldingen bevatten geen interne details meer.
++- Bibliotheken worden geladen met `integrity` en `crossorigin`; `tesseract.js` exact gepind op 5.1.1; pdf.js alleen na hashcontrole (R5).
++- Service worker `samen-thuis-v37-voeding`: precachet alle assets uit `index.html` (o.a. ontbrekende `rewards-core.js`).
++- Weer, weerpagina en luchtkwaliteit tonen de verplichte bronvermelding Open-Meteo (CC BY 4.0).
++- Navigatie: Voeding toegevoegd aan Meer en als hub met subpagina's.
++- CI: syntaxcontrole voor nieuwe modules en controle op Node ≥ 22.18.
++- Deploy-instructies zonder `--no-verify-jwt` (`OPEN_DATA_BRONNEN.md`, `INSTALLATIE_BETA.md`).
++- `README.md` bijgewerkt; app-versie 26.0.
++
++### Verwijderd
++- Extern BrainyQuote-script uit `index.html` (R4). De RSS-tekst blijft optioneel als ge-escapete tekst. Geen gegevens verwijderd.
++
++### Beveiliging
++- R4 opgelost, R5 grotendeels opgelost (restrisico tesseract-worker/taaldata), R7 opgelost in code. R1, R3, S-6, S-7 open (zie `docs/SECURITY.md`).
++
++### Niet gewijzigd
++- Database, migraties, RLS, Storage, Supabase-configuratie, Sport & Training, financiële logica, opslagformaat `samenThuisDataV2` (alleen additief).
+diff --git a/CLAUDE.md b/CLAUDE.md
+new file mode 100644
+index 0000000..713243f
+--- /dev/null
++++ b/CLAUDE.md
+@@ -0,0 +1,38 @@
++# CLAUDE.md — Samen Thuis
++
++De centrale regels in `personal-ecosystem/CLAUDE.md` gelden hier volledig. Bij strijd wint de strengste regel. Bij twijfel: stoppen en vragen.
++
++## Altijd eerst lezen
++
++1. `personal-ecosystem/DECISIONS.md`, `docs/adr/` (centraal) en `docs/adr/` (deze repo).
++2. `personal-ecosystem/APP_REGISTRY.md` en `DATA_OWNERSHIP.md`.
++3. Deze repo: `README.md`, `docs/ARCHITECTURE.md`, `docs/DATA_MODEL.md`, `docs/SECURITY.md`, `docs/IMPLEMENTATION_STATUS.md`.
++
++## Vaste afspraken voor deze repo
++
++- Vanilla JavaScript, geen buildstap, klassieke `<script>`-tags. Geen React, TypeScript of Tailwind in de app. (Edge Functions zijn Deno/TypeScript.)
++- Nieuwe logica in een zuivere `*-core.js` (UMD-patroon, testbaar in Node) + dunne UI-module die zich aan `render()` haakt (zie `sportcoach.js`, `nutrition.js`). Laden vóór `nav-groups.js`.
++- Gegevens blijven in `samenThuisDataV2`. Nieuwe velden additief op het hoogste niveau; `migrateData` behoudt onbekende velden. Nooit gegevens wissen of hernoemen.
++- Elk top-level veld wordt automatisch een versleuteld sync-onderdeel (`household-sync-core.js`). Apparaatgebonden caches (bijv. Open Food Facts) horen in een eigen `localStorage`-sleutel, niet in `data`.
++- Alle HTML uit gegevens via `esc()`. Externe gegevens (API's, imports) zijn onbetrouwbaar.
++- Externe scripts alleen via `cdn-libs.js` (exacte versie + SRI). Nieuwe bibliotheek: hash berekenen en `node scripts/verify-sri.mjs` draaien.
++- Netwerkverzoeken naar externe API's alleen na een gebruikersactie; nooit zoeken-tijdens-typen bij Open Food Facts.
++- Geen Web Push, geen WebLLM/Ollama, geen nieuwe externe API zonder akkoord (zie `docs/API_INTEGRATIONS.md`).
++- Sport & Training: alleen fixes, geen nieuwe functies (centrale ADR 0002).
++- Service worker: bij elke asset-wijziging `?v=` verhogen en `node scripts/sync-sw-assets.mjs samen-thuis-vNN-onderwerp` draaien; `sw-assets.test.js` bewaakt de lijst.
++- Voeding: Osta is primair voor recepten (ADR 0001). Geen formulier of code die receptinhoud maakt of bewerkt; alleen import/export en voedingsannotaties.
++- Sync: nooit stil overschrijven. Automatisch samenvoegen alleen zonder veldconflict (`household-sync-core.js`).
++- Supabase: geen migratie uitvoeren op project A. Migraties schrijven + lokaal testen mag, met rollback in `supabase/rollbacks/`.
++
++## Testen vóór "klaar"
++
++```bash
++node --check app.js
++node --test *.test.js            # SQL-tests: PostgreSQL 14–16 en niet-root-gebruiker
++node e2e/smoke.mjs               # optioneel, vereist Playwright + Chromium
++node scripts/verify-sri.mjs      # bij bibliotheekwijzigingen, vereist internet
++```
++
++## Werkwijze
++
++Eén onderwerp per PR, voorstel vooraf, eigenaar merget (centrale ADR 0011). Rapporteer volgens het centrale format (Gewijzigd / Waarom / Getest / Niet getest / Risico's).
+diff --git a/INTEGRATIE-STATUS.md b/INTEGRATIE-STATUS.md
+index 0216533..c6678f0 100644
+--- a/INTEGRATIE-STATUS.md
++++ b/INTEGRATIE-STATUS.md
+@@ -1,5 +1,7 @@
+ # Integratie- en API-status Samen Thuis
+ 
++> **Historisch document.** De actuele stand staat in [docs/API_INTEGRATIONS.md](docs/API_INTEGRATIONS.md) (2026-11-08). De melding hieronder dat `data-core.test.js` faalt is achterhaald: de test slaagt.
++
+ De primaire applicatie blijft leidend: de aanvullende repository gebruikt ES-modules, terwijl de hoofdapp een klassieke JavaScript-entrypoint met bestaande lokale opslag en synchronisatie gebruikt. De aanvullende functies zijn daarom in de bestaande appstructuur aangesloten; bestaande pagina's, gegevens en vormgeving blijven behouden.
+ 
+ ## Aangetroffen externe integraties
+diff --git a/README.md b/README.md
+index 01d94e9..ad451a2 100644
+--- a/README.md
++++ b/README.md
+@@ -1,33 +1,52 @@
+ # Samen Thuis
+ 
+-Deze build gebruikt één volledig opgebouwde `styles.css`.
++Het gezamenlijke thuisdashboard van Kees en Daphne: planning, huishouden, weekmenu en voeding, boodschappen, voorraad, financiën, reizen, challenges en (tot poort G-SPORT) Sport & Training. Statische PWA in vanilla JavaScript, zonder buildstap; werkt offline en synchroniseert versleuteld via Supabase.
+ 
+-De stylesheet is voorzien van duidelijke comments per pagina en onderdeel:
+-basis, Vandaag, Agenda, Weekmenu, Boodschappen, Huishouden, Voorraad, Reizen,
+-Date ideeën, Woning, Budget, Instellingen, import/synchronisatie, thema's,
+-mobiele navigatie en responsive gedrag.
++Onderdeel van het persoonlijke ecosysteem (`kesga44-jpg/personal-ecosystem`). Samen Thuis blijft een zelfstandige app; de centrale architectuur en besluiten zijn leidend.
+ 
+-De bestaande stylingregels zijn behouden. Onderaan staat één gericht
+-kleurcontract: witte/lichtgrijze oppervlakken krijgen donkere tekst en
+-donkerblauwe oppervlakken krijgen lichte tekst.
++## Snel starten
+ 
+-De mobiele navigatie en het bewaren van de horizontale positie blijven
+-onderdeel van de bestaande app-functionaliteit.
++```bash
++python3 -m http.server 8080      # open http://localhost:8080
++node --test *.test.js            # tests (SQL-tests: PostgreSQL en niet-root)
++```
+ 
+-Het budget gebruikt één financiële ledger in integer centen. Inkomstenbronnen,
+-verdelingsregels en terugkerende vaste lasten worden in diezelfde versleutelde
+-huishoudgegevens bewaard. Verwachte betalingen reserveren alleen saldo; een
+-uitgave ontstaat pas nadat een gebruiker de daadwerkelijke betaling bevestigt.
++Meer: [installatie en configuratie](docs/INSTALLATION.md) · [test en release](docs/TESTING_AND_RELEASE.md).
+ 
+-## Tests en CI
++## Documentatie
++
++| Document | Inhoud |
++|---|---|
++| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Opbouw, navigatie, sync, plaats in het ecosysteem |
++| [docs/DATA_MODEL.md](docs/DATA_MODEL.md) | `samenThuisDataV2`, nieuw onderdeel `nutrition`, database |
++| [docs/API_INTEGRATIONS.md](docs/API_INTEGRATIONS.md) | Register externe diensten, limieten, Osta-onderzoek |
++| [docs/SECURITY.md](docs/SECURITY.md) | Beveiligingsaudit, privacy, CSP-voorstel |
++| [docs/MIGRATIONS.md](docs/MIGRATIONS.md) | Client- en databasemigraties, Edge-deploy |
++| [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md) | Wat is gebouwd/getest, PR-indeling, open besluiten |
++| [docs/adr/](docs/adr/) | Besluiten specifiek voor Samen Thuis |
++| [CHANGELOG.md](CHANGELOG.md) | Wijzigingen |
++| [CLAUDE.md](CLAUDE.md) / [AGENTS.md](AGENTS.md) | Regels voor AI-assistenten |
++
++## Belangrijkste afspraken
++
++- Gegevens staan lokaal in `samenThuisDataV2` en reizen per onderdeel versleuteld mee in de accountsync; nieuwe velden zijn altijd additief.
++- Wijzigingen van beide huisgenoten worden automatisch samengevoegd; alleen als hetzelfde veld op beide apparaten anders is gewijzigd, vraagt de app een keuze (aanbevolen: **Beide samenvoegen**). Nieuwe wijzigingen komen binnen bij openen, bij terugkeren naar de app en elke 30 seconden.
++- Het budget gebruikt één financiële ledger in integer centen. Inkomstenbronnen, verdelingsregels en terugkerende vaste lasten staan in dezelfde versleutelde huishoudgegevens. Verwachte betalingen reserveren alleen saldo; een uitgave ontstaat pas na bevestiging van de daadwerkelijke betaling.
++- Externe API's alleen op verzoek van de gebruiker; sleutels nooit in de frontend (alleen als Supabase-secret achter een Edge Function met JWT-controle).
++- Externe bibliotheken alleen exact gepind met SRI (`cdn-libs.js`).
++- Samen Thuis beheert de voedingsplanning; **Osta is de primaire plek voor recepten** (Samen Thuis importeert en exporteert alleen). Persoonlijke voeding en gezondheidsgegevens horen bij de Sportapp ([ADR 0001](docs/adr/0001-voedingsplanning-in-samen-thuis.md)).
+ 
+-Lokaal: `node --test *.test.js`.
++## Stijl
++
++De build gebruikt `styles.css` met comments per pagina en onderdeel (basis, Vandaag, Agenda, Weekmenu, Boodschappen, Huishouden, Voorraad, Reizen, Date ideeën, Woning, Budget, Instellingen, import/synchronisatie, thema's, mobiele navigatie, responsive gedrag), aangevuld met `css/*.css` per module. Onderaan `styles.css` staat één kleurcontract: lichte oppervlakken krijgen donkere tekst en donkerblauwe oppervlakken lichte tekst. De mobiele navigatie en het bewaren van de horizontale positie blijven onderdeel van de app.
++
++## Tests en CI
+ 
+-GitHub Actions (`.github/workflows/tests.yml`) draait dezelfde suite bij elke pull request en elke push naar `main`:
++GitHub Actions (`.github/workflows/tests.yml`) draait bij elke pull request en push naar `main`:
+ 
+-- `node --check app.js` en daarna `node --test *.test.js` op Node.js 22 (Ubuntu 24.04);
+-- de SQL-tests in `migrations-pg.test.js` draaien op een tijdelijke lokale PostgreSQL in de runner. De workflow faalt als PostgreSQL ontbreekt, zodat deze tests niet ongemerkt worden overgeslagen;
+-- acht importtests (PDF, XLSX, XLS, DOCX, OCR) worden overgeslagen omdat `pdfjs-dist`, `xlsx`, `mammoth` en Tesseract geen Node-afhankelijkheid van de repository zijn. Lokaal kunnen er minder worden overgeslagen als die bibliotheken globaal geïnstalleerd zijn;
++- syntaxcontrole (`app.js` en de nieuwe modules) en een controle op Node ≥ 22.18;
++- `node --test *.test.js` op Node.js 22 (Ubuntu 24.04), inclusief SQL-tests op een tijdelijke lokale PostgreSQL. De workflow faalt als PostgreSQL ontbreekt, zodat die tests niet ongemerkt wegvallen;
++- vier importtests (XLSX, XLS, DOCX, OCR) worden overgeslagen omdat `xlsx`, `mammoth` en Tesseract geen Node-afhankelijkheid van de repository zijn;
+ - de workflow heeft alleen leesrechten, gebruikt geen secrets en maakt geen verbinding met Supabase.
+ 
+-Lokaal de SQL-tests draaien vereist PostgreSQL 14–16 en een gebruiker zonder rootrechten (`initdb` weigert root).
++Optioneel lokaal: `node e2e/smoke.mjs` (Playwright; 375/768/1280 px en offline), `node e2e/sync-merge.mjs` (twee apparaten), `node e2e/import-browser.mjs` (documentimport en OCR) en `node scripts/verify-sri.mjs` (SRI-hashes tegen het CDN).
+diff --git a/UPLOAD_MANIFEST.md b/UPLOAD_MANIFEST.md
+new file mode 100644
+index 0000000..5a2f9e1
+--- /dev/null
++++ b/UPLOAD_MANIFEST.md
+@@ -0,0 +1,76 @@
++# Uploadmanifest 26.0-rc1
++
++Vergelijking `main` @ `4da8078` → `pr/8-docs-ci` (eindstand van de PR-stapel). Gegenereerd 2026-11-08.
++
++- **Verwijderde bestanden: geen.**
++- Kolom *PR*: in welke PR('s) van de stapel het bestand wijzigt (zie `docs/IMPLEMENTATION_STATUS.md` § 3).
++- SHA-256 (eerste 16 tekens) van de inhoud in de ZIP. Dit manifest zelf staat er niet in.
++
++| Status | Bestand | +/− | PR | SHA-256 |
++|---|---|---|---|---|
++| Toegevoegd | `.env.example` | +18/−0 | 8 | `009b675ebe9b3655` |
++| Gewijzigd | `.github/workflows/tests.yml` | +7/−1 | 8 | `7e4ca492951991e8` |
++| Toegevoegd | `AGENTS.md` | +5/−0 | 8 | `420bcae1d78f0c04` |
++| Toegevoegd | `CHANGELOG.md` | +52/−0 | 8 | `3e56f7b74adb4c20` |
++| Toegevoegd | `CLAUDE.md` | +38/−0 | 8 | `bcb3be3f857b7c2e` |
++| Gewijzigd | `INSTALLATIE_BETA.md` | +5/−1 | 5 | `b3a479d15971484e` |
++| Gewijzigd | `INTEGRATIE-STATUS.md` | +2/−0 | 8 | `0a6f51d8c39efe6f` |
++| Gewijzigd | `OPEN_DATA_BRONNEN.md` | +7/−1 | 5 | `69cb120a0ee3c5c5` |
++| Gewijzigd | `README.md` | +40/−21 | 8 | `ab7a56ffbf497d6f` |
++| Gewijzigd | `account-sync.js` | +19/−3 | 6 | `47788d5339de4482` |
++| Gewijzigd | `app.js` | +92/−21 | 2, 3, 4, 5, 6 | `edf184b2c9510399` |
++| Toegevoegd | `cdn-libs.js` | +111/−0 | 3 | `d4efe315076a129d` |
++| Toegevoegd | `cdn-libs.test.js` | +65/−0 | 3 | `93ed838826e49065` |
++| Toegevoegd | `css/nutrition.css` | +59/−0 | 7 | `2e093a30fc4beecf` |
++| Toegevoegd | `docs/API_INTEGRATIONS.md` | +67/−0 | 8 | `ccc4fa45c8035a2f` |
++| Toegevoegd | `docs/ARCHITECTURE.md` | +72/−0 | 8 | `545cf931c6bf9e9f` |
++| Toegevoegd | `docs/DATA_MODEL.md` | +95/−0 | 8 | `1652f449a6467774` |
++| Toegevoegd | `docs/IMPLEMENTATION_STATUS.md` | +100/−0 | 8 | `568bd90d9d6713b3` |
++| Toegevoegd | `docs/INSTALLATION.md` | +52/−0 | 8 | `9de5bf421ee7d729` |
++| Toegevoegd | `docs/MIGRATIONS.md` | +45/−0 | 8 | `3d30cb72fb2bee51` |
++| Toegevoegd | `docs/RC_VALIDATION.md` | +50/−0 | 8 | `8159d7078136d8d3` |
++| Toegevoegd | `docs/SECURITY.md` | +58/−0 | 8 | `a546d15a8a81c54c` |
++| Toegevoegd | `docs/TESTING_AND_RELEASE.md` | +62/−0 | 8 | `d6166a8cb767e287` |
++| Toegevoegd | `docs/adr/0001-voedingsplanning-in-samen-thuis.md` | +60/−0 | 7 | `2edd629474c400f9` |
++| Toegevoegd | `docs/personal-ecosystem-voeding.patch` | +111/−0 | 7 | `61c2405dfae3cbfb` |
++| Toegevoegd | `docs/pr/PR-1.md` | +31/−0 | 8 | `1d7d156c1a6cf32d` |
++| Toegevoegd | `docs/pr/PR-2.md` | +33/−0 | 8 | `09e810da87fcf2ea` |
++| Toegevoegd | `docs/pr/PR-3.md` | +35/−0 | 8 | `109a70eceb917680` |
++| Toegevoegd | `docs/pr/PR-4.md` | +32/−0 | 8 | `9e1f80399be45d8a` |
++| Toegevoegd | `docs/pr/PR-5.md` | +37/−0 | 8 | `3a804c01dd29f0ce` |
++| Toegevoegd | `docs/pr/PR-6.md` | +36/−0 | 8 | `e41aec1e4c498124` |
++| Toegevoegd | `docs/pr/PR-7.md` | +46/−0 | 8 | `e64019043d4afc65` |
++| Toegevoegd | `docs/pr/PR-8.md` | +44/−0 | 8 | `e2fbf2d7b9597231` |
++| Toegevoegd | `e2e/import-browser.mjs` | +111/−0 | 3 | `deb0743a22473ad9` |
++| Toegevoegd | `e2e/smoke.mjs` | +101/−0 | 7 | `f8bca315eb41f6b7` |
++| Toegevoegd | `e2e/sync-merge.mjs` | +99/−0 | 6 | `a6f7f591113cd8e0` |
++| Toegevoegd | `edge-guard.test.js` | +107/−0 | 5 | `fe3bc0e80b83ac01` |
++| Toegevoegd | `food-facts-core.js` | +314/−0 | 7 | `b047414b28ace3b3` |
++| Toegevoegd | `food-facts-core.test.js` | +140/−0 | 7 | `862a10e64d9bfbe6` |
++| Gewijzigd | `household-sync-core.js` | +130/−7 | 6 | `493adbe419f47d5e` |
++| Gewijzigd | `index.html` | +13/−12 | 2, 3, 4, 5, 6, 7 | `520f851c80524802` |
++| Toegevoegd | `integrations-policy.test.js` | +50/−0 | 8 | `18badc29e2f8218a` |
++| Gewijzigd | `nav-core.js` | +12/−2 | 7 | `39b3c4df1f628fa3` |
++| Toegevoegd | `nutrition-core.js` | +245/−0 | 7 | `5354a2e696e73487` |
++| Toegevoegd | `nutrition-core.test.js` | +112/−0 | 7 | `f3e0c43afd48f9f5` |
++| Toegevoegd | `nutrition-integration.test.js` | +158/−0 | 7 | `2d7a117aa46255b7` |
++| Toegevoegd | `nutrition.js` | +316/−0 | 7 | `2d8597f9b9e163a5` |
++| Toegevoegd | `osta-exchange-core.js` | +276/−0 | 7 | `417f9b3d1bc7b6b8` |
++| Toegevoegd | `osta-exchange-core.test.js` | +139/−0 | 7 | `67ebe8316753c348` |
++| Gewijzigd | `quotes-core.js` | +43/−1 | 2 | `8c64df872dcc128a` |
++| Gewijzigd | `quotes-core.test.js` | +23/−0 | 2 | `262ebd7df3ee279f` |
++| Toegevoegd | `scripts/sync-sw-assets.mjs` | +21/−0 | 1 | `340ea0000fd867aa` |
++| Toegevoegd | `scripts/verify-sri.mjs` | +23/−0 | 3 | `ca711bb39ff79a10` |
++| Gewijzigd | `search-core.js` | +2/−0 | 7 | `fd15e55090f98bd6` |
++| Gewijzigd | `sport-training-integration.test.js` | +1/−1 | 6 | `e19fb5e67496507f` |
++| Toegevoegd | `supabase/functions/_shared/guard.ts` | +115/−0 | 5 | `bc404333d9da4fb6` |
++| Gewijzigd | `supabase/functions/data-sources/index.ts` | +13/−9 | 5 | `af3c661a5411795b` |
++| Gewijzigd | `supabase/functions/grocery-prices/index.ts` | +27/−13 | 5 | `46634ec1fc13ae30` |
++| Toegevoegd | `sw-assets.test.js` | +59/−0 | 1 | `79247bbda8d2d41e` |
++| Gewijzigd | `sw.js` | +6/−3 | 1, 2, 3, 4, 5, 6, 7 | `ce4d2d7d1f6fd59f` |
++| Toegevoegd | `sync-merge.test.js` | +157/−0 | 6 | `da0ee2090549f895` |
++| Toegevoegd | `test-fixtures/recipes/osta-gedeeld.txt` | +22/−0 | 7 | `0429d2183dc9a0dd` |
++| Toegevoegd | `test-fixtures/recipes/schema-org.json` | +1/−0 | 7 | `b479ff467249c4c0` |
++| Toegevoegd | `weather-attribution.test.js` | +21/−0 | 4 | `55272a84b45a9dc8` |
++
++Totaal: 47 toegevoegd, 17 gewijzigd, 0 verwijderd (plus dit manifest, PR 8).
+diff --git a/docs/API_INTEGRATIONS.md b/docs/API_INTEGRATIONS.md
+new file mode 100644
+index 0000000..097dff5
+--- /dev/null
++++ b/docs/API_INTEGRATIONS.md
+@@ -0,0 +1,67 @@
++# API-integratieregister Samen Thuis
++
++Centraal register: `personal-ecosystem/API_CATALOG.md` en `API_LIMITS.md`. Dit is de Samen Thuis-specifieke stand na deze wijzigingsset (2026-11-08).
++
++**Status:** ✅ werkt in code en eerder in gebruik · 🆕 nieuw in deze set · 🔒 aangescherpt · 📄 alleen gedocumenteerd/voorbereid · ⛔ niet in Samen Thuis
++**Verificatie:** "Lokaal getest" = unit-/browsertests met nagebootste antwoorden. **Geen enkele API is in deze omgeving live aangeroepen** (uitgaand verkeer naar deze hosts was geblokkeerd). Productiegedrag is dus niet geverifieerd.
++
++## 1. Overzicht
++
++| Dienst | Doel | Status | Sleutel | Aanroep | Limiet / afspraak | Fallback | Test |
++|---|---|---|---|---|---|---|---|
++| Supabase Auth/REST (project A) | Accounts, accountsync, voorkeuren, financiële bevestigingen | ✅ | Publishable key (publiek bedoeld) | Browser, gebruikers-JWT | Auth: 2 mails/uur, 30 signins/5 min/IP | Lokaal doorwerken | Bestaand + `nutrition-integration.test.js` (sync) |
++| Supabase Edge `grocery-prices` (PrijsProfeet) | Aanbiedingen | 🔒 JWT + CORS-allowlist + limiet | Optioneel `PRIJS_PROFEET_API_KEY` (secret) | Browser → Edge (gebruikers-JWT) | 30/min/gebruiker (best-effort), body ≤ 8 kB | Cache 20 termen, melding | `edge-guard.test.js` |
++| Supabase Edge `data-sources` (NED, Tankerkoenig) | Energiedata, Duitse brandstofprijzen | 🔒 idem | `NED_API_KEY`, `TANKERKOENIG_API_KEY` (secrets) | Browser → Edge | 20/min/gebruiker | Functie toont fout | `edge-guard.test.js` |
++| Supabase Edge `sport-training` | AI-placeholder | ✅ ongewijzigd (JWT al verplicht, CORS `*`) | — | Browser → Edge | — | Altijd 503 | Bestaand |
++| Open-Meteo Forecast, Air Quality, Geocoding | Weer, pollen, luchtkwaliteit | ✅ + 🆕 bronvermelding | Geen | Browser | Cache 30 min (bestaand); geen achtergrondpolling | Laatste cache + "offline" | `integrations-policy.test.js` |
++| **Open Food Facts** (`world.openfoodfacts.org`) | Product, barcode, voedingswaarden, ingrediënten, allergenen | 🆕 actief in de app (stond eerder alleen in ongebruikte `sources.js`) | Geen | Browser, alleen na klik | Product max 10/min, zoeken max 6/min (OFF: 15 resp. 10/min/IP); cache 30 dagen, max 200 producten | Cache (ook verlopen) + handmatig etiket | `food-facts-core.test.js` |
++| Osta | Receptenbeheer | 🆕 uitwisseling via bestanden/tekst | — | Geen netwerk | — | — | `osta-exchange-core.test.js` |
++| RDW Open Data (Socrata) | Voertuig op kenteken | ✅ ongewijzigd | Geen (app-token optioneel, niet ingesteld) | Browser, op verzoek | Gedeelde throttling-pool | Handmatig | `integrations-policy.test.js` (geen nieuwe koppeling) |
++| CBS StatLine, data.overheid.nl | Pompprijzen, datasets | ✅ ongewijzigd (alleen in ongebruikte `sources.js`/beta) | Geen | — | — | — | — |
++| BrainyQuote | Citaat van de dag | 🔒 extern **script verwijderd** (R4); RSS-tekst optioneel, ge-escaped | Geen | Browser | 1×/dag | Lokale gedachte van de dag | `quotes-core.test.js`, `cdn-libs.test.js` |
++| jsDelivr CDN (pdf.js 4.10.38, mammoth 1.12.2, SheetJS 0.18.5, tesseract.js 5.1.1) | Universele import | 🔒 exact gepind + SHA-384 (R5) | — | Browser, bij import | — | Melding "bibliotheek niet geladen" | `cdn-libs.test.js` |
++| Web Push | Meldingen | ⛔ | — | — | — | Inbox in de app | `integrations-policy.test.js` |
++| WebLLM / Ollama | Lokale AI | ⛔ (nog niet goedgekeurd voor Samen Thuis) | — | — | — | Regelgebaseerd | `integrations-policy.test.js` |
++| Betaalde AI-API's | — | ⛔ uitgesloten (ADR 0008) | — | — | — | — | `integrations-policy.test.js` |
++
++## 2. Open Food Facts — details
++
++- **Endpoints:** `GET /api/v2/product/{barcode}.json?fields=…` en `GET /cgi/search.pl?search_terms=…&search_simple=1&json=1&page_size=10`. Bron: [OFF API-documentatie](https://openfoodfacts.github.io/openfoodfacts-server/api/) (gelezen 2026-11-08): product 15 req/min/IP, zoeken 10 req/min/IP, "don't use it for a search-as-you-type feature", overschrijden kan een IP-ban opleveren.
++- **Velden:** `code, product_name(_nl), brands, quantity, serving_size, serving_quantity, nutriments, ingredients_text(_nl), allergens_tags, traces_tags, nutriscore_grade, nova_group, no_nutrition_data, states_tags, last_modified_t`. Geen afbeeldingen (voorkomt CC BY-SA-verplichtingen en extra verkeer).
++- **Voedingswaarden:** energie (kcal), vet, verzadigd vet, koolhydraten, suikers, vezels, eiwit, zout; per 100 g/ml én per portie. Ontbreekt per portie maar zijn portiegewicht en per 100 g bekend, dan berekend en gemarkeerd als afgeleid. Energie alleen in kJ → omgerekend (÷ 4,184, afgeleid). Zout ontbreekt maar natrium bekend → × 2,5 (afgeleid).
++- **Ontbrekend ≠ 0:** afwezig of leeg = `null` ("onbekend"); een expliciete 0 blijft 0. Allergenen: lege lijst = "onbekend", tenzij de ingrediëntenlijst bekend is ("geen opgegeven, controleer het etiket").
++- **Kwaliteit:** score 0–100 (voedingswaarden 60 %, ingrediënten 20 %, allergenen 10 %, portie 10 %) met concrete meldingen.
++- **Fouten:** `invalid` (barcode/controlecijfer), `not-found`, `rate-limit`, `server`, `network`, `timeout` (10 s). Bij netwerk-/serverfout wordt een eerder (ook verlopen) cache-exemplaar gebruikt met waarschuwing.
++- **Voorwaarden:** database ODbL, inhoud DbCL; bronvermelding staat bij elke weergave. OFF vraagt een eigen `User-Agent` (`AppName/Versie (contact)`); browsers staan het zetten van die header **niet** toe en de documentatie geeft geen browserrichtlijn → *open punt*: eigenaar vult het OFF "API usage form" in en bevestigt dat browsergebruik zonder eigen User-Agent acceptabel is.
++- **Privacy:** alleen de barcode of zoekterm verlaat het apparaat; geen account, geen persoonsgegevens.
++
++## 3. Osta — onderzoek en uitwisselingscontract
++
++- **Bevinding (2026-11-08):** Osta ("Save & Share Recipes", iPhone/iPad/Mac) noemt importeren van websites/Instagram/TikTok, delen met anderen, gedeelde boodschappenlijsten; voedingswaarden als **betaalde** Premium-functie. **Geen** API, export of webversie vermeld. Bron: App Store-pagina (id6739286231). Niet getest in de app zelf.
++- **Daarom:** geen Osta-API aangenomen. Contract `samen-thuis.recipes` versie 1 (JSON), plus lezen van gedeelde Osta-tekst en schema.org/Recipe JSON-LD (de standaard die recepten-websites gebruiken en die receptenapps doorgaans importeren — of Osta schema.org-bestanden kan importeren is **niet geverifieerd**).
++- **Rolverdeling (ADR 0001):** Osta is de primaire plek voor recepten. Samen Thuis importeert en exporteert alleen; geen formulier om recepten te maken, receptinhoud alleen-lezen.
++- **Dubbelen:** herkend op bronverwijzing (`externalRef`), id, titel + ingrediënten, of titel uit dezelfde bron met precies één kandidaat. Alleen titel bij een andere bron of meerdere kandidaten = twijfelgeval: standaard aparte kopie, bijwerken alleen op verzoek.
++- **Herimport — bron wint:** titel, porties, ingrediëntenlijst, bereiding, tags en opgegeven voedingswaarden komen uit de nieuwe import. Wat de bron niet (meer) levert, blijft behouden en wordt in het voorbeeld gemeld; vervallen ingrediënten en daarmee vervallen productkoppelingen worden expliciet genoemd. Annotaties van Samen Thuis (productkoppeling, eigen grammen, planningsporties) blijven staan.
++- **Formaat v1** (`exportBundle`): `{ format, version: 1, exportedAt, app, note, recipes[ …recipe, checksum ], products[] }`. Nieuwere versies worden geweigerd met de melding "werk Samen Thuis bij".
++
++## 4. Onderzocht en niet toegevoegd
++
++| Onderwerp | Bevinding | Eigenaar / vervolg |
++|---|---|---|
++| Socrata (RDW) | Bestaande kentekenopvraging in Samen Thuis (✅ in centrale catalogus). Optioneel app-token: niet ingesteld. | Samen Thuis (bestaand). Geen nieuwe Socrata-datasets zonder akkoord. |
++| NED | Bestaande functie via Edge Function `data-sources` (✅ centraal, bron alleen evcc-docs). Nu achter JWT-controle. | Samen Thuis (bestaand). Een energiedashboard is in geen app vastgelegd → **besluit nodig** (Hub toont alleen technische status). |
++| evcc | Alleen genoemd als bron voor NED-documentatie; geen integratie in enige app. | Niet vastgelegd. Lokale software (eigen netwerk); als ooit gewenst: aparte ADR. |
++| Open-Meteo | Hoort aantoonbaar bij Samen Thuis (Vandaag, Weer, kledingadvies, pollen). Alleen bronvermelding toegevoegd. | Samen Thuis; 🟢 Sportapp later voor buitentraining. |
++| Web Push | Centraal: I-4 Hub (fase F6, VAPID-key als Edge-secret); I-9 Samen Thuis → `hub.notify()` "later, opt-in, losse PR na akkoord". Inbox heeft een push-voorkeur (standaard uit) zonder implementatie. | Hub. **Besluit nodig** of Samen Thuis eigen push krijgt of via I-9. Benodigd ontwerp in `docs/IMPLEMENTATION_STATUS.md` § 5. |
++| OAuth 2.1 | Centraal ADR 0017: alleen spike in Hub; "Samen Thuis en Coach doen niet mee". | Hub. Samen Thuis: eigen sessies; tokens niet app-gebonden (restrisico B-13). |
++| WebLLM / Ollama | Centraal gepland voor Sportapp/SIDEQUEST; CSP-hosts en modellicenties eerst. | Niet voor Samen Thuis zonder besluit. |
++
++## 5. Benodigde configuratie (eigenaar)
++
++| Item | Waar | Nodig voor |
++|---|---|---|
++| `ALLOWED_ORIGINS` (bijv. `https://kesga44-jpg.github.io`) | Supabase Edge Function secret | `grocery-prices`, `data-sources` na redeploy |
++| `NED_API_KEY`, `TANKERKOENIG_API_KEY`, optioneel `PRIJS_PROFEET_API_KEY` | Supabase secrets (bestaand) | Bestaande functies |
++| `SUPABASE_URL`, `SUPABASE_ANON_KEY` | Automatisch aanwezig in Supabase Edge runtime (volgens Supabase-documentatie; niet geverifieerd in dit project) | JWT-controle in `guard.ts` |
++| OFF API usage form | openfoodfacts.org | Voorwaarden OFF |
++| Redeploy Edge Functions | Supabase CLI, **alleen na akkoord** | PR-8 actief maken |
+diff --git a/docs/ARCHITECTURE.md b/docs/ARCHITECTURE.md
+new file mode 100644
+index 0000000..f8a6696
+--- /dev/null
++++ b/docs/ARCHITECTURE.md
+@@ -0,0 +1,72 @@
++# Architectuur Samen Thuis
++
++Leidend: `personal-ecosystem/ARCHITECTURE.md` (goedgekeurd 2026-11-07). Dit document beschrijft alleen Samen Thuis.
++
++## 1. Plaats in het ecosysteem
++
++| Onderwerp | Afspraak | Bron |
++|---|---|---|
++| Rol | Huishouden, financiën (incl. toekomstig beleggen), boodschappen, voorraad, woning, planning, huishoud-challenges | `APP_REGISTRY.md` |
++| Supabase | Project A, schema `public` (exclusief Samen Thuis), buckets `sport-training`, `profile-photos` | ADR 0001 centraal |
++| Zelfstandig | Werkt offline en zonder andere apps; geen container voor Hub, Sportapp of SIDEQUEST | `ARCHITECTURE.md` § 1 |
++| Stack | Vanilla JS, geen build, GitHub Pages | `ARCHITECTURE.md` § 3.2 |
++| Wijzigingen | Eén PR per onderwerp, voorstel vooraf | ADR 0011 centraal |
++| Sport & Training | Volledig in gebruik tot poort G-SPORT; alleen fixes | ADR 0002 centraal |
++| Inbox | Blijft eigenaar huishoudmeldingen; Hub-koppeling I-9 later | ADR 0004 centraal |
++
++## 2. Opbouw van de client
++
++```
++index.html
++├─ css/*.css, styles.css, shell.css, sportcoach.css, css/nutrition.css
++├─ cdn-libs.js            register externe bibliotheken (versie + SRI), geverifieerde pdf.js-import   [nieuw]
++├─ *-core.js              zuivere logica (UMD, getest in Node)
++│   ├─ data-core.js       opslag, herstel, conflictbeslissing (legacy-sync)
++│   ├─ household-sync-core.js  accountsync per onderdeel, versiecontrole
++│   ├─ food-facts-core.js Open Food Facts-client: normalisatie, cache, limieten, fouten              [nieuw]
++│   ├─ nutrition-core.js  recepten, voedingsberekening met dekking, weekmenu-samenvatting             [nieuw]
++│   ├─ osta-exchange-core.js  import/export recepten (Osta-tekst, schema.org, eigen formaat)          [nieuw]
++│   └─ … (finance, budget-ledger, import, nav, search, sportcoach, inbox, quotes, …)
++├─ app.js                 hoofdapp (render(), opslag, sync, pagina's)
++├─ uitbreidingsmodules    haken op render(): challenges, account-sync, inbox, weather-extras, sportcoach, nutrition [nieuw]
++├─ nav-groups.js          navigatieschil (onderbalk, hubs, subpagina's, #/route) — laatst geladen
++└─ search.js              centrale zoekfunctie (Ctrl/Cmd+K)
++sw.js                     service worker: precache van alle assets, network-first, offline fallback
++supabase/functions/       Edge Functions (Deno): grocery-prices, data-sources, sport-training, _shared/guard.ts [nieuw]
++supabase/migrations/      additieve migraties + supabase/rollbacks/
++```
++
++### Navigatie
++
++Vijf hoofdonderdelen in de onderbalk (Vandaag, Financiën, Sport, Doelen, Meer). Lange pagina's zijn hubs met subpagina's (`NavCore.HUBS`). Nieuw: **Meer → Huishouden → Voeding** met subpagina's *Voeding bij het weekmenu*, *Receptkopieën uit Osta*, *Productinformatie*, *Osta en recepten uitwisselen*. Routes: `#/voeding`, `#/voeding/producten`, enz. De centrale zoekfunctie doorzoekt nu ook recepten (incl. ingrediënten) en producten.
++
++## 3. Gegevens en synchronisatie
++
++- Lokaal eerst: `localStorage['samenThuisDataV2']`. Herstelpaden (beschadigde data, back-up vóór herstel) in `data-core.js`.
++- Twee syncroutes (bestaand, ongewijzigd):
++  - **Legacy**: één versleutelde payload in `household_data` (anon, R1 — zie `docs/SECURITY.md`).
++  - **Account**: per top-level onderdeel een versleutelde rij in `household_state`, schrijven via RPC `put_household_state` met versiecontrole. Conflict → gebruiker kiest per onderdeel; nooit stil overschrijven.
++- Versleuteling client-side: AES-GCM-256, sleutel via PBKDF2-SHA256 (250.000 iteraties) uit de huishoudcode.
++- Nieuw onderdeel `nutrition` reist automatisch mee in beide routes, in back-ups en in herstel. Zie `docs/DATA_MODEL.md`.
++- **Automatisch samenvoegen (nieuw):** beide routes bewaren lokaal de laatst gesynchroniseerde versie als basis. Wijzigen beide huisgenoten hetzelfde onderdeel (bijv. allebei een boodschap toevoegen), dan voegt `household-sync-core.js` (`merge3`/`mergeSection`/`mergeData`) de wijzigingen samen: lijsten op `id`, objecten per sleutel, tekstlijsten als verzameling, verwijderen aan één kant wordt gerespecteerd, gewijzigd-versus-verwijderd houdt het item. Alleen als hetzelfde veld aan beide kanten anders is gewijzigd, vraagt de app een keuze; daarbij is **Beide samenvoegen** de aanbevolen optie (bij echte veldconflicten wint dan de cloudversie, de laatst opgeslagen versie van de huisgenoot). Herstelde back-ups (`hold`) worden nooit automatisch samengevoegd. Ophalen gebeurt bij openen, bij terugkeren naar de app, bij `online` en elke 30 s zolang de app zichtbaar is.
++- Gezamenlijk versus persoonlijk: huishouddata in `samenThuisDataV2`/`household_state` (leden huishouden); persoonlijke voorkeuren en profiel in `personal_preferences` (alleen eigenaar, RLS). Voeding is huishouddata; persoonlijke voeding is buiten scope (Sportapp).
++
++## 4. Externe diensten
++
++Volledig register: `docs/API_INTEGRATIONS.md`. Principe (centraal `INTEGRATIONS.md`): publieke API's zonder sleutel rechtstreeks uit de browser (Open-Meteo, Open Food Facts, RDW, CBS); API's met sleutel alleen via een Edge Function met JWT-controle (NED, PrijsProfeet, Tankerkoenig).
++
++## 5. AI
++
++Volgorde volgens centrale ADR 0008: regelgebaseerd → WebLLM → Ollama. In Samen Thuis is alleen regelgebaseerd geïmplementeerd (o.a. de handmatig te starten *Voedingscontrole*). WebLLM en Ollama zijn voor Samen Thuis niet goedgekeurd (CSP-hosts en modellicenties eerst, fase F6) en dus niet gebouwd. De Sport & Training-AI-functie blijft een placeholder die altijd 503 geeft.
++
++## 6. Bewust niet in Samen Thuis
++
++| Onderwerp | Eigenaar volgens centrale documentatie | Wat hier wel staat |
++|---|---|---|
++| Web Push / pushmeldingen | Hub (I-4, fase F6); koppeling Samen Thuis → Hub via I-9, later en opt-in | Inbox in de app (ongewijzigd) |
++| Herinneringen buiten Samen Thuis | Uitgesteld (ADR 0018) | Routines, agenda, inbox |
++| Technische status, energie-/externe-datadashboards | Hub (status) — energie: geen eigenaar vastgelegd | Bestaande NED-functie via Edge Function (ongewijzigd) |
++| Receptenbeheer | Osta (extern) | Alleen-lezen receptkopieën via import/export + voedingsannotaties (ADR 0001 Samen Thuis) |
++| Persoonlijke voeding, lichaamsgegevens | Sportapp | Voedingsplanning voor het huishouden, per portie (ADR 0001 Samen Thuis) |
++| OAuth 2.1 / SSO | Alleen spike in Hub (ADR 0017); Samen Thuis doet niet mee | Eigen REST-authwrapper, ongewijzigd |
++| Accountverwijdering/data-export ecosysteem | Opgeschort (ADR 0019) | Bestaande JSON-back-up |
+diff --git a/docs/DATA_MODEL.md b/docs/DATA_MODEL.md
+new file mode 100644
+index 0000000..2989a72
+--- /dev/null
++++ b/docs/DATA_MODEL.md
+@@ -0,0 +1,95 @@
++# Datamodel Samen Thuis
++
++## 1. Lokale opslag (`localStorage`)
++
++| Sleutel | Inhoud | Sync | In back-up |
++|---|---|---|---|
++| `samenThuisDataV2` | Alle huishoudgegevens (zie § 2) | Ja (per top-level onderdeel, versleuteld) | Ja |
++| `samenThuisDataV1` | Oude versie, alleen migratiebron | Nee | — |
++| `samenThuisSyncV1` | Huishoudcode, laatste synctijd (legacy-route) | Nee | Nee |
++| `samenThuisSyncConflictV1`, `samenThuisRestoreHold` | Conflict- en herstelstatus | Nee | Nee |
++| `samenThuisPreV23Backup`, `samenThuisCorruptBackup`, `samenThuisPreRestoreBackup` | Veiligheidskopieën | Nee | — |
++| `samenThuisPersonalAuthV1` | Supabase-sessie (persoonlijk account) | Nee | Nee |
++| `samenThuisQuoteCacheV1` | Citaat van de dag (alleen RSS-tekst) | Nee | Nee |
++| **`samenThuisFoodCacheV1`** 🆕 | Open Food Facts-cache per barcode `{ code: { t, p } }`, max 200, 30 dagen | Nee (apparaatgebonden, geen persoonsgegevens) | Nee |
++| **`samenThuisFoodRate_product`, `_search`** 🆕 | Tijdstempels voor de verzoeklimiet | Nee | Nee |
++| **`samenThuisSyncBaseV1`** 🆕 | Oude code-sync: gegevens zoals na de laatste geslaagde synchronisatie (basis voor automatisch samenvoegen) | Nee | Nee |
++| **`samenThuisAccountSyncBaseValuesV1`** 🆕 | Accountsync: waarde per onderdeel bij de laatste geslaagde ronde (per account + huishouden) | Nee | Nee |
++| **`samenThuisPreMergeBackup`** 🆕 | Kopie van de lokale gegevens vlak vóór een automatische samenvoeging | Nee | Nee |
++
++De drie sync-basissleutels zijn herbouwbaar: bij een volle opslag ruimt `save()` ze eerst op en valt de app terug op "kies een versie". Ze staan, net als alle huishouddata, onversleuteld op het apparaat (zie `docs/SECURITY.md` S-9).
++
++## 2. `samenThuisDataV2`
++
++Bestaande onderdelen blijven ongewijzigd: `meta`, `settings` (lokaal), `planning`, `calendars`, `meals`, `groceries`, `freezer`, `chores`, `stock`, `ideas`, `home`, `trip*`, `dailyAnswers`, `budget*`/`budgetV23` (ledger in centen), `priceReferences`, `offers25`, `challengeDataV26`, `sportCoach`, enz. `migrateData` neemt onbekende velden ongewijzigd over (v23.1-principe).
++
++### Wijziging aan bestaand onderdeel (additief)
++
++`meals[]` krijgt optioneel `recipeId: string` — koppeling aan een recept in `nutrition.recipes`. Oude maaltijden zonder dit veld werken ongewijzigd. Bij het verwijderen van een recept wordt alleen de koppeling verwijderd, nooit de maaltijd.
++
++### Nieuw onderdeel `nutrition` 🆕
++
++```js
++nutrition: {
++  version: 1,
++  products: [{
++    id: 'off-8710400000006' | 'man-…',
++    barcode: '8710400000006' | '',
++    name, brand, quantity, servingSize,       // tekst
++    servingGrams: number | null,
++    per100g:    { energyKcal, fat, saturatedFat, carbohydrates, sugars, fiber, proteins, salt },  // number | null
++    perServing: { … zelfde sleutels … },        // number | null
++    derived: ['energyKcal' | 'salt' | 'perServing'],   // welke waarden berekend zijn
++    noNutritionData: boolean,
++    ingredientsText: string,
++    allergens: string[], traces: string[],
++    allergensStatus: 'declared' | 'none-declared' | 'unknown',
++    nutriscore: 'a'…'e' | null, nova: 1…4 | null,
++    source: 'openfoodfacts' | 'manual', sourceUrl, license,
++    fetchedAt: ISO, offModifiedAt: ISO | null,
++    quality: { score: 0…100, level: 'goed'|'gedeeltelijk'|'beperkt', issues: string[], knownNutrients }
++  }],
++  recipes: [{                      // alleen-lezen kopieën uit Osta of een receptbestand (ADR 0001)
++    // — receptinhoud (uit de bron; in Samen Thuis niet bewerkbaar, bij herimport wint de bron) —
++    id, title, servings: 1…50, servingsKnown: boolean,
++    ingredients: [{ id, text, name,
++                    grams: number | null, gramsApprox: boolean,   // gram uit de brontekst, anders annotatie
++                    productId: string | null }],                  // annotatie Samen Thuis
++    steps: string[], tags: string[], notes: string,
++    declaredPerServing: { …voedingssleutels… } | null,   // zoals opgegeven door de bron
++    source: 'osta' | 'schema.org' | 'samen-thuis' | 'import' | 'manual'(*),
++    externalRef: string | null, sourceUrl: 'https://…' | '', importedAt: ISO | null,
++    // — annotaties Samen Thuis —
++    servingsOverride: number | null,                     // porties voor de planning
++    createdAt, updatedAt
++  }]
++}
++```
++
++(*) `manual` komt alleen voor in data uit de niet-gemergde testversie 26.0; Samen Thuis maakt geen recepten meer aan.
++
++Regels:
++
++- **Receptinhoud is van Osta.** Samen Thuis legt alleen productkoppeling, gram (waar de bron geen gewicht geeft) en planningsporties vast.
++- **Onbekend is `null`, nooit 0.** Berekende totalen zijn alleen "volledig" als elk ingrediënt voor die waarde een product én gewicht heeft; anders ondergrens (≥) met dekking (`known`/`missing`).
++- Grenzen: 500 producten, 500 recepten, 60 ingrediënten per recept, teksten afgekapt (titel 160, ingrediënten 4.000 tekens).
++- Geen persoonsgegevens: geen persoon per maaltijd/inname, geen lichaams- of gezondheidsvelden (getest in `nutrition-integration.test.js`).
++- Synchronisatie: `nutrition` is één onderdeel in `household_state` (versleuteld). Gelijktijdige wijziging op twee apparaten → conflict, gebruiker kiest per onderdeel (bestaand gedrag). Grootte: ~1–3 kB per product; bij 200 producten ruim binnen de bestaande payloads.
++
++## 3. Uitwisselingsformaat `samen-thuis.recipes` v1
++
++Zie `osta-exchange-core.js` (`exportBundle`) en `docs/API_INTEGRATIONS.md` § 3. Checksum per recept (FNV-1a, alleen voor reconciliatie, geen beveiliging).
++
++## 4. Database (Supabase project A, schema `public`)
++
++Ongewijzigd in deze set. Tabellen en RLS: zie `supabase/migrations/` en `personal-ecosystem/REPO_ANALYSIS.md` § Fase 2.
++
++| Tabel/functie | Doel | RLS |
++|---|---|---|
++| `household_data` | Legacy versleutelde payload | Aan; `anon` lezen/invoegen/bijwerken met `using (true)` (R1) |
++| `households`, `household_members` | Huishouden (max 2 leden) | Leden lezen; schrijven via RPC |
++| `household_state`, `household_legacy_imports` | Accountsync per onderdeel | Leden lezen; schrijven via `put_household_state` |
++| `personal_preferences` | Voorkeuren, profiel | Alleen eigenaar |
++| `chalkboard_messages` | Krijtbord | Leden |
++| `finance_income_months`, `finance_income_history`, `finance_distributions` | Inkomens en verdelingen | Leden lezen; RPC; updates geblokkeerd |
++| Buckets `sport-training`, `profile-photos` | Privébestanden (met grootte- en MIME-limiet) | Lidmaatschap/eigenaar |
+diff --git a/docs/IMPLEMENTATION_STATUS.md b/docs/IMPLEMENTATION_STATUS.md
+new file mode 100644
+index 0000000..c9fc24e
+--- /dev/null
++++ b/docs/IMPLEMENTATION_STATUS.md
+@@ -0,0 +1,100 @@
++# Implementatiestatus en resterende aandachtspunten
++
++Releasekandidaat **26.0-rc1** (2026-11-08). Basis: `main` @ `4da8078`. Niets gepusht of gemerged; geleverd als ZIP met afzonderlijke PR-branches (git-bundle) en patches.
++
++## 1. Legenda
++
++| Label | Betekenis |
++|---|---|
++| **Geïmplementeerd** | Code staat in deze set |
++| **Getest** | Geautomatiseerde test in `*.test.js` (CI) |
++| **Lokaal getest** | In een echte browser (Chromium via `e2e/*.mjs`), zonder live diensten |
++| **Productiegeverifieerd** | Gecontroleerd tegen live diensten/productie — **niets in deze set** |
++| **Nog niet geïmplementeerd** | Onderzocht of voorbereid, geen code |
++| **Nog niet goedgekeurd** | Vereist besluit van de eigenaar vóór bouwen of activeren |
++
++## 2. Statusmatrix
++
++| Onderdeel | Geïmpl. | Getest | Lokaal getest | Productie | Opmerking |
++|---|---|---|---|---|---|
++| Service worker: volledige precache, cacheversiebeheer, `scripts/sync-sw-assets.mjs` | ✅ | ✅ | ✅ offline | ❌ | PR 1 |
++| R4 BrainyQuote-script verwijderd, lokale gedachte van de dag | ✅ | ✅ | ✅ | ❌ | PR 2 (roadmap PR-7) |
++| R5 CDN exact gepind + SRI, geverifieerde pdf.js-import | ✅ | ✅ | ✅ met npm-bestanden (import-browsertest 9/9, incl. manipulatietest) | ❌ | PR 3; **live CDN nog niet gecontroleerd** (`verify-sri.mjs`, `E2E_LIVE_CDN=1`) |
++| R3 SheetJS-upgrade | ❌ | — | — | — | Prioriteit 3 |
++| Documentimport en scan (PDF, DOCX, XLSX, XLS, OCR) | ✅ bestaand | ⚠️ 4 Node-tests overgeslagen | ✅ in Chromium | ❌ | Niet afgerond tot de live-CDN-run groen is |
++| Open-Meteo bronvermelding | ✅ | ✅ | ✅ | ❌ | PR 4 |
++| R7 Edge Functions: JWT, CORS-allowlist, limieten | ✅ code | ✅ (guard in Node) | ❌ niet in Deno/Supabase | ❌ | PR 5; prioriteit 4: testen in eigen project, daarna deploy na akkoord |
++| **Sync: wijzigingen van beide huisgenoten automatisch samenvoegen** | ✅ | ✅ | ✅ oude code-sync (2 browsers, nagebootste tabel) | ❌ | PR 6; accountroute alleen met nagebootste cloud getest |
++| Voeding: OFF, receptkopieën uit Osta, voedingsberekening, weekmenu | ✅ | ✅ | ✅ zonder netwerk | ❌ **OFF nooit live aangeroepen** | PR 7; architectuur gecorrigeerd (ADR 0001, geaccepteerd) |
++| Documentatie, CI | ✅ | — | — | ❌ | PR 8; CI niet op GitHub gedraaid |
++| Database, RLS, Storage, Supabase-configuratie | geen wijziging | bestaande SQL-tests groen | — | — | Prioriteit 2: onderzoek, geen wijziging zonder akkoord + back-up |
++| CSP | ❌ | — | — | — | Prioriteit 5; voorstel in `docs/SECURITY.md` |
++| Web Push | ❌ | — | — | — | Prioriteit 6; Hub-eigendom vastleggen |
++| Energie (NED/evcc) | bestaand, ongewijzigd | — | — | — | Prioriteit 7; eigenaar vastleggen |
++| Opruimen verouderde bestanden | ❌ (niets verwijderd) | — | — | — | Prioriteit 8; aparte PR |
++| WebLLM/Ollama, OAuth 2.1 | ❌ | — | — | — | Niet goedgekeurd / Hub-spike |
++| Sport & Training | ongewijzigd | bestaand | — | — | Centrale ADR 0002: alleen fixes |
++
++## 3. PR-stapel (ADR 0011: één onderwerp per PR)
++
++De PR's zijn **gestapeld**: elke branch bouwt voort op de vorige en bevat alleen het eigen onderwerp. Merge in deze volgorde; na elke merge de volgende PR rebasen op `main` (diff blijft gelijk). Elke stap is afzonderlijk getest (volledige suite groen, zie `docs/RC_VALIDATION.md`).
++
++| # | Branch | Onderwerp | Bestanden (kern) | Risico | Voorwaarde vóór merge |
++|---|---|---|---|---|---|
++| 1 | `pr/1-sw-precache` | Service worker compleet + versiebeheer | `sw.js`, `sw-assets.test.js`, `scripts/sync-sw-assets.mjs` | Laag | — |
++| 2 | `pr/2-r4-brainyquote` | Extern citaatscript weg, lokale gedachte | `index.html`, `app.js` (renderQuote), `quotes-core.js` + test | Laag | — |
++| 3 | `pr/3-r5-cdn-sri` | Bibliotheken gepind + SRI, geverifieerde pdf.js | `cdn-libs.js` + test, `app.js` (laders), `index.html`, `scripts/verify-sri.mjs`, `e2e/import-browser.mjs` | Laag–middel | `node scripts/verify-sri.mjs` en `E2E_LIVE_CDN=1 node e2e/import-browser.mjs` groen |
++| 4 | `pr/4-open-meteo-bron` | Open-Meteo-bronvermelding | `app.js` (3 plekken), `weather-attribution.test.js` | Laag | — |
++| 5 | `pr/5-r7-edge-guard` | Edge Functions: JWT, CORS, limieten | `supabase/functions/_shared/guard.ts`, `grocery-prices`, `data-sources`, `app.js` (token meesturen), `edge-guard.test.js`, deploy-docs | Middel | Mergen mag zonder deploy (app stuurt token al mee). **Deploy alleen na test in eigen project + akkoord** |
++| 6 | `pr/6-sync-samenvoegen` | Wijzigingen van huisgenoot automatisch samenvoegen | `household-sync-core.js`, `account-sync.js`, `app.js` (code-sync, conflictkaart, opslag-vol), `sync-merge.test.js`, `e2e/sync-merge.mjs` | Middel | Eerst op twee eigen apparaten proberen met een verse JSON-back-up |
++| 7 | `pr/7-voeding` | Voedingsplanning, OFF, receptkopieën uit Osta | `food-facts-core.js`, `nutrition-core.js`, `osta-exchange-core.js`, `nutrition.js`, `css/nutrition.css`, `nav-core.js`, `search-core.js`, `index.html`, tests, fixtures, `e2e/smoke.mjs`, `docs/adr/0001-…` | Middel | Centrale docs-PR (`docs/personal-ecosystem-voeding.patch`) in `personal-ecosystem` |
++| 8 | `pr/8-docs-ci` | Documentatie en CI | `README.md`, `CLAUDE.md`, `AGENTS.md`, `CHANGELOG.md`, `docs/*`, `.env.example`, workflow, `integrations-policy.test.js`, `UPLOAD_MANIFEST.md` | Laag | — |
++
++Aanvullend, in een andere repository: `personal-ecosystem` branch `docs/voeding-osta-samen-thuis` (patch `docs/personal-ecosystem-voeding.patch`).
++
++## 4. Prioriteiten (eigenaar, 2026-11-08) en stand
++
++| Prio | Onderwerp | Actie | Stand in rc1 |
++|---|---|---|---|
++| 1 | Voeding | Architectuur en ADR corrigeren | ✅ ADR 0001 herschreven en geaccepteerd; code: geen recept-aanmaak, receptinhoud alleen-lezen, bron wint bij herimport, alleen voedingsannotaties; centrale patch klaar |
++| 2 | Beveiliging | Database-RLS en functies onderzoeken | ⏳ Volgende stap. Bekend: R1 (`household_data` anon), S-6 (`search_path = public`). Alleen onderzoek + migratievoorstel + lokale SQL-tests; niets uitvoeren |
++| 3 | Dependencies | SheetJS upgraden en SRI controleren | ⏳ SRI lokaal bewezen (manipulatietest); live-controle en SheetJS-upgrade open |
++| 4 | Edge Functions | JWT en CORS testen, daarna deployen | ⏳ Code + unit-tests klaar; Deno/Supabase-test en deploy open |
++| 5 | CSP | Beleid opstellen en testen | ⏳ Voorstel staat in `docs/SECURITY.md` |
++| 6 | Web Push | Eigenaarschap bij Hub bepalen | ⏳ Niets gebouwd; ontwerpschets § 6 |
++| 7 | Energie | Eigenaarschap vastleggen | ⏳ |
++| 8 | Opruimen | Verouderde bestanden via aparte PR | ⏳ |
++| — | Sync (nieuw verzoek) | Toevoegingen van de huisgenoot automatisch zien | ✅ PR 6 |
++
++## 5. Resterende beslissingen
++
++| # | Beslissing | Opties |
++|---|---|---|
++| D-1 | ~~Eigenaarschap voeding~~ | **Besloten** (ADR 0001). Nog: centrale docs-PR mergen |
++| D-3 | Redeploy Edge Functions (PR 5) | Na test in eigen/staging-project; gebruikers zonder account verliezen aanbiedingen/NED |
++| D-4 | Gateway-JWT aan of `--no-verify-jwt` | Hangt af van preflight-test |
++| D-5 | SheetJS-versie via `cdn.sheetjs.com` | Versie kiezen, hash berekenen, import-browsertest |
++| D-6 | CSP invoeren | Testbranch met voorstel |
++| D-7 | Web Push: Hub-eigendom (I-4) en Samen Thuis via I-9 | Vastleggen in centrale docs |
++| D-8 | Lokale AI (WebLLM/Ollama) voor voedingsplanning | Pas na apart besluit; altijd handmatig gestart |
++| D-9 | Energiedashboard: eigenaar | Samen Thuis houden / Hub / stoppen |
++| D-10 | DB-1: anon-toegang `household_data` intrekken (R1) | Na back-up + hersteltest; let op: oude code-sync stopt dan (accountsync vereist) |
++| D-11 | DB-2: `search_path = ''` | Migratie + SQL-tests |
++| D-12 | OFF API usage form; browsergebruik zonder eigen User-Agent | Eigenaar |
++| D-13 | Opruim-PR | Lijst in roadmap PR-12 |
++| D-14 | Sync: bij echt veldconflict met "Beide samenvoegen" wint de cloudversie | Akkoord, of liever per veld kiezen (meer UI-werk) |
++
++## 6. Web Push — ontwerpschets (niets gebouwd)
++
++Centraal: Hub is eigenaar (I-4, fase F6); Samen Thuis → Hub via `hub.notify()` (I-9, later, opt-in, losse PR). Als toch push vanuit Samen Thuis: opt-in per apparaat na gebruikersactie; VAPID private key alleen als Edge-secret; tabel `push_subscriptions` met RLS alleen-eigenaar en RPC-schrijven (migratie + akkoord); Edge Function met JWT; `push`-handler in `sw.js`; voorkeuren per categorie in de bestaande Inbox (veld `push`, standaard uit); uitzetten = abonnement intrekken; iOS ≥ 16.4 alleen als beginscherm-PWA.
++
++## 7. Bekende beperkingen
++
++- Geen externe API live aangeroepen; CDN-hashes niet tegen jsDelivr gecontroleerd; Edge Functions niet in Deno gedraaid.
++- Sync: de basis voor samenvoegen ontstaat pas na de eerste geslaagde synchronisatie met de nieuwe versie. Een conflict dat al openstond vóór de update los je op met **Beide samenvoegen** (zonder basis: toevoegingen van beide blijven, maar iets dat aan één kant is verwijderd kan terugkomen).
++- Sync: beide apparaten moeten de nieuwe versie hebben voor automatisch samenvoegen; een oud apparaat blijft om een keuze vragen (veilig).
++- Rate limiting in Edge Functions is per instantie, niet duurzaam.
++- Voedingsberekening: ml ≈ g en lepels zijn benaderingen (≈); stuks hebben geen gewicht tot je grammen invult.
++- Receptkopie kan achterlopen op Osta tot je opnieuw importeert (geen Osta-API).
++- Barcodescan met camera niet gebouwd.
++- Bij een SRI-fout meldt de app "controleer je internetverbinding" (browsers onderscheiden een geweigerd script niet van een netwerkfout).
+diff --git a/docs/INSTALLATION.md b/docs/INSTALLATION.md
+new file mode 100644
+index 0000000..6f617dc
+--- /dev/null
++++ b/docs/INSTALLATION.md
+@@ -0,0 +1,52 @@
++# Installatie en configuratie
++
++## 1. Lokaal draaien
++
++Geen buildstap en geen afhankelijkheden nodig.
++
++```bash
++# in de map van de uitgepakte repository
++python3 -m http.server 8080        # of: npx serve .
++# open http://localhost:8080
++```
++
++Een service worker werkt alleen via `http://localhost` of `https://`, niet via `file://`.
++
++## 2. Tests
++
++```bash
++node --version                     # ≥ 22.18
++node --test *.test.js              # als niet-root voor de SQL-tests (PostgreSQL 14–16 nodig)
++node e2e/smoke.mjs                 # optioneel: npm i -g playwright && npx playwright install chromium
++node scripts/verify-sri.mjs        # optioneel, vereist internet
++```
++
++PostgreSQL ontbreekt? Dan worden de SQL-tests overgeslagen met een melding; in CI faalt de workflow juist dan, zodat ze niet ongemerkt wegvallen.
++
++## 3. Configuratie frontend
++
++De frontend heeft **geen** geheime configuratie. De Supabase-project-URL en de publishable key staan in `app.js` (publiek bedoeld; RLS beschermt de gegevens). Er is geen `.env` nodig voor de app. Zie `.env.example` voor de Supabase-/Edge-variabelen die alleen buiten de frontend horen.
++
++In de app zelf:
++
++- **Instellingen → Account en beveiliging:** persoonlijk account (Supabase Auth). Nodig voor accountsync en, na redeploy van de Edge Functions, voor aanbiedingen/NED.
++- **Instellingen → Synchronisatie:** huishoudcode (legacy) of accountsync (aanbevolen).
++- **Weer:** locatie op de weerpagina.
++- **Voeding:** geen configuratie; Open Food Facts vraagt geen sleutel.
++
++## 4. Supabase en Edge Functions (alleen eigenaar, alleen na akkoord)
++
++```bash
++npx supabase login
++npx supabase link --project-ref vwfuetxgapzfivydzhxc
++npx supabase secrets set ALLOWED_ORIGINS=https://kesga44-jpg.github.io
++npx supabase secrets set NED_API_KEY=…            # bestaand, alleen als nog niet gezet
++npx supabase functions deploy grocery-prices
++npx supabase functions deploy data-sources
++```
++
++Migraties staan in `supabase/migrations/` en worden **niet** automatisch uitgevoerd. Zie `docs/MIGRATIONS.md`. Gebruik nooit een service-role key in de frontend, in tests of in deze repository.
++
++## 5. Publiceren
++
++GitHub Pages vanaf `main` (bestaande opzet; exacte URL niet geverifieerd in deze analyse). Na publicatie: één keer verversen zodat de nieuwe service worker (`samen-thuis-v37-voeding`) actief wordt.
+diff --git a/docs/MIGRATIONS.md b/docs/MIGRATIONS.md
+new file mode 100644
+index 0000000..2437816
+--- /dev/null
++++ b/docs/MIGRATIONS.md
+@@ -0,0 +1,45 @@
++# Migratiehandleiding
++
++## 1. Deze wijzigingsset: geen databasewijziging
++
++Er is **geen** nieuwe SQL-migratie, tabel, bucket of policy toegevoegd. Alle nieuwe gegevens (`nutrition`, `meals[].recipeId`) staan in de bestaande versleutelde huishoudopslag. Er is niets uitgevoerd op Supabase-project A of B.
++
++## 2. Clientmigratie (automatisch, niet-destructief)
++
++| Van | Naar | Hoe | Terug |
++|---|---|---|---|
++| Geen `nutrition` | `nutrition = { version: 1, products: [], recipes: [] }` | Pas bij openen van Voeding (`normalizeStore`) | Oudere app-versie negeert het veld; `migrateData` behoudt het |
++| `meals[]` zonder `recipeId` | Optioneel `recipeId` na koppelen | Alleen door gebruikersactie | Veld wordt door oudere versies genegeerd |
++| Service worker `samen-thuis-v36-finance` | `samen-thuis-v37-voeding` | Nieuwe SW installeert en verwijdert oude cache bij activatie | Vorige `sw.js` terugzetten |
++
++Oude back-ups (zonder `nutrition`) zijn volledig herstelbaar. Nieuwe back-ups met `nutrition` zijn herstelbaar in oudere versies (veld blijft bewaard maar is daar niet zichtbaar).
++
++## 3. Edge Functions (code gewijzigd, deploy vereist akkoord)
++
++`grocery-prices` en `data-sources` gebruiken nu `supabase/functions/_shared/guard.ts`. Activeren gebeurt pas bij redeploy:
++
++```bash
++# Alleen na expliciet akkoord van de eigenaar (geen productiewijziging zonder toestemming).
++npx supabase secrets set ALLOWED_ORIGINS=https://kesga44-jpg.github.io
++npx supabase functions deploy grocery-prices
++npx supabase functions deploy data-sources
++```
++
++Gevolg: aanbiedingen, NED en Tankerkoenig werken alleen nog voor gebruikers met een persoonlijk account (aangemeld). De app stuurt automatisch het sessietoken mee; zonder sessie verschijnt "Aanmelden vereist". Terugdraaien: vorige functieversie opnieuw deployen (git-tag vóór deze wijziging).
++
++Open vraag: of de Supabase-gateway met JWT-verificatie aan de CORS-preflight (`OPTIONS` zonder token) doorlaat, is niet geverifieerd. Als niet: bewust besluit nodig om `--no-verify-jwt` te houden; de functie blijft dan via de eigen JWT-controle afgeschermd.
++
++## 4. Regels voor toekomstige migraties (ongewijzigd, centraal)
++
++1. Additief en herhaalbaar; rollback in `supabase/rollbacks/` (niet in `supabase/migrations/`).
++2. RLS aan in dezelfde migratie; `revoke all from anon, authenticated`; minimale grants.
++3. `security definer` met `set search_path = ''` (let op: bestaande functies gebruiken nog `public`, zie `docs/SECURITY.md` S-6).
++4. SQL-tests in `migrations-pg.test.js` (eigenaar mag, ander niet, anon niets).
++5. Vóór uitvoering op project A: groen isolatierapport, verse back-up database + opslag met geslaagde hersteltest, expliciet akkoord (centraal ADR 0001/0010).
++
++## 5. Openstaande databasehandelingen (niet uitgevoerd, vereisen goedkeuring)
++
++| ID | Handeling | Voorwaarde |
++|---|---|---|
++| DB-1 | `supabase/manual/phase3_revoke_anon_household_data.sql` (R1) | Beide gebruikers op accountsync; verse back-up met hersteltest; akkoord vlak vóór uitvoering |
++| DB-2 (voorstel) | `search_path` van bestaande security-definer-functies naar `''` | Nieuwe migratie + SQL-tests; zelfde voorwaarden |
+diff --git a/docs/RC_VALIDATION.md b/docs/RC_VALIDATION.md
+new file mode 100644
+index 0000000..1853bf0
+--- /dev/null
++++ b/docs/RC_VALIDATION.md
+@@ -0,0 +1,50 @@
++# Test- en validatierapport 26.0-rc1
++
++Datum 2026-11-08. Omgeving: Linux, Node 22.23, PostgreSQL 16 (SQL-tests als niet-root), Chromium via Playwright. **Geen internettoegang tot externe diensten** (jsDelivr, Open Food Facts, Open-Meteo, Supabase): alle externe verzoeken zijn in browsertests geblokkeerd of nagebootst.
++
++## 1. Unit- en integratietests per PR (gestapeld)
++
++Elke branch is apart uitgecheckt en volledig getest (`node --check app.js && node --test *.test.js`).
++
++| Stap | Tests | Geslaagd | Mislukt | Overgeslagen |
++|---|---|---|---|---|
++| main (basis) | 260 | 256 | 0 | 4 |
++| PR 1 sw-precache | 264 | 260 | 0 | 4 |
++| PR 2 r4-brainyquote | 267 | 263 | 0 | 4 |
++| PR 3 r5-cdn-sri | 273 | 269 | 0 | 4 |
++| PR 4 open-meteo-bron | 275 | 271 | 0 | 4 |
++| PR 5 r7-edge-guard | 284 | 280 | 0 | 4 |
++| PR 6 sync-samenvoegen | 295 | 291 | 0 | 4 |
++| PR 7 voeding | 340 | 336 | 0 | 4 |
++| PR 8 docs-ci | 347 | 343 | 0 | 4 |
++
++Overgeslagen (4, op elke stap): `import-readers.test.js` — XLSX/XLS (2×), DOCX en OCR, omdat `xlsx`, `mammoth` en Tesseract geen Node-afhankelijkheid van de repo zijn. **Niet als afgerond beschouwd**; zie § 2.
++
++## 2. Browsertests (Chromium)
++
++| Test | Stand | Resultaat | Wat dit bewijst | Wat niet |
++|---|---|---|---|---|
++| `e2e/smoke.mjs` | Eindstand, geen internet | 35/35 | Start zonder JS-fouten op 375/768/1280 px; Voeding-hub en subpagina's; product opslaan; recept importeren met voorbeeld; geen horizontale scroll; geen extern script; offline laden via service worker | Echte OFF-respons |
++| `e2e/sync-merge.mjs` | Eindstand, nagebootste `household_data` | 9/9 | Twee apparaten (oude code-sync): gelijktijdige toevoegingen samengevoegd zonder keuze; terugkeren naar de app haalt nieuwe wijzigingen op; echt conflict vraagt keuze; "Beide samenvoegen" werkt | Echte Supabase; accountsync in de browser (alleen unit-scenario's met nagebootste cloud) |
++| `e2e/import-browser.mjs` | Eindstand, jsDelivr-URL's lokaal beantwoord uit npm-pakketten | 9/9 | PDF (geverifieerde pdf.js-import), DOCX, XLSX (alle werkbladen), XLS, OCR afbeelding, gescande PDF; gemanipuleerde mammoth en pdf.js worden geweigerd | Live jsDelivr (`E2E_LIVE_CDN=1`) — **nog te draaien**; tesseract-worker/core/taaldata hebben geen SRI |
++
++## 3. Overige controles
++
++| Controle | Resultaat |
++|---|---|
++| Scope per PR (`git diff --name-only` tussen opeenvolgende branches) | Alleen bestanden van het eigen onderwerp (zie `docs/pr/PR-*.md`) |
++| Eindstand versus werkstand | Alleen verwachte verschillen: `?v=`-versies, cachenaam, versie in `sport-training-integration.test.js` |
++| Geheimen in ZIP (service-role, `sb_secret_`, JWT-achtige strings, privésleutels, tokens) | Geen; alleen controleregels in tests en één nep-JWT in `edge-guard.test.js` |
++| Supabase/database | Niets uitgevoerd, geen migratie toegevoegd |
++
++## 4. Niet getest (eerlijk)
++
++- Live: Open Food Facts, Open-Meteo, jsDelivr (SRI-hashes), Supabase (Auth, REST, Edge Functions).
++- Edge Functions in Deno/Supabase-runtime (alleen `guard.ts` in Node).
++- Accountsync met echte Supabase en twee echte accounts.
++- Echte iPhone/Android-apparaten (alleen Chromium-viewportemulatie).
++- CI op GitHub (workflow alleen lokaal nagelopen).
++
++## 5. Beveiligingsbevindingen (samenvatting)
++
++Opgelost in deze set: R4, R5 (restrisico tesseract-worker/taaldata), R7 in code. Open: R1 (`household_data` anon, DB-1), R3 (SheetJS), S-6 (`search_path`), S-7 (CSP). Details: `docs/SECURITY.md`.
+diff --git a/docs/SECURITY.md b/docs/SECURITY.md
+new file mode 100644
+index 0000000..231fc3f
+--- /dev/null
++++ b/docs/SECURITY.md
+@@ -0,0 +1,58 @@
++# Beveiliging en gegevensbescherming Samen Thuis
++
++Centraal: `personal-ecosystem/SECURITY.md` (dreigingsmodel, maatregelen R1–R17). Hieronder de audit van 2026-11-08 op de branch `verbeteringen/2026-11-zip` (basis `main` @ `4da8078`).
++
++**Methode:** code en SQL gelezen, statische zoekopdrachten, heuristische scan op niet-ge-escapete interpolaties, unit-tests, lokale browsertest (Playwright, zonder internet). **Niet gedaan:** live Supabase-project bevragen, productie-RLS controleren, penetratietest, volledige handmatige review van alle 8.700 regels `app.js`.
++
++**Classificatie:** *Aantoonbaar* = vastgesteld in code/SQL van deze repo. *Vermoedelijk* = risico afhankelijk van productie of niet volledig onderzocht.
++
++## 1. Bevindingen
++
++| # | Bevinding | Soort | Ernst | Status in deze set |
++|---|---|---|---|---|
++| R1 | `household_data` in `supabase/schema.sql`: `anon` mag lezen, invoegen en bijwerken (`using (true)`). Vertrouwelijkheid hangt af van de huishoudcode; integriteit niet beschermd. Of productie nog zo staat is onbekend. | Aantoonbaar (repo-SQL); productie onbekend | Hoog | **Niet gewijzigd.** Fase-3-script bestaat; uitvoering vereist akkoord (DB-1). Accountsync blijft de veilige route. |
++| R4 | Extern BrainyQuote-script draaide in de pagina met toegang tot ontsleutelde data en tokens. | Aantoonbaar | Hoog | **Opgelost:** script verwijderd; lokale gedachte van de dag; RSS alleen als ge-escapete tekst. Test: `cdn-libs.test.js`, `quotes-core.test.js`. |
++| R5 | CDN-bibliotheken zonder SRI; `tesseract.js@5` niet gepind. | Aantoonbaar | Middel | **Opgelost** voor hoofdbestanden: exact gepind + SHA-384 (`cdn-libs.js`); pdf.js via fetch + hashcontrole + blob-import. Restrisico: tesseract laadt zelf worker/taaldata zonder SRI. Hashes berekend uit npm-pakketten; **niet tegen live jsDelivr geverifieerd** → `node scripts/verify-sri.mjs` vóór merge. |
++| R3 | SheetJS 0.18.5 met bekende kwetsbaarheden (o.a. CVE-2024-22363). | Aantoonbaar | Middel | **Open.** Upgrade alleen via `cdn.sheetjs.com`; bestand niet bereikbaar in deze omgeving om een hash te berekenen. Wel nu gepind + SRI. |
++| R7 | Edge Functions `grocery-prices` en `data-sources`: geen JWT-controle, CORS `*`, gedeployed met `--no-verify-jwt` → open proxy op NED/PrijsProfeet-quota. | Aantoonbaar | Middel | **Opgelost in code** (`_shared/guard.ts`: gebruikers-JWT via `/auth/v1/user`, CORS-allowlist, 8 kB-limiet, 20–30 verzoeken/min/gebruiker, foutmeldingen zonder interne details). **Actief pas na redeploy** (akkoord). |
++| S-1 | `sport-training` Edge Function: CORS `*` (wel JWT verplicht, geeft altijd 503). | Aantoonbaar | Laag | Niet gewijzigd (Sport: alleen fixes; geen datatoegang). |
++| S-2 | Sessie (`samenThuisPersonalAuthV1`) en huishoudcode staan onversleuteld in `localStorage`; XSS zou ze kunnen lezen. | Aantoonbaar (bestaande audittest) | Middel | Ongewijzigd; risico verkleind door R4/R5. CSP voorgesteld (S-7). |
++| R6 | Mogelijk gedeelde origin `kesga44-jpg.github.io` met Coach. | Vermoedelijk | Middel | Ongewijzigd; hosting-URL niet geverifieerd. |
++| S-3 | XSS: heuristische scan vond geen aantoonbare injectie; gevonden gevallen zijn `textContent`, `confirm()` of al ge-escaped. Nieuwe Voeding-UI escapet alle externe gegevens (OFF, imports) — getest met kwaadaardige productnaam/URL. | Vermoedelijk laag (niet volledig geaudit) | — | Nieuwe code getest: `nutrition-integration.test.js`. |
++| S-4 | Inputvalidatie nieuwe functies: barcode (cijfers + GTIN-controle), zoekterm ≥ 3 tekens/max 80, importbestand max 500 kB, recepten/producten begrensd, alleen `https://`-bron-URL's, stuurtekens verwijderd. Edge: tekst opgeschoond (`cleanText`). | Aantoonbaar | — | Getest. |
++| S-5 | Uploads: buckets privé met grootte- en MIME-limiet en RLS (bestaand). Voeding gebruikt geen uploads. | Aantoonbaar (repo-SQL) | — | Ongewijzigd. |
++| S-6 | Bestaande `security definer`-functies gebruiken `set search_path = public` i.p.v. `''` (centrale regel). Misbruik vereist CREATE-recht in `public`; op Supabase niet geverifieerd. | Vermoedelijk | Laag | Voorstel DB-2 (migratie, akkoord nodig). |
++| S-7 | Geen Content-Security-Policy. | Aantoonbaar | Middel | Voorstel (§ 3); niet ingevoerd omdat niet alle paden in een echte browser met live diensten getest konden worden. |
++| S-8 | Rate limiting: Supabase Auth heeft eigen limieten; Edge Functions nu per gebruiker (best-effort, per instantie, niet duurzaam). OFF client-side begrensd. | Aantoonbaar | — | Restrisico: limiet per instantie. |
++| S-9 | Offline opslag: alle huishouddata onversleuteld in `localStorage` (bewuste keuze, offline-first). Wie toegang heeft tot het ontgrendelde apparaat/browserprofiel leest alles. De nieuwe sync-basiskopieën (`samenThuisSyncBaseV1`, `samenThuisAccountSyncBaseValuesV1`, `samenThuisPreMergeBackup`) vallen in dezelfde klasse; ze gaan nooit naar de server. | Aantoonbaar | Middel | Ongewijzigd; documenteren aan gebruikers. |
++| S-12 | Automatisch samenvoegen bij sync: geen stille overschrijving (veldconflict → keuze), versiecontrole server-side ongewijzigd (`put_household_state` resp. voorwaardelijke `PATCH` op `updated_at`), herstelde back-up nooit automatisch samengevoegd, kopie vóór samenvoegen. | Aantoonbaar (tests + browsertest legacyroute) | — | Nieuw; accountroute alleen met nagebootste cloud getest. |
++| S-10 | Back-ups: JSON-export onversleuteld; bevat financiële gegevens en (huishoud)sportgegevens. App waarschuwt bij export (bestaand). Server-back-ups (ADR 0010/0014) nog niet ingericht. | Aantoonbaar | Middel | Ongewijzigd; PR-3 wacht op ontwerpgoedkeuring. |
++| R15 | Gezondheidsgegevens (Sport & Training) in gedeelde huishoudpayload; partner kan ze lezen. | Aantoonbaar | Middel | Ongewijzigd (ADR 0002: Sportapp neemt over na G-SPORT). Voeding voegt geen gezondheidsgegevens toe. |
++| S-11 | Secrets: alleen de publishable key in de frontend; geen service-role of API-keys in repo (gescand, getest). `.env.example` bevat alleen placeholders. | Aantoonbaar | — | Getest: `integrations-policy.test.js`, `security-audit.test.js`. |
++
++## 2. Privacy van financiële en persoonlijke gegevens
++
++- Financiële gegevens verlaten het apparaat alleen versleuteld (sync) of als door de gebruiker gemaakte back-up.
++- Externe diensten krijgen alleen: coördinaten (Open-Meteo), kenteken (RDW), zoekterm (PrijsProfeet via Edge, OFF), barcode (OFF). Nooit financiële of gezondheidsgegevens.
++- Geen AI-dienst buiten het apparaat; de Voedingscontrole is regelgebaseerd en draait lokaal.
++- Gezamenlijk versus persoonlijk: huishouddata (leden), persoonlijke voorkeuren (`personal_preferences`, alleen eigenaar). Voeding is huishouddata zonder persoonsgegevens.
++
++## 3. Voorstel Content-Security-Policy (niet ingevoerd)
++
++Als `<meta http-equiv>` in `index.html` (GitHub Pages ondersteunt geen headers). Eerst een week testen in een aparte branch.
++
++```
++default-src 'self';
++script-src 'self' https://cdn.jsdelivr.net;
++style-src 'self' 'unsafe-inline';
++img-src 'self' data: blob:;
++connect-src 'self' https://vwfuetxgapzfivydzhxc.supabase.co https://api.open-meteo.com https://air-quality-api.open-meteo.com https://geocoding-api.open-meteo.com https://world.openfoodfacts.org https://opendata.rdw.nl https://cdn.jsdelivr.net https://www.brainyquote.com https://tessdata.projectnaptha.com;
++worker-src 'self' blob: https://cdn.jsdelivr.net;
++frame-ancestors 'none'; base-uri 'self'; form-action 'self';
++```
++
++`frame-ancestors` werkt niet via `<meta>`; `'unsafe-inline'` voor stijlen is nodig door inline `style`-attributen. Hosts van tesseract-taaldata niet geverifieerd.
++
++## 4. Melden
++
++Privé via GitHub Security Advisories van deze repository; geen publiek issue.
+diff --git a/docs/TESTING_AND_RELEASE.md b/docs/TESTING_AND_RELEASE.md
+new file mode 100644
+index 0000000..da2b078
+--- /dev/null
++++ b/docs/TESTING_AND_RELEASE.md
+@@ -0,0 +1,62 @@
++# Test- en releasehandleiding
++
++## 1. Testsoorten
++
++| Soort | Commando | Waar | Vereist |
++|---|---|---|---|
++| Unit- en integratietests | `node --test *.test.js` | Lokaal en CI | Node ≥ 22.18 (voor `edge-guard.test.js`: TypeScript-stripping) |
++| SQL-semantiek (RLS, RPC's) | onderdeel van `migrations-pg.test.js` | Lokaal en CI | PostgreSQL 14–16, **niet-root**-gebruiker (`initdb` weigert root) |
++| Syntax | `node --check app.js` (+ nieuwe modules in CI) | CI | — |
++| Browser (mobiel/desktop, offline, Voeding) | `node e2e/smoke.mjs` | Lokaal (optioneel, niet in CI) | `npm i -g playwright && npx playwright install chromium` |
++| Browser: synchronisatie tussen twee apparaten | `node e2e/sync-merge.mjs` | Lokaal | Playwright (Supabase wordt nagebootst) |
++| Browser: documentimport en scan (PDF, DOCX, XLSX, XLS, OCR) | `E2E_LIVE_CDN=1 node e2e/import-browser.mjs` of `E2E_NPM_DIR=… node e2e/import-browser.mjs` | Lokaal | Playwright; live: internet; lokaal: uitgepakte npm-pakketten |
++| Precache bijwerken | `node scripts/sync-sw-assets.mjs samen-thuis-vNN-onderwerp` | Bij elke asset-wijziging | — |
++| SRI-hashes tegen live CDN | `node scripts/verify-sri.mjs` | Lokaal, vóór merge | Internet |
++
++### Overgeslagen tests (verklaard)
++
++Vier importtests worden in Node overgeslagen als `xlsx`, `mammoth` of Tesseract-taaldata niet als Node-module aanwezig zijn (`import-readers.test.js`). Die bibliotheken laadt de app in de browser vanaf het CDN; ze zijn bewust geen afhankelijkheid van de repo.
++
++**Niet als afgerond beschouwen.** Daarom bestaat `e2e/import-browser.mjs`: dezelfde bestanden (plus `multi.xls` en `scan.pdf`) door de echte app-laders in Chromium, inclusief SRI-controle en een manipulatietest. Stand 2026-11-08: 9/9 geslaagd met lokaal geleverde npm-bestanden. **De live-CDN-stand (`E2E_LIVE_CDN=1`) is nog niet gedraaid** (geen internettoegang tot jsDelivr in de bouwomgeving) en is verplicht vóór het mergen van PR 3.
++
++## 2. Wat de nieuwe tests dekken
++
++| Testbestand | Onderwerp | Aantal |
++|---|---|---|
++| `food-facts-core.test.js` | OFF-normalisatie, onbekend ≠ 0, kJ/natrium-afleiding, kwaliteit, GTIN, limieten (product/zoeken), cache, offline-fallback, alle foutsoorten | 13 |
++| `nutrition-core.test.js` | Hoeveelheden, recepten, berekening met dekking, opgegeven waarden apart, weekmenu, boodschappen, productupdate zonder verlies, robuuste normalisatie | 11 |
++| `osta-exchange-core.test.js` | Osta-tekst, schema.org JSON-LD, foutformaten, voorbeeld zonder schrijven, dubbelen, herimport (bron wint, annotaties blijven, niets verdwijnt ongemerkt), twijfelgevallen, verliesvrije export/import | 10 |
++| `nutrition-integration.test.js` | Opslag in `samenThuisDataV2`, back-up/herstel, accountsync (versleuteld, conflicten), privacy, zoeken, navigatie, XSS in UI, geen netwerk bij renderen, **geen zelfstandig receptenbeheer** (ADR 0001) | 11 |
++| `edge-guard.test.js` | JWT verplicht, publishable key geweigerd, CORS-allowlist, preflight, 405/413/429/503, rate limiter, opschonen, app stuurt token | 9 |
++| `cdn-libs.test.js` | Exacte versies + SRI, geen ongeregistreerde CDN-URL, geen extern script in `index.html`, integriteitscontrole (goed/fout/netwerk) | 6 |
++| `sw-assets.test.js` | Precache = alles uit `index.html`, bestanden bestaan, nieuwe cacheversie, offline fallback, oude caches weg | 4 |
++| `integrations-policy.test.js` | Open-Meteo-bronvermelding (dubbel met `weather-attribution`), geen secrets, geen betaalde/externe AI, geen Web Push, geen nieuwe energie-/Socrata-koppeling, OFF alleen lezen, geen Osta-API | 7 |
++| `quotes-core.test.js` (uitgebreid) | Lokale gedachte van de dag, geen extern script in `index.html` | +3 |
++| `sync-merge.test.js` | Automatisch samenvoegen: toevoegingen van beide, verschillende velden, verwijderen, tekstlijsten, zonder basis, scenario Kees/Daphne met nagebootste cloud, echt conflict, hold, race, oude code-sync | 11 |
++| `weather-attribution.test.js` | Open-Meteo-bronvermelding op drie plekken, geen sleutel, cache | 2 |
++
++
++`e2e/sync-merge.mjs` (9 controles): twee browsercontexten met de echte app (oude code-sync) en een nagebootste `household_data`-tabel; gelijktijdige toevoegingen worden samengevoegd, terugkeren naar de app haalt nieuwe wijzigingen op, een echt conflict vraagt een keuze, "Beide samenvoegen" werkt.
++
++`e2e/import-browser.mjs` (9 controles): PDF via geverifieerde pdf.js-import, DOCX, XLSX (alle werkbladen), XLS, OCR van een afbeelding, gescande PDF, gemanipuleerde mammoth en pdf.js worden geweigerd.
++
++`e2e/smoke.mjs` (35 controles): start zonder JS-fouten op 375/768/1280 px, Voeding-hub en subpagina's, product opslaan, recept importeren met voorbeeld, geen horizontale scroll, geen BrainyQuote-script, offline laden via service worker. Alle externe verzoeken worden in deze test geblokkeerd.
++
++## 3. Release-checklist
++
++1. Branch vanaf `main` (of de vorige PR in de stapel); nooit direct op `main`. Eén onderwerp per PR (zie `docs/IMPLEMENTATION_STATUS.md` § 3).
++2. `node --test *.test.js` groen (als niet-root, met PostgreSQL).
++3. Bij asset-wijziging: `?v=` in `index.html` verhoogd en `node scripts/sync-sw-assets.mjs samen-thuis-vNN-onderwerp` gedraaid (`sw-assets.test.js` controleert de lijst).
++4. Bij bibliotheekwijziging: `node scripts/verify-sri.mjs` groen.
++5. `node e2e/smoke.mjs` lokaal groen (aanbevolen).
++6. `CHANGELOG.md` en betrokken documentatie bijgewerkt.
++7. PR-beschrijving: doel, bestanden, risico, testplan, wat níet getest is.
++8. Eigenaar reviewt en merget. GitHub Pages publiceert `main`.
++9. Na publicatie handmatig op telefoon en laptop: app openen, verversen (nieuwe service worker), Voeding openen, één barcode opzoeken (eerste live OFF-controle), weer/pollen tonen bronvermelding.
++10. Edge Functions alleen na apart akkoord deployen (`docs/MIGRATIONS.md` § 3), daarna aanbiedingen testen met en zonder aanmelding.
++
++## 4. Terugdraaien
++
++- Frontend: revert van de merge-commit; de nieuwe service worker wordt bij de volgende versie vervangen (verhoog `CACHE` opnieuw).
++- Gegevens: `nutrition` blijft in `samenThuisDataV2` staan en wordt door oudere versies bewaard; er gaat niets verloren.
++- Edge Functions: vorige versie opnieuw deployen.
+diff --git a/docs/pr/PR-1.md b/docs/pr/PR-1.md
+new file mode 100644
+index 0000000..1ed6458
+--- /dev/null
++++ b/docs/pr/PR-1.md
+@@ -0,0 +1,31 @@
++# PR 1: Service worker: volledige precache en versiebeheer
++
++- **Branch:** `pr/1-sw-precache` · **Basis:** `main` (gestapeld; na merge van de vorige PR rebasen op `main`)
++- **Omvang:** 3 files changed, 86 insertions(+), 3 deletions(-)
++
++## Doel en wijziging
++Precache bevatte niet alle scripts uit `index.html` (o.a. `rewards-core.js` ontbrak), waardoor de app offline onvolledig kon zijn. Nieuw: `scripts/sync-sw-assets.mjs` genereert de lijst uit `index.html`; `sw-assets.test.js` bewaakt volledigheid, bestaan van bestanden, offline-fallback en opruimen van oude caches.
++
++## Bestanden
++```
++A scripts/sync-sw-assets.mjs
++A sw-assets.test.js
++M sw.js
++```
++
++## Risico
++Laag. Alleen de cachelijst en cachenaam veranderen.
++
++## Testplan en resultaat
++- `node --test *.test.js` (niet-root, met PostgreSQL) op deze branch: tests 264 · geslaagd 260 · mislukt 0 · overgeslagen 4.
++- Zie `docs/RC_VALIDATION.md` voor browsertests en wat níet getest is.
++
++## Voorwaarden vóór merge
++Geen.
++
++## Niet in deze PR
++Geen wijzigingen aan Supabase, databases, RLS, Storage of bestaande gegevens.
++
++🤖 Generated with [Claude Code](https://claude.com/claude-code)
++
++https://claude.ai/code/session_01DXboTXW7c38F7h8Qy7T4q3
+diff --git a/docs/pr/PR-2.md b/docs/pr/PR-2.md
+new file mode 100644
+index 0000000..87d5bc6
+--- /dev/null
++++ b/docs/pr/PR-2.md
+@@ -0,0 +1,33 @@
++# PR 2: R4: extern BrainyQuote-script verwijderd
++
++- **Branch:** `pr/2-r4-brainyquote` · **Basis:** `pr/1-sw-precache` (gestapeld; na merge van de vorige PR rebasen op `main`)
++- **Omvang:** 5 files changed, 78 insertions(+), 13 deletions(-)
++
++## Doel en wijziging
++Het script van brainyquote.com draaide in de pagina met toegang tot ontsleutelde gegevens en sessietokens (R4, roadmap PR-7). Verwijderd; de citaatkaart toont een lokale "gedachte van de dag" (eigen teksten). Een eventueel opgehaalde RSS-tekst wordt alleen als ge-escapete tekst getoond.
++
++## Bestanden
++```
++M app.js
++M index.html
++M quotes-core.js
++M quotes-core.test.js
++M sw.js
++```
++
++## Risico
++Laag. Citaat verandert van bron.
++
++## Testplan en resultaat
++- `node --test *.test.js` (niet-root, met PostgreSQL) op deze branch: tests 267 · geslaagd 263 · mislukt 0 · overgeslagen 4.
++- Zie `docs/RC_VALIDATION.md` voor browsertests en wat níet getest is.
++
++## Voorwaarden vóór merge
++Geen.
++
++## Niet in deze PR
++Geen wijzigingen aan Supabase, databases, RLS, Storage of bestaande gegevens.
++
++🤖 Generated with [Claude Code](https://claude.com/claude-code)
++
++https://claude.ai/code/session_01DXboTXW7c38F7h8Qy7T4q3
+diff --git a/docs/pr/PR-3.md b/docs/pr/PR-3.md
+new file mode 100644
+index 0000000..31c49c5
+--- /dev/null
++++ b/docs/pr/PR-3.md
+@@ -0,0 +1,35 @@
++# PR 3: R5: bibliotheken exact gepind met SRI
++
++- **Branch:** `pr/3-r5-cdn-sri` · **Basis:** `pr/2-r4-brainyquote` (gestapeld; na merge van de vorige PR rebasen op `main`)
++- **Omvang:** 7 files changed, 326 insertions(+), 10 deletions(-)
++
++## Doel en wijziging
++`cdn-libs.js` registreert pdf.js 4.10.38, mammoth 1.12.2, SheetJS 0.18.5 en tesseract.js 5.1.1 (was `@5`) met SHA-384. Scriptladers zetten `integrity` + `crossorigin`; pdf.js wordt eerst gedownload, gecontroleerd en dan uit een blob geïmporteerd. Browsertest `e2e/import-browser.mjs`: PDF, DOCX, XLSX, XLS, OCR en gemanipuleerde bestanden.
++
++## Bestanden
++```
++M app.js
++A cdn-libs.js
++A cdn-libs.test.js
++A e2e/import-browser.mjs
++M index.html
++A scripts/verify-sri.mjs
++M sw.js
++```
++
++## Risico
++Laag–middel: een afwijkende hash blokkeert die import (veilig falen).
++
++## Testplan en resultaat
++- `node --test *.test.js` (niet-root, met PostgreSQL) op deze branch: tests 273 · geslaagd 269 · mislukt 0 · overgeslagen 4.
++- Zie `docs/RC_VALIDATION.md` voor browsertests en wat níet getest is.
++
++## Voorwaarden vóór merge
++`node scripts/verify-sri.mjs` en `E2E_LIVE_CDN=1 node e2e/import-browser.mjs` groen (internet nodig; niet gedraaid in de bouwomgeving). SheetJS-upgrade (R3) is een aparte vervolg-PR.
++
++## Niet in deze PR
++Geen wijzigingen aan Supabase, databases, RLS, Storage of bestaande gegevens.
++
++🤖 Generated with [Claude Code](https://claude.com/claude-code)
++
++https://claude.ai/code/session_01DXboTXW7c38F7h8Qy7T4q3
+diff --git a/docs/pr/PR-4.md b/docs/pr/PR-4.md
+new file mode 100644
+index 0000000..bf51ada
+--- /dev/null
++++ b/docs/pr/PR-4.md
+@@ -0,0 +1,32 @@
++# PR 4: Open-Meteo: verplichte bronvermelding
++
++- **Branch:** `pr/4-open-meteo-bron` · **Basis:** `pr/3-r5-cdn-sri` (gestapeld; na merge van de vorige PR rebasen op `main`)
++- **Omvang:** 4 files changed, 28 insertions(+), 5 deletions(-)
++
++## Doel en wijziging
++De Open-Meteo-licentie (CC BY 4.0) vereist bronvermelding met link bij elke weergave. Toegevoegd bij dashboardweer, weerpagina en luchtkwaliteit/pollen.
++
++## Bestanden
++```
++M app.js
++M index.html
++M sw.js
++A weather-attribution.test.js
++```
++
++## Risico
++Laag.
++
++## Testplan en resultaat
++- `node --test *.test.js` (niet-root, met PostgreSQL) op deze branch: tests 275 · geslaagd 271 · mislukt 0 · overgeslagen 4.
++- Zie `docs/RC_VALIDATION.md` voor browsertests en wat níet getest is.
++
++## Voorwaarden vóór merge
++Geen.
++
++## Niet in deze PR
++Geen wijzigingen aan Supabase, databases, RLS, Storage of bestaande gegevens.
++
++🤖 Generated with [Claude Code](https://claude.com/claude-code)
++
++https://claude.ai/code/session_01DXboTXW7c38F7h8Qy7T4q3
+diff --git a/docs/pr/PR-5.md b/docs/pr/PR-5.md
+new file mode 100644
+index 0000000..01c90c4
+--- /dev/null
++++ b/docs/pr/PR-5.md
+@@ -0,0 +1,37 @@
++# PR 5: R7: Edge Functions afschermen
++
++- **Branch:** `pr/5-r7-edge-guard` · **Basis:** `pr/4-open-meteo-bron` (gestapeld; na merge van de vorige PR rebasen op `main`)
++- **Omvang:** 9 files changed, 287 insertions(+), 29 deletions(-)
++
++## Doel en wijziging
++`grocery-prices` en `data-sources` stonden open (CORS `*`, geen JWT, `--no-verify-jwt`). Nieuw `_shared/guard.ts`: gebruikers-JWT via `/auth/v1/user`, CORS-allowlist (`ALLOWED_ORIGINS`), 8 kB-limiet, limiet per gebruiker, geen interne foutdetails. De app stuurt het sessietoken mee. Deploy-instructies zonder `--no-verify-jwt`.
++
++## Bestanden
++```
++M INSTALLATIE_BETA.md
++M OPEN_DATA_BRONNEN.md
++M app.js
++A edge-guard.test.js
++M index.html
++A supabase/functions/_shared/guard.ts
++M supabase/functions/data-sources/index.ts
++M supabase/functions/grocery-prices/index.ts
++M sw.js
++```
++
++## Risico
++Middel na deploy: zonder persoonlijk account geen aanbiedingen/NED. Mergen zonder deploy verandert niets aan productie.
++
++## Testplan en resultaat
++- `node --test *.test.js` (niet-root, met PostgreSQL) op deze branch: tests 284 · geslaagd 280 · mislukt 0 · overgeslagen 4.
++- Zie `docs/RC_VALIDATION.md` voor browsertests en wat níet getest is.
++
++## Voorwaarden vóór merge
++Deploy pas na test in een eigen/staging-project (preflight met gateway-JWT, D-4) en expliciet akkoord.
++
++## Niet in deze PR
++Geen wijzigingen aan Supabase, databases, RLS, Storage of bestaande gegevens.
++
++🤖 Generated with [Claude Code](https://claude.com/claude-code)
++
++https://claude.ai/code/session_01DXboTXW7c38F7h8Qy7T4q3
+diff --git a/docs/pr/PR-6.md b/docs/pr/PR-6.md
+new file mode 100644
+index 0000000..236e434
+--- /dev/null
++++ b/docs/pr/PR-6.md
+@@ -0,0 +1,36 @@
++# PR 6: Sync: wijzigingen van beide huisgenoten automatisch samenvoegen
++
++- **Branch:** `pr/6-sync-samenvoegen` · **Basis:** `pr/5-r7-edge-guard` (gestapeld; na merge van de vorige PR rebasen op `main`)
++- **Omvang:** 8 files changed, 469 insertions(+), 23 deletions(-)
++
++## Doel en wijziging
++Probleem: wijzigden beide huisgenoten hetzelfde onderdeel (bijv. allebei een boodschap), dan ontstond een conflict en zag je de toevoeging van de ander pas na een handmatige keuze. Nu: 3-wegs samenvoegen tegen de laatst gesynchroniseerde versie (lijsten op id, objecten per sleutel, tekstlijsten als verzameling, verwijderen gerespecteerd, gewijzigd-versus-verwijderd houdt het item). Alleen hetzelfde veld aan beide kanten anders → keuze, met nieuwe knop **Beide samenvoegen** (cloudversie wint bij echte veldconflicten). Werkt in de oude code-sync en de accountsync. Opslag vol → basiskopie wordt opgeruimd, app valt terug op kiezen.
++
++## Bestanden
++```
++M account-sync.js
++M app.js
++A e2e/sync-merge.mjs
++M household-sync-core.js
++M index.html
++M sport-training-integration.test.js
++M sw.js
++A sync-merge.test.js
++```
++
++## Risico
++Middel: raakt de synchronisatie. Serverkant ongewijzigd (versiecontrole blijft); herstelde back-ups worden nooit automatisch samengevoegd; kopie vóór samenvoegen.
++
++## Testplan en resultaat
++- `node --test *.test.js` (niet-root, met PostgreSQL) op deze branch: tests 295 · geslaagd 291 · mislukt 0 · overgeslagen 4.
++- Zie `docs/RC_VALIDATION.md` voor browsertests en wat níet getest is.
++
++## Voorwaarden vóór merge
++Eerst op twee eigen apparaten proberen met een verse JSON-back-up. Accountroute alleen met nagebootste cloud getest.
++
++## Niet in deze PR
++Geen wijzigingen aan Supabase, databases, RLS, Storage of bestaande gegevens.
++
++🤖 Generated with [Claude Code](https://claude.com/claude-code)
++
++https://claude.ai/code/session_01DXboTXW7c38F7h8Qy7T4q3
+diff --git a/docs/pr/PR-7.md b/docs/pr/PR-7.md
+new file mode 100644
+index 0000000..b89ebbe
+--- /dev/null
++++ b/docs/pr/PR-7.md
+@@ -0,0 +1,46 @@
++# PR 7: Voeding: voedingsplanning, Open Food Facts en receptkopieën uit Osta
++
++- **Branch:** `pr/7-voeding` · **Basis:** `pr/6-sync-samenvoegen` (gestapeld; na merge van de vorige PR rebasen op `main`)
++- **Omvang:** 18 files changed, 2078 insertions(+), 7 deletions(-)
++
++## Doel en wijziging
++Nieuwe pagina Voeding (Meer → Huishouden) met *Voeding bij het weekmenu*, *Receptkopieën uit Osta*, *Productinformatie* en *Osta en recepten uitwisselen*. Volgens ADR 0001 (geaccepteerd): Osta is de primaire plek voor recepten; Samen Thuis importeert/exporteert alleen, toont receptinhoud alleen-lezen en legt alleen voedingsannotaties vast. OFF alleen na klik, met limieten, cache en onbekend ≠ 0. Gegevens in het bestaande versleutelde onderdeel `nutrition`.
++
++## Bestanden
++```
++A css/nutrition.css
++A docs/adr/0001-voedingsplanning-in-samen-thuis.md
++A docs/personal-ecosystem-voeding.patch
++A e2e/smoke.mjs
++A food-facts-core.js
++A food-facts-core.test.js
++M index.html
++M nav-core.js
++A nutrition-core.js
++A nutrition-core.test.js
++A nutrition-integration.test.js
++A nutrition.js
++A osta-exchange-core.js
++A osta-exchange-core.test.js
++M search-core.js
++M sw.js
++A test-fixtures/recipes/osta-gedeeld.txt
++A test-fixtures/recipes/schema-org.json
++```
++
++## Risico
++Middel: nieuwe functie en nieuw sync-onderdeel; geen databasewijziging.
++
++## Testplan en resultaat
++- `node --test *.test.js` (niet-root, met PostgreSQL) op deze branch: tests 340 · geslaagd 336 · mislukt 0 · overgeslagen 4.
++- Zie `docs/RC_VALIDATION.md` voor browsertests en wat níet getest is.
++
++## Voorwaarden vóór merge
++Centrale docs-PR in `personal-ecosystem` (`docs/personal-ecosystem-voeding.patch`). OFF API usage form (D-12).
++
++## Niet in deze PR
++Geen wijzigingen aan Supabase, databases, RLS, Storage of bestaande gegevens.
++
++🤖 Generated with [Claude Code](https://claude.com/claude-code)
++
++https://claude.ai/code/session_01DXboTXW7c38F7h8Qy7T4q3
+diff --git a/docs/pr/PR-8.md b/docs/pr/PR-8.md
+new file mode 100644
+index 0000000..0248f84
+--- /dev/null
++++ b/docs/pr/PR-8.md
+@@ -0,0 +1,44 @@
++# PR 8: Documentatie en CI voor 26.0-rc1
++
++- **Branch:** `pr/8-docs-ci` · **Basis:** `pr/7-voeding` (gestapeld; na merge van de vorige PR rebasen op `main`)
++- **Omvang:** 16 files changed, 763 insertions(+), 22 deletions(-)
++
++## Doel en wijziging
++README, CLAUDE.md/AGENTS.md, architectuur, API-register, datamodel, migratie, beveiliging, test/release, installatie, status, changelog, `.env.example`, uploadmanifest, PR-beschrijvingen, validatierapport. CI: syntaxcontrole nieuwe modules en Node ≥ 22.18. `integrations-policy.test.js` bewaakt de integratieafspraken.
++
++## Bestanden
++```
++A .env.example
++M .github/workflows/tests.yml
++A AGENTS.md
++A CHANGELOG.md
++A CLAUDE.md
++M INTEGRATIE-STATUS.md
++M README.md
++A docs/API_INTEGRATIONS.md
++A docs/ARCHITECTURE.md
++A docs/DATA_MODEL.md
++A docs/IMPLEMENTATION_STATUS.md
++A docs/INSTALLATION.md
++A docs/MIGRATIONS.md
++A docs/SECURITY.md
++A docs/TESTING_AND_RELEASE.md
++A integrations-policy.test.js
++```
++
++## Risico
++Laag.
++
++## Testplan en resultaat
++- `node --test *.test.js` (niet-root, met PostgreSQL) op deze branch: tests 347 · geslaagd 343 · mislukt 0 · overgeslagen 4.
++- Zie `docs/RC_VALIDATION.md` voor browsertests en wat níet getest is.
++
++## Voorwaarden vóór merge
++Geen.
++
++## Niet in deze PR
++Geen wijzigingen aan Supabase, databases, RLS, Storage of bestaande gegevens.
++
++🤖 Generated with [Claude Code](https://claude.com/claude-code)
++
++https://claude.ai/code/session_01DXboTXW7c38F7h8Qy7T4q3
+diff --git a/integrations-policy.test.js b/integrations-policy.test.js
+new file mode 100644
+index 0000000..f2d0f24
+--- /dev/null
++++ b/integrations-policy.test.js
+@@ -0,0 +1,50 @@
++// Bewaakt de afspraken uit de ecosysteemarchitectuur (personal-ecosystem) voor externe integraties in Samen Thuis.
++const test = require('node:test');
++const assert = require('node:assert/strict');
++const fs = require('node:fs');
++const path = require('node:path');
++
++const frontend = fs.readdirSync(__dirname).filter(f => /\.(js|html)$/.test(f) && !/\.test\.js$/.test(f));
++const src = Object.fromEntries(frontend.map(f => [f, fs.readFileSync(path.join(__dirname, f), 'utf8')]));
++const all = Object.values(src).join('\n');
++
++test('Open-Meteo: bronvermelding met link en CC BY 4.0 bij elke weergave (licentievoorwaarde)', () => {
++  const n = (src['app.js'].match(/href="https:\/\/open-meteo\.com\/"[^>]*>Open-Meteo<\/a> \(CC BY 4\.0\)/g) || []).length;
++  assert.ok(n >= 3, `dashboardweer, weerpagina en luchtkwaliteit (${n})`);
++  assert.doesNotMatch(all, /open-meteo\.com[^'"`]*apikey/i, 'geen API-sleutel voor Open-Meteo');
++});
++
++test('geen secrets of service-role in frontend; alleen de publishable key', () => {
++  assert.doesNotMatch(all, /service_role|sb_secret_|SUPABASE_SERVICE_ROLE/i);
++  const keys = all.match(/sb_publishable_[A-Za-z0-9_-]+/g) || [];
++  assert.ok(keys.every(k => k === 'sb_publishable_Xa1oLeM64F-jog1vVjJbkQ_BE3UV6mR'));
++  assert.doesNotMatch(all, /NED_API_KEY\s*=|TANKERKOENIG_API_KEY\s*=|PRIJS_PROFEET_API_KEY\s*=/);
++});
++
++test('geen betaalde of externe AI-API\'s en geen automatische AI-aanroepen (ADR 0008)', () => {
++  assert.doesNotMatch(all, /api\.openai\.com|api\.anthropic\.com|generativelanguage\.googleapis\.com|api\.mistral\.ai|api\.cohere/i);
++  assert.doesNotMatch(all, /@mlc-ai\/web-llm|localhost:11434/i, 'WebLLM/Ollama nog niet goedgekeurd voor Samen Thuis');
++  assert.match(src['nutrition-core.js'], /method: 'regelgebaseerd'/);
++});
++
++test('geen Web Push in Samen Thuis zolang I-4/I-9 niet zijn goedgekeurd (Hub-eigendom, ADR 0004/0018)', () => {
++  assert.doesNotMatch(all, /pushManager\.subscribe|PushManager|applicationServerKey|showNotification\(/);
++  assert.doesNotMatch(fs.readFileSync(path.join(__dirname, 'sw.js'), 'utf8'), /addEventListener\('push'/);
++});
++
++test('geen nieuwe energie-/Socrata-koppelingen: alleen de bestaande RDW- en NED-aanroepen', () => {
++  const rdw = (src['app.js'].match(/opendata\.rdw\.nl/g) || []).length;
++  assert.equal(rdw, 1, 'bestaande RDW-kentekenopvraging ongewijzigd');
++  assert.doesNotMatch(all, /evcc|api\.ned\.nl/i, 'NED alleen via de Edge Function, evcc niet in Samen Thuis');
++});
++
++test('Open Food Facts: alleen https, alleen lezen, geen schrijfacties of inlog', () => {
++  const off = src['food-facts-core.js'];
++  assert.match(off, /const BASE_URL = 'https:\/\/world\.openfoodfacts\.org'/);
++  assert.doesNotMatch(off, /method:\s*'POST'|cgi\/product_jqm|user_id=|password=/);
++  assert.match(off, /credentials: 'omit'/);
++});
++
++test('Osta: geen aangenomen Osta-API of -domein', () => {
++  assert.doesNotMatch(all, /https?:\/\/[a-z0-9.-]*osta[a-z0-9.-]*\.(com|app|io|nl)/i);
++});
+-- 
+2.43.0
+

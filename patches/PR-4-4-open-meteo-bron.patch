@@ -1,0 +1,104 @@
+From 67dc1b445bb2c99829f0ef2a329bab277f2430af Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 8 Nov 2026 15:13:48 +0100
+Subject: [PATCH] Open-Meteo: verplichte bronvermelding (CC BY 4.0) bij elke
+ weergave
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01DXboTXW7c38F7h8Qy7T4q3
+---
+ app.js                      |  6 ++++--
+ index.html                  |  2 +-
+ sw.js                       |  4 ++--
+ weather-attribution.test.js | 21 +++++++++++++++++++++
+ 4 files changed, 28 insertions(+), 5 deletions(-)
+ create mode 100644 weather-attribution.test.js
+
+diff --git a/app.js b/app.js
+index 3f257e0..fca7eda 100644
+--- a/app.js
++++ b/app.js
+@@ -5015,6 +5015,7 @@ async function weather18(force=false){
+  if(!w){let q=new URLSearchParams({latitude:loc.lat,longitude:loc.lon,current:'temperature_2m,apparent_temperature,weather_code,precipitation,wind_speed_10m',hourly:'temperature_2m,weather_code,precipitation_probability',daily:'temperature_2m_max,temperature_2m_min,precipitation_probability_max',timezone:'Europe/Amsterdam',forecast_days:'5'});let r=await fetch('https://api.open-meteo.com/v1/forecast?'+q,{cache:'no-store'});if(!r.ok)throw 0;w=await r.json();localStorage.setItem(WC,JSON.stringify({t:Date.now(),key,w}))}
+  let c=w.current,d=w.daily,h=w.hourly,n=new Date(),i=h.time.findIndex(t=>new Date(t)>=new Date(n.getFullYear(),n.getMonth(),n.getDate(),n.getHours()));if(i<0)i=0;let ids=Array.from({length:6},(_,k)=>i+k).filter(k=>k<h.time.length);
+  box.innerHTML=`<div class="wm18"><div><small>⌖ ${esc(loc.name)}</small><div class="temp18"><span>${wi(c.weather_code)}</span><strong>${Math.round(c.temperature_2m)}°</strong></div><p>${wt(c.weather_code)} · voelt als ${Math.round(c.apparent_temperature)}°</p></div><div class="wf18"><b>${Math.round(d.temperature_2m_max[0])}° / ${Math.round(d.temperature_2m_min[0])}°</b><span>☂ ${Math.round(d.precipitation_probability_max[0]||0)}%</span><span>↗ ${Math.round(c.wind_speed_10m||0)} km/u</span></div></div><div class="hours18">${ids.map(k=>`<div><small>${h.time[k].slice(11,16)}</small><b>${wi(h.weather_code[k])}</b><strong>${Math.round(h.temperature_2m[k])}°</strong><small>${Math.round(h.precipitation_probability[k]||0)}%</small></div>`).join('')}</div><button class="wr18" data-wr18>↻</button>`;
++ box.insertAdjacentHTML('beforeend','<small class="weather-attribution">Weerdata: <a href="https://open-meteo.com/" target="_blank" rel="noopener noreferrer">Open-Meteo</a> (CC BY 4.0)</small>');
+  let o=document.querySelector('[data-outfit18]');if(o)o.innerHTML=`<span>👕</span><div><strong>Wat trek je aan?</strong><p>${outfit(w).map(esc).join(' · ')}</p><small>Gebaseerd op temperatuur, regen en wind.</small></div>`
+  }catch(_){box.innerHTML='<strong>Weer tijdelijk niet beschikbaar</strong><p><button class="text-btn" data-wr18>Opnieuw proberen</button></p>'}
+ }
+@@ -5990,7 +5991,7 @@ function nav24(){const desktop=document.querySelector('.sidebar nav');if(desktop
+ const AQ24='stAirQualityV24';
+ function level24(v){v=num24(v);return v>=50?'Hoog':v>=10?'Verhoogd':v>0?'Laag':'Zeer laag'}
+ function aqiText24(v){v=num24(v);return v<=20?'Goed':v<=40?'Redelijk':v<=60?'Matig':v<=80?'Slecht':'Zeer slecht'}
+-async function air24(force=false){if(current!=='today')return;const dash=document.querySelector('[data-dash18]');if(!dash)return;let card=dash.querySelector('[data-air24]');if(!card){card=document.createElement('section');card.className='air24';card.dataset.air24='';card.dataset.widget18='air';const grid=dash.querySelector('.dg18');grid?.append(card)}if(!card)return;card.innerHTML='<strong>Pollen & luchtkwaliteit</strong><p class="muted">Open-Meteo ophalen…</p>';try{const loc=window.SamenThuisWeatherLocation25?.()||{place:'Rotterdam',lat:51.9225,lon:4.47917},key=`${loc.lat},${loc.lon}`;let q=null;if(!force)try{const c=JSON.parse(localStorage.getItem(AQ24)||'null');if(c&&c.key===key&&Date.now()-c.t<1800000)q=c.q}catch(_){}if(!q){const u=new URL('https://air-quality-api.open-meteo.com/v1/air-quality');u.searchParams.set('latitude',String(loc.lat));u.searchParams.set('longitude',String(loc.lon));u.searchParams.set('current','european_aqi,pm2_5,pm10,nitrogen_dioxide,ozone,alder_pollen,birch_pollen,grass_pollen,mugwort_pollen,ragweed_pollen');u.searchParams.set('timezone','Europe/Amsterdam');const r=await fetch(u,{cache:'no-store'});if(!r.ok)throw 0;q=await r.json();localStorage.setItem(AQ24,JSON.stringify({t:Date.now(),key,q}))}const c=q.current||{};const pol=[['Gras',c.grass_pollen],['Berk',c.birch_pollen],['Els',c.alder_pollen],['Bijvoet',c.mugwort_pollen],['Ambrosia',c.ragweed_pollen]].sort((a,b)=>num24(b[1])-num24(a[1]));card.innerHTML=`<div class="air-head24"><div><small>OPEN-METEO · ${esc(loc.place.toUpperCase())}</small><h3>Pollen & luchtkwaliteit</h3></div><button data-air24-refresh>↻</button></div><div class="aqi24"><span class="aqi-badge24">AQI ${Math.round(num24(c.european_aqi))}</span><div><strong>${aqiText24(c.european_aqi)}</strong><small>PM2.5 ${num24(c.pm2_5).toFixed(1)} · PM10 ${num24(c.pm10).toFixed(1)} µg/m³</small></div></div><div class="pollen-grid24">${pol.map(([n,v])=>`<div><span>${n}</span><b>${level24(v)}</b><small>${num24(v).toFixed(1)} gr/m³</small></div>`).join('')}</div><p class="air-note24">Indicatie van omgevingswaarden; geen persoonlijk medisch advies.</p>`}catch(_){card.innerHTML='<strong>Pollen & luchtkwaliteit</strong><p>Gegevens tijdelijk niet beschikbaar. <button class="text-btn" data-air24-refresh>Opnieuw</button></p>'}}
++async function air24(force=false){if(current!=='today')return;const dash=document.querySelector('[data-dash18]');if(!dash)return;let card=dash.querySelector('[data-air24]');if(!card){card=document.createElement('section');card.className='air24';card.dataset.air24='';card.dataset.widget18='air';const grid=dash.querySelector('.dg18');grid?.append(card)}if(!card)return;card.innerHTML='<strong>Pollen & luchtkwaliteit</strong><p class="muted">Open-Meteo ophalen…</p>';try{const loc=window.SamenThuisWeatherLocation25?.()||{place:'Rotterdam',lat:51.9225,lon:4.47917},key=`${loc.lat},${loc.lon}`;let q=null;if(!force)try{const c=JSON.parse(localStorage.getItem(AQ24)||'null');if(c&&c.key===key&&Date.now()-c.t<1800000)q=c.q}catch(_){}if(!q){const u=new URL('https://air-quality-api.open-meteo.com/v1/air-quality');u.searchParams.set('latitude',String(loc.lat));u.searchParams.set('longitude',String(loc.lon));u.searchParams.set('current','european_aqi,pm2_5,pm10,nitrogen_dioxide,ozone,alder_pollen,birch_pollen,grass_pollen,mugwort_pollen,ragweed_pollen');u.searchParams.set('timezone','Europe/Amsterdam');const r=await fetch(u,{cache:'no-store'});if(!r.ok)throw 0;q=await r.json();localStorage.setItem(AQ24,JSON.stringify({t:Date.now(),key,q}))}const c=q.current||{};const pol=[['Gras',c.grass_pollen],['Berk',c.birch_pollen],['Els',c.alder_pollen],['Bijvoet',c.mugwort_pollen],['Ambrosia',c.ragweed_pollen]].sort((a,b)=>num24(b[1])-num24(a[1]));card.innerHTML=`<div class="air-head24"><div><small>OPEN-METEO · ${esc(loc.place.toUpperCase())}</small><h3>Pollen & luchtkwaliteit</h3></div><button data-air24-refresh>↻</button></div><div class="aqi24"><span class="aqi-badge24">AQI ${Math.round(num24(c.european_aqi))}</span><div><strong>${aqiText24(c.european_aqi)}</strong><small>PM2.5 ${num24(c.pm2_5).toFixed(1)} · PM10 ${num24(c.pm10).toFixed(1)} µg/m³</small></div></div><div class="pollen-grid24">${pol.map(([n,v])=>`<div><span>${n}</span><b>${level24(v)}</b><small>${num24(v).toFixed(1)} gr/m³</small></div>`).join('')}</div><p class="air-note24">Indicatie van omgevingswaarden; geen persoonlijk medisch advies. Bron: <a href="https://open-meteo.com/" target="_blank" rel="noopener noreferrer">Open-Meteo</a> (CC BY 4.0).</p>`}catch(_){card.innerHTML='<strong>Pollen & luchtkwaliteit</strong><p>Gegevens tijdelijk niet beschikbaar. <button class="text-btn" data-air24-refresh>Opnieuw</button></p>'}}
+ const baseRender24=render;render=function(...args){if(current==='auto24'){document.querySelector('#view').innerHTML=autoPage24();updateSyncBadge();requestAnimationFrame(nav24);return}const r=baseRender24(...args);requestAnimationFrame(()=>{nav24();air24()});return r};
+ document.addEventListener('click',e=>{if(e.target.closest('[data-v24-auto]')){current='auto24';render();return}const t=e.target.closest('[data-auto24-tab]');if(t){autoTab24=t.dataset.auto24Tab;render();return}const ed=e.target.closest('[data-auto24-edit]');if(ed){autoTab24='add';document.querySelector('#view').innerHTML=`<div class="auto24"><header class="auto-head24"><div><p class="eyebrow">AUTO & BRANDSTOF</p><h1>Tankbeurt bewerken</h1></div></header>${tabs24()}<section class="auto-body24">${fillForm24(data.fuelEntries.find(x=>x.id===ed.dataset.auto24Edit))}</section></div>`;return}const del=e.target.closest('[data-auto24-delete]');if(del&&confirm('Tankbeurt verwijderen?')){data.fuelEntries=data.fuelEntries.filter(x=>x.id!==del.dataset.auto24Delete);save();autoTab24='fills';render();return}const ca=e.target.closest('[data-auto24-car]');if(ca){editCar24(ca.dataset.auto24Car);return}if(e.target.closest('[data-auto24-newcar]')){editCar24();return}const dc=e.target.closest('[data-auto24-deletecar]');if(dc){deleteCar24(dc.dataset.auto24Deletecar);return}const p=e.target.closest('[data-auto24-period]');if(p){statsPeriod24=p.dataset.auto24Period;render();return}if(e.target.closest('[data-auto24-allcars]')){statsCars24=[];render();return}const sc=e.target.closest('[data-auto24-statcar]');if(sc){const id=sc.dataset.auto24Statcar;const currentIds=selectedCars24();if(sc.checked){statsCars24=[...new Set([...currentIds,id])]}else{statsCars24=currentIds.filter(x=>x!==id);if(!statsCars24.length){sc.checked=true;toast('Selecteer minimaal één auto');return}}render();return}if(e.target.closest('[data-air24-refresh]'))air24(true)});
+ document.addEventListener('submit',e=>{const f=e.target.closest('[data-fuel24-form]');if(!f)return;e.preventDefault();const fd=new FormData(f),lit=num24(fd.get('liters'));let total=num24(fd.get('total')),price=num24(fd.get('pricePerLiter'));if(!total&&price&&lit)total=price*lit;if(!price&&total&&lit)price=total/lit;const old=data.fuelEntries.find(x=>x.id===f.dataset.editId)||{};const item={...old,id:old.id||id24(),carId:String(fd.get('carId')),date:String(fd.get('date')),odometer:num24(fd.get('odometer')),liters:lit,total,pricePerLiter:price,fuelGrade:String(fd.get('fuelGrade')),station:String(fd.get('station')||''),partialFill:fd.has('partialFill'),missedPrevious:fd.has('missedPrevious'),note:String(fd.get('note')||'')};if(old.id)Object.assign(old,item);else data.fuelEntries.push(item);save();autoTab24='fills';render();toast('Tankbeurt opgeslagen')});
+@@ -7577,7 +7578,8 @@ document.addEventListener('click', event => {
+       ${chart25('Komende 24 uur', hourlyLabels, hourlyTemps, [], hourlyRain, 'Uurlijkse temperatuur en neerslag.')}
+       <section class="card weather-days25"><div class="card-head"><h2>7-daagse verwachting</h2></div><ul class="weather-list25">${days}</ul></section>
+       <section class="card settings-card"><div class="card-head"><div><p class="eyebrow">LOCATIE</p><h2>Weerlocatie aanpassen</h2></div></div><form class="form-grid weather-location25" data-weather-location><label class="field">Plaats<input name="place" maxlength="80" value="${esc(location.place)}" required></label><label class="field">Breedtegraad<input name="lat" type="number" step="any" min="-90" max="90" value="${location.lat}" required></label><label class="field">Lengtegraad<input name="lon" type="number" step="any" min="-180" max="180" value="${location.lon}" required></label><div class="button-row"><button class="primary" type="submit">Locatie opslaan</button><button class="secondary" type="button" data-weather-geolocate>Mijn locatie</button></div></form><p class="small-note">Weergegevens worden lokaal 30 minuten gecachet. Locatie-instellingen worden met de bestaande appgegevens gesynchroniseerd.</p></section>
+-      <p class="small-note weather-cache-note25" data-weather-cache-note></p>`;
++      <p class="small-note weather-cache-note25" data-weather-cache-note></p>
++      <p class="small-note weather-attribution">Weerdata: <a href="https://open-meteo.com/" target="_blank" rel="noopener noreferrer">Open-Meteo</a> (CC BY 4.0).</p>`;
+   }
+ 
+   async function loadWeatherPage25(force = false) {
+diff --git a/index.html b/index.html
+index 917846d..fa589c2 100644
+--- a/index.html
++++ b/index.html
+@@ -111,7 +111,7 @@
+   <script src="search-core.js?v=1"></script>
+   <script src="import-core.js?v=1"></script>
+   <script src="import-readers.js?v=1"></script>
+-  <script src="app.js?v=272"></script>
++  <script src="app.js?v=273"></script>
+   <script src="samen-thuis-update-v26-challenges.js?v=260"></script>
+   <script src="account-sync.js?v=2"></script>
+   <script src="inbox-core.js?v=1"></script>
+diff --git a/sw.js b/sw.js
+index 8fd824d..0271441 100644
+--- a/sw.js
++++ b/sw.js
+@@ -1,7 +1,7 @@
+ // Service worker Samen Thuis. Versiebeheer: verhoog CACHE bij elke wijziging in index.html of een asset-versie (?v=).
+ // sw-assets.test.js controleert dat elke stylesheet en elk script uit index.html hier voorkomt (offline volledig).
+-const CACHE='samen-thuis-v39-sri';
+-const ASSETS=['./','./index.html','./css/tokens.css?v=249','./css/base.css?v=249','./css/layout.css?v=252','./css/components.css?v=249','./styles.css?v=256','./sportcoach.css?v=2','./shell.css?v=3','./css/personalization.css?v=5','./css/finance.css?v=1','./cdn-libs.js?v=1','./data-core.js?v=249','./savings-core.js?v=1','./offers-core.js?v=5','./dashboard-core.js?v=3','./chalkboard-core.js?v=1','./household-sync-core.js?v=1','./personal-preferences-core.js?v=4','./budget-ledger-core.js?v=3','./finance-plan-core.js?v=1','./finance-ui.js?v=1','./quotes-core.js?v=2','./rewards-core.js?v=1','./freezer-core.js?v=1','./weather-advice-core.js?v=1','./sportcoach-core.js?v=2','./nav-core.js?v=2','./search-core.js?v=1','./import-core.js?v=1','./import-readers.js?v=1','./app.js?v=272','./samen-thuis-update-v26-challenges.js?v=260','./account-sync.js?v=2','./inbox-core.js?v=1','./inbox.js?v=1','./weather-extras.js?v=1','./sportcoach.js?v=6','./nav-groups.js?v=3','./search.js?v=1','./manifest.webmanifest','./icon.svg'];
++const CACHE='samen-thuis-v40-weerbron';
++const ASSETS=['./','./index.html','./css/tokens.css?v=249','./css/base.css?v=249','./css/layout.css?v=252','./css/components.css?v=249','./styles.css?v=256','./sportcoach.css?v=2','./shell.css?v=3','./css/personalization.css?v=5','./css/finance.css?v=1','./cdn-libs.js?v=1','./data-core.js?v=249','./savings-core.js?v=1','./offers-core.js?v=5','./dashboard-core.js?v=3','./chalkboard-core.js?v=1','./household-sync-core.js?v=1','./personal-preferences-core.js?v=4','./budget-ledger-core.js?v=3','./finance-plan-core.js?v=1','./finance-ui.js?v=1','./quotes-core.js?v=2','./rewards-core.js?v=1','./freezer-core.js?v=1','./weather-advice-core.js?v=1','./sportcoach-core.js?v=2','./nav-core.js?v=2','./search-core.js?v=1','./import-core.js?v=1','./import-readers.js?v=1','./app.js?v=273','./samen-thuis-update-v26-challenges.js?v=260','./account-sync.js?v=2','./inbox-core.js?v=1','./inbox.js?v=1','./weather-extras.js?v=1','./sportcoach.js?v=6','./nav-groups.js?v=3','./search.js?v=1','./manifest.webmanifest','./icon.svg'];
+ 
+ self.addEventListener('install',event=>{
+   event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(ASSETS)).then(()=>self.skipWaiting()));
+diff --git a/weather-attribution.test.js b/weather-attribution.test.js
+new file mode 100644
+index 0000000..f0bf90d
+--- /dev/null
++++ b/weather-attribution.test.js
+@@ -0,0 +1,21 @@
++// Open-Meteo-licentie (CC BY 4.0): bronvermelding met link bij elke weergave van weergegevens.
++const test = require('node:test');
++const assert = require('node:assert/strict');
++const fs = require('node:fs');
++
++const app = fs.readFileSync(__dirname + '/app.js', 'utf8');
++const LINK = /href="https:\/\/open-meteo\.com\/"[^>]*>Open-Meteo<\/a> \(CC BY 4\.0\)/;
++
++test('dashboardweer, weerpagina en luchtkwaliteit tonen de Open-Meteo-bronvermelding', () => {
++  const weather18 = app.slice(app.indexOf('async function weather18('), app.indexOf('async function weather18(') + 6000);
++  assert.match(weather18, LINK, 'dashboardweer');
++  const air = app.slice(app.indexOf('async function air24('), app.indexOf('async function air24(') + 6000);
++  assert.match(air, LINK, 'luchtkwaliteit en pollen');
++  assert.match(app, new RegExp('weather-attribution">Weerdata: <a ' + LINK.source), 'weerpagina');
++});
++
++test('geen API-sleutel voor Open-Meteo en de cache van 30 minuten blijft', () => {
++  assert.doesNotMatch(app, /open-meteo\.com[^'"`]*apikey/i);
++  assert.match(app, /Date\.now\(\) - cached\.savedAt < 30 \* 60 \* 1000/);
++  assert.match(app, /Date\.now\(\)-c\.t<1800000/);
++});
+-- 
+2.43.0
+

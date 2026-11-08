@@ -1,0 +1,111 @@
+From cb5d607ea881c9a863d75077561e2baea18f1726 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 8 Nov 2026 14:54:59 +0100
+Subject: [PATCH] docs: voedingsplanning Samen Thuis, recepten Osta (besluit
+ ST-1)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01DXboTXW7c38F7h8Qy7T4q3
+---
+ API_CATALOG.md    | 3 ++-
+ APP_REGISTRY.md   | 6 ++++--
+ CHANGELOG.md      | 4 ++++
+ DATA_OWNERSHIP.md | 4 +++-
+ DECISIONS.md      | 6 ++++++
+ 5 files changed, 19 insertions(+), 4 deletions(-)
+
+diff --git a/API_CATALOG.md b/API_CATALOG.md
+index 3d27fa8..a9a9792 100644
+--- a/API_CATALOG.md
++++ b/API_CATALOG.md
+@@ -15,10 +15,11 @@ Harde regel: een dienst komt alleen in deze catalogus met status ✅/🟢 als hi
+ | RDW Open Data (Socrata) | Samen Thuis | Voertuiggegevens op kenteken | ✅ | Open data; zonder app-token gedeelde IP-pool met throttling | ✔ (Socrata-docs) | Handmatige invoer |
+ | CBS Open Data (OData) | Samen Thuis | Pompprijzen | ✅ | Open data | ✘ | Handmatige invoer |
+ | data.overheid.nl (CKAN) | Samen Thuis | Datasetzoekfunctie | ✅ | Open data | ✘ | — |
+-| Open Food Facts API | Samen Thuis; 🟢 Sportapp (voeding) | Productinfo, voedingswaarden via barcode | ✅ | ODbL (database), DbCL (inhoud), CC BY-SA (foto's). Eigen User-Agent `AppName/Versie (contact)` verplicht | ✔ | Lokale cache van eerder gescande producten; handmatige invoer |
++| Open Food Facts API | Samen Thuis (voedingsplanning, actief sinds Samen Thuis 26.0); 🟢 Sportapp (persoonlijke voeding) | Productinfo, voedingswaarden, ingrediënten, allergenen via barcode of naam (alleen na gebruikersactie) | ✅ | ODbL (database), DbCL (inhoud), CC BY-SA (foto's). Eigen User-Agent `AppName/Versie (contact)` verplicht | ✔ | Lokale cache van eerder gescande producten; handmatige invoer |
+ | Open Prices (Open Food Facts) | Samen Thuis | Prijswaarnemingen | ✅ | Open (ODbL) | ✘ | Eigen prijswaarnemingen in Samen Thuis |
+ | fuel-prices.eu | Samen Thuis (`sources.js`) | Brandstofprijzen | 🟡 | Onbekend | ✘ | CBS |
+ | BrainyQuote RSS + script | Samen Thuis | Citaat van de dag | 🟡 | Gebruiksvoorwaarden niet gecontroleerd; **beveiligingsrisico R4** | ✘ | Lokale citatenlijst (`quotes-core.js`) |
++| Osta (externe app) | Samen Thuis | Recepten (primaire bron) | 🟢 | Geen API of export gedocumenteerd (App Store, 2026-11-08); uitwisseling via gedeelde tekst/schema.org-bestanden; voedingswaarden in Osta zijn betaald en nooit vereist | ✔ (beschrijving), ✘ (app zelf) | Recepttekst plakken |
+ | Supabase health endpoint `/auth/v1/health` | 🟢 Hub | Status projecten A en B | 🟢 | Onderdeel Supabase | ✘ (exact gedrag testen) | Status "onbekend" tonen |
+ 
+ ## 2. API's met registratie (gratis)
+diff --git a/APP_REGISTRY.md b/APP_REGISTRY.md
+index ea8e609..76fe12e 100644
+--- a/APP_REGISTRY.md
++++ b/APP_REGISTRY.md
+@@ -7,14 +7,16 @@ De Hub leest een machineleesbare kopie hiervan (`apps/hub/src/registry.json`) di
+ 
+ | ID | Naam | Status | Repo | Supabase | Schema | Eigenaar van |
+ |---|---|---|---|---|---|---|
+-| `samen-thuis` | Samen Thuis | Bestaand, in productie | `kesga44-jpg/Samen-thuis` | A | `public` + buckets `sport-training`, `profile-photos` | Huishouden, financiën, **beleggen**, boodschappen, voorraad, woning, planning, huishoud-challenges en beloningen |
++| `samen-thuis` | Samen Thuis | Bestaand, in productie | `kesga44-jpg/Samen-thuis` | A | `public` + buckets `sport-training`, `profile-photos` | Huishouden, financiën, **beleggen**, boodschappen, voorraad, woning, planning, **voedingsplanning** (weekmenu, receptkopieën met voedingsannotaties, productinformatie), huishoud-challenges en beloningen |
+ | `coach` | Coach | Bestaand, in productie | `kesga44-jpg/Coach` | B | `coach_data_auth` + bucket `vc2` | Clubs, teams, spelers, aanwezigheid, trainingen, wedstrijden, teamstatistieken, tactiek |
+ | `hub` | Dashboard Hub | Gepland | `personal-ecosystem/apps/hub` | A | `hub` | App-overzicht, meldingen, account- en toegangsbeheer, technische status |
+-| `sport` | Sportapp | Gepland | `personal-ecosystem/apps/sport` | A | `sport` + bucket `sport-media` | Persoonlijke sport, training, voeding, lichaamsanalyse, herstel, groepen, klassementen, persoonlijke AI-coach |
++| `sport` | Sportapp | Gepland | `personal-ecosystem/apps/sport` | A | `sport` + bucket `sport-media` | Persoonlijke sport, training, **persoonlijke** voeding (inname, doelen), lichaamsanalyse, herstel, groepen, klassementen, persoonlijke AI-coach |
+ | `sidequest` | SIDEQUEST | Gepland | `personal-ecosystem/apps/sidequest` | A | `quest` | Persoonlijke doelen, gewoontes, uitdagingen, quests, gamification, voortgang |
+ 
+ **Niet in het register, en niet gepland:** Warehouse OS.
+ 
++**Externe apps (geen onderdeel van het ecosysteem):** Osta (iOS/macOS) is de primaire plek voor recepten. Geen API; uitwisseling met Samen Thuis alleen via door de gebruiker gestarte import/export (Samen Thuis-ADR 0001).
++
+ ## Per app
+ 
+ ### Samen Thuis (`samen-thuis`)
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 547cac0..351d4e8 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -3,6 +3,10 @@
+ Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/). Versies volgen [Semantic Versioning](https://semver.org/lang/nl/).
+ Elke app in de monorepo krijgt een eigen sectie zodra die bestaat. Bestaande apps houden hun changelog in hun eigen repo.
+ 
++## 2026-11-08 — Voeding en Osta
++
++- Besluit ST-1 vastgelegd: voedingsplanning in Samen Thuis, recepten in Osta (extern), persoonlijke voeding in Sportapp. `APP_REGISTRY.md`, `DATA_OWNERSHIP.md`, `API_CATALOG.md`, `DECISIONS.md` bijgewerkt.
++
+ ## [Unreleased]
+ 
+ ### Toegevoegd
+diff --git a/DATA_OWNERSHIP.md b/DATA_OWNERSHIP.md
+index 98a19e0..b8c3e67 100644
+--- a/DATA_OWNERSHIP.md
++++ b/DATA_OWNERSHIP.md
+@@ -13,12 +13,14 @@ Twee soorten eigendom:
+ | Financiën, potjes, inkomens, verdelingen | Samen Thuis | `public.household_state`, `public.finance_*` | Geen |
+ | **Beleggen en vermogensbeheer** | Samen Thuis | Nog te ontwerpen, binnen Samen Thuis | Geen |
+ | Boodschappen, voorraad, aanbiedingen | Samen Thuis | `public.household_state` | Geen |
++| Voedingsplanning: weekmenu-koppelingen, receptkopieën met voedingsannotaties, productinformatie (OFF/etiket) | Samen Thuis | `nutrition` in `public.household_state` | Geen (export door gebruiker: `samen-thuis.recipes`, schema.org) |
++| Recepten (inhoud) | Osta (extern) | Buiten het ecosysteem | Samen Thuis: alleen-lezen kopie via import; bron wint bij herimport |
+ | Woning, onderhoud, projecten | Samen Thuis | `public.household_state` | Geen |
+ | Huishoud-challenges, puntenpot, beloningen | Samen Thuis | `challengeDataV26` in `household_state` | Geen |
+ | Profiel (naam, foto, accentkleur) | Samen Thuis | `public.personal_preferences`, bucket `profile-photos` | Hub, Sportapp, SIDEQUEST: alleen naam en foto van **de eigen gebruiker**, via bestaande sessie |
+ | Clubs, teams, spelers, wedstrijden, tactiek | Coach | Project B `coach_data_auth` (versleuteld) | Geen |
+ | App-register, meldingen, integratietoestemmingen, audit | Hub | `hub.*` | Elke app: alleen eigen meldingen aanmaken via `hub.notify()` |
+-| Trainingen, sessies, schema's, voeding, metingen, herstel | Sportapp | `sport.*` | SIDEQUEST: alleen `sport.activity_events` met toestemming |
++| Trainingen, sessies, schema's, persoonlijke voeding (inname, doelen), metingen, herstel | Sportapp | `sport.*` | SIDEQUEST: alleen `sport.activity_events` met toestemming |
+ | Sportgroepen en klassementen | Sportapp | `sport.groups`, `sport.group_members`, `sport.leaderboard_entries` | Groepsleden: alleen gedeelde, geaggregeerde waarden |
+ | Doelen, gewoontes, quests, XP | SIDEQUEST | `quest.*` | Hub: alleen tellers via `quest.summary_for_me()` |
+ | Sport & Training (huidige data) | Samen Thuis, volledig in gebruik tot poort G-SPORT (ADR 0002) | `data.sportCoach`, bucket `sport-training` | Herhaalbare export/import door de gebruiker naar Sportapp (I-6, I-6b) |
+diff --git a/DECISIONS.md b/DECISIONS.md
+index 10e1183..ab04c57 100644
+--- a/DECISIONS.md
++++ b/DECISIONS.md
+@@ -58,6 +58,12 @@ Ontwerp: [docs/hub/HUB_DESIGN.md](docs/hub/HUB_DESIGN.md) — in principe goedge
+ | V-5 | Na elke PR rapport; eigenaar merget; elke databasewijziging: isolatierapport, herstelbare back-up, expliciet akkoord vooraf |
+ 
+ 
++## Samen Thuis (2026-11-08)
++
++| # | Besluit | Uitkomst | Uitwerking |
++|---|---|---|---|
++| ST-1 | Voedingsplanning en recepten | ✅ Eigenaar | Samen Thuis: voedingsplanning, productinformatie en voedingsberekening; Osta: primaire plek voor recepten; Samen Thuis importeert/exporteert alleen (geen tweede receptenbeheer); persoonlijke voeding blijft Sportapp; AI alleen handmatig. ADR 0001 in de Samen Thuis-repo |
++
+ ## Ontbrekende informatie (nog steeds open)
+ 
+ Zie [REPO_ANALYSIS.md § Ontbrekende informatie](REPO_ANALYSIS.md#ontbrekende-informatie-expliciet). Voor F1 zijn vooral nodig: punt 2 (anon-toegang ingetrokken?), 3 (Coach-backend), 4 (gedeployde Edge Functions) en 5 (database- en storagegebruik).
+-- 
+2.43.0
+

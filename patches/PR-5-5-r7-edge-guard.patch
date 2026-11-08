@@ -1,0 +1,485 @@
+From 83bc74ed9079505a85723b793069fd574f45677c Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 8 Nov 2026 15:13:53 +0100
+Subject: [PATCH] R7: Edge Functions alleen met gebruikers-JWT, CORS-allowlist
+ en limieten; app stuurt sessietoken mee (roadmap PR-8, deploy apart)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01DXboTXW7c38F7h8Qy7T4q3
+---
+ INSTALLATIE_BETA.md                        |   6 +-
+ OPEN_DATA_BRONNEN.md                       |   8 +-
+ app.js                                     |  12 ++-
+ edge-guard.test.js                         | 107 +++++++++++++++++++
+ index.html                                 |   2 +-
+ supabase/functions/_shared/guard.ts        | 115 +++++++++++++++++++++
+ supabase/functions/data-sources/index.ts   |  22 ++--
+ supabase/functions/grocery-prices/index.ts |  40 ++++---
+ sw.js                                      |   4 +-
+ 9 files changed, 287 insertions(+), 29 deletions(-)
+ create mode 100644 edge-guard.test.js
+ create mode 100644 supabase/functions/_shared/guard.ts
+
+diff --git a/INSTALLATIE_BETA.md b/INSTALLATIE_BETA.md
+index 2a71c93..6a01147 100644
+--- a/INSTALLATIE_BETA.md
++++ b/INSTALLATIE_BETA.md
+@@ -48,9 +48,13 @@ Met de Supabase CLI:
+ ```bash
+ npx supabase login
+ npx supabase link --project-ref vwfuetxgapzfivydzhxc
+-npx supabase functions deploy grocery-prices --no-verify-jwt
++npx supabase secrets set ALLOWED_ORIGINS=https://kesga44-jpg.github.io
++npx supabase functions deploy grocery-prices
+ ```
+ 
++Sinds PR-8 vereist de functie een aangemelde gebruiker (persoonlijk account) en accepteert ze alleen verzoeken van de
++origins in `ALLOWED_ORIGINS`. Zie `docs/SECURITY.md` en `OPEN_DATA_BRONNEN.md`. Deploy alleen na akkoord van de eigenaar.
++
+ De beta gebruikt daarna automatisch:
+ 
+ `<jouw-supabase-url>/functions/v1/grocery-prices`
+diff --git a/OPEN_DATA_BRONNEN.md b/OPEN_DATA_BRONNEN.md
+index bb805b8..b7fdd85 100644
+--- a/OPEN_DATA_BRONNEN.md
++++ b/OPEN_DATA_BRONNEN.md
+@@ -6,7 +6,13 @@ Ingebouwd: PrijsProfeet, Open Food Facts v3, Open Prices, Open-Meteo, RDW Open D
+ Maak een gratis NED API-key en zet hem alleen als Supabase secret:
+ 
+     npx supabase secrets set NED_API_KEY=JOUW_NED_KEY
+-    npx supabase functions deploy data-sources --no-verify-jwt
++    npx supabase secrets set ALLOWED_ORIGINS=https://kesga44-jpg.github.io
++    npx supabase functions deploy data-sources
++
++> Sinds PR-8 (R7) controleert de functie zelf de gebruikers-JWT, CORS-origin, verzoekgrootte en een limiet per gebruiker
++> (`supabase/functions/_shared/guard.ts`). Deploy **zonder** `--no-verify-jwt`. Alleen als de CORS-preflight dan aantoonbaar
++> door de gateway wordt geweigerd, is `--no-verify-jwt` een bewuste keuze van de eigenaar; de functie blijft dan via de
++> eigen JWT-controle afgeschermd. Niet uitvoeren zonder akkoord (geen productiewijziging zonder toestemming).
+ 
+ ## Folders
+ Er is geen betrouwbare officiële gratis open API gevonden die hetzelfde brede niet-supermarkt-folderaanbod als AlleFolders aanbiedt. Daarom is bewust geen scraper ingebouwd. Supermarktaanbiedingen lopen via PrijsProfeet.
+diff --git a/app.js b/app.js
+index fca7eda..d3ec59c 100644
+--- a/app.js
++++ b/app.js
+@@ -10,6 +10,14 @@ const DEFAULT_PUBLISHABLE_KEY = 'sb_publishable_Xa1oLeM64F-jog1vVjJbkQ_BE3UV6mR'
+ const PDFJS_URL = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.min.mjs';
+ const PDFJS_WORKER_URL = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.min.mjs';
+ 
++// PR-8: Edge Functions vereisen een gebruikers-JWT. Met sessie: eigen token; zonder sessie: publishable key
++// (de functie weigert dan met een duidelijke melding "Aanmelden vereist"). Nooit een service-role key.
++async function edgeFunctionHeaders() {
++  let token = '';
++  try { token = (await window.SamenThuisAuth25?.ready?.())?.access_token || ''; } catch (_) { token = ''; }
++  return { apikey: DEFAULT_PUBLISHABLE_KEY, Authorization: 'Bearer ' + (token || DEFAULT_PUBLISHABLE_KEY) };
++}
++
+ const pad = value => String(value).padStart(2, '0');
+ const toLocalISO = date => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+ const todayISO = () => toLocalISO(new Date());
+@@ -7187,7 +7195,7 @@ document.addEventListener('click', event => {
+       const base = String(syncConfig.projectUrl || DEFAULT_PROJECT_URL).replace(/\/$/, '');
+       const result = await offerCore25().fetchCategories({
+         url: `${base}/functions/v1/grocery-prices`,
+-        headers: { apikey: DEFAULT_PUBLISHABLE_KEY, Authorization: 'Bearer ' + DEFAULT_PUBLISHABLE_KEY },
++        headers: await edgeFunctionHeaders(),
+         signal: controller?.signal
+       });
+       data.offerCategoryCache25 = { categories: result.categories, checkedAt: result.checkedAt };
+@@ -7395,7 +7403,7 @@ document.addEventListener('click', event => {
+         category: categorySlug,
+         page,
+         url: `${base}/functions/v1/grocery-prices`,
+-        headers: { apikey: DEFAULT_PUBLISHABLE_KEY, Authorization: 'Bearer ' + DEFAULT_PUBLISHABLE_KEY },
++        headers: await edgeFunctionHeaders(),
+         signal: controller?.signal
+       });
+       if (!offerRequestGuard25.isCurrent(requestToken)) return;
+diff --git a/edge-guard.test.js b/edge-guard.test.js
+new file mode 100644
+index 0000000..6127ba3
+--- /dev/null
++++ b/edge-guard.test.js
+@@ -0,0 +1,107 @@
++// PR-8 / R7: Edge Functions alleen met gebruikers-JWT, beperkte CORS, groottelimiet en limiet per gebruiker.
++// guard.ts gebruikt alleen Web-API's en wordt hier direct geïmporteerd (Node ≥ 22.18 strip types).
++const test = require('node:test');
++const assert = require('node:assert/strict');
++const fs = require('node:fs');
++const path = require('node:path');
++
++const load = () => import(path.join(__dirname, 'supabase/functions/_shared/guard.ts'));
++const JWT = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyLTEifQ.c2lnbmF0dXJlLXZhbHVl';
++const ORIGIN = 'https://kesga44-jpg.github.io';
++const env = { url: 'https://example.supabase.co', apikey: 'sb_publishable_test', allowedOrigins: '' };
++const authOk = async (url, init) => {
++  assert.equal(url, 'https://example.supabase.co/auth/v1/user');
++  assert.equal(init.headers.Authorization, 'Bearer ' + JWT);
++  return { ok: true, json: async () => ({ id: 'user-1' }) };
++};
++const req = (opts = {}) => new Request('https://example.supabase.co/functions/v1/x', {
++  method: opts.method || 'POST',
++  headers: { 'content-type': 'application/json', ...(opts.origin === null ? {} : { origin: opts.origin || ORIGIN }), ...(opts.token === null ? {} : { authorization: 'Bearer ' + (opts.token || JWT) }) },
++  body: (opts.method || 'POST') === 'POST' ? (opts.body ?? '{"search":"melk"}') : undefined
++});
++
++test('origins: standaard GitHub Pages; ALLOWED_ORIGINS overschrijft; ongeldige waarden genegeerd', async () => {
++  const g = await load();
++  assert.deepEqual(g.parseAllowedOrigins(''), [ORIGIN]);
++  assert.deepEqual(g.parseAllowedOrigins('https://a.example, http://localhost:8080/ , javascript:alert(1), *'), ['https://a.example', 'http://localhost:8080']);
++  assert.equal(g.corsHeaders('https://evil.example', [ORIGIN])['Access-Control-Allow-Origin'], undefined);
++  assert.equal(g.corsHeaders(ORIGIN, [ORIGIN])['Access-Control-Allow-Origin'], ORIGIN);
++});
++
++test('alleen echte JWT\'s; publishable key en lege token zijn geen sessie', async () => {
++  const g = await load();
++  assert.equal(g.looksLikeJwt(JWT), true);
++  assert.equal(g.looksLikeJwt('sb_publishable_Xa1oLeM64F-jog1vVjJbkQ_BE3UV6mR'), false);
++  assert.equal(g.looksLikeJwt(''), false);
++});
++
++test('guard: geldige gebruiker en origin → door, met CORS voor die origin', async () => {
++  const g = await load();
++  const out = await g.guard(req(), { env, limiter: () => true, fetchImpl: authOk });
++  assert.equal(out.userId, 'user-1');
++  assert.deepEqual(out.body, { search: 'melk' });
++  assert.equal(out.headers['Access-Control-Allow-Origin'], ORIGIN);
++});
++
++test('guard: weigert zonder token (401), met publishable key (401), met ongeldige sessie (401)', async () => {
++  const g = await load();
++  let out = await g.guard(req({ token: null }), { env, limiter: () => true, fetchImpl: authOk });
++  assert.equal(out.response.status, 401);
++  out = await g.guard(req({ token: 'sb_publishable_Xa1oLeM64F-jog1vVjJbkQ_BE3UV6mR' }), { env, limiter: () => true, fetchImpl: authOk });
++  assert.equal(out.response.status, 401);
++  out = await g.guard(req(), { env, limiter: () => true, fetchImpl: async () => ({ ok: false, status: 401 }) });
++  assert.equal(out.response.status, 401);
++  assert.match((await out.response.json()).error, /opnieuw in/);
++});
++
++test('guard: vreemde origin 403, preflight alleen voor toegestane origin, GET 405', async () => {
++  const g = await load();
++  let out = await g.guard(req({ origin: 'https://evil.example' }), { env, limiter: () => true, fetchImpl: authOk });
++  assert.equal(out.response.status, 403);
++  out = await g.guard(req({ method: 'OPTIONS' }), { env, limiter: () => true });
++  assert.equal(out.response.status, 200);
++  assert.equal(out.response.headers.get('access-control-allow-origin'), ORIGIN);
++  out = await g.guard(req({ method: 'OPTIONS', origin: 'https://evil.example' }), { env, limiter: () => true });
++  assert.equal(out.response.status, 403);
++  out = await g.guard(req({ method: 'GET' }), { env, limiter: () => true });
++  assert.equal(out.response.status, 405);
++});
++
++test('guard: te groot of geen object → 413; Auth onbereikbaar → 503; limiet → 429', async () => {
++  const g = await load();
++  let out = await g.guard(req({ body: JSON.stringify({ search: 'x'.repeat(9000) }) }), { env, limiter: () => true, fetchImpl: authOk });
++  assert.equal(out.response.status, 413);
++  out = await g.guard(req({ body: '[1,2]' }), { env, limiter: () => true, fetchImpl: authOk });
++  assert.equal(out.response.status, 413);
++  out = await g.guard(req(), { env, limiter: () => true, fetchImpl: async () => { throw new TypeError('net'); } });
++  assert.equal(out.response.status, 503);
++  out = await g.guard(req(), { env, limiter: () => false, fetchImpl: authOk });
++  assert.equal(out.response.status, 429);
++});
++
++test('rate limiter: max per venster per gebruiker, los per gebruiker, herstelt na venster', async () => {
++  const g = await load();
++  const allow = g.createRateLimiter(2, 1000);
++  assert.equal(allow('a', 0), true); assert.equal(allow('a', 10), true); assert.equal(allow('a', 20), false);
++  assert.equal(allow('b', 20), true);
++  assert.equal(allow('a', 1500), true);
++});
++
++test('cleanText verwijdert stuurtekens en kort in', async () => {
++  const g = await load();
++  assert.equal(g.cleanText('  melk\u0000\n ', 100), 'melk');
++  assert.equal(g.cleanText('x'.repeat(200), 10).length, 10);
++});
++
++test('beide externe-API-functies gebruiken guard; geen open CORS; app stuurt sessietoken mee', () => {
++  for (const f of ['data-sources', 'grocery-prices']) {
++    const src = fs.readFileSync(path.join(__dirname, 'supabase/functions', f, 'index.ts'), 'utf8');
++    assert.match(src, /from "\.\.\/_shared\/guard\.ts"/, f);
++    assert.match(src, /await guard\(req/, f);
++    assert.doesNotMatch(src, /Allow-Origin"\s*:\s*"\*"/, f);
++  }
++  const app = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
++  assert.doesNotMatch(app, /Authorization: 'Bearer ' \+ DEFAULT_PUBLISHABLE_KEY \}/);
++  assert.match(app, /async function edgeFunctionHeaders\(\)/);
++  for (const doc of ['OPEN_DATA_BRONNEN.md', 'INSTALLATIE_BETA.md']) assert.doesNotMatch(fs.readFileSync(path.join(__dirname, doc), 'utf8'), /^\s*npx supabase functions deploy \S+ --no-verify-jwt/m, doc);
++});
+diff --git a/index.html b/index.html
+index fa589c2..378fa91 100644
+--- a/index.html
++++ b/index.html
+@@ -111,7 +111,7 @@
+   <script src="search-core.js?v=1"></script>
+   <script src="import-core.js?v=1"></script>
+   <script src="import-readers.js?v=1"></script>
+-  <script src="app.js?v=273"></script>
++  <script src="app.js?v=274"></script>
+   <script src="samen-thuis-update-v26-challenges.js?v=260"></script>
+   <script src="account-sync.js?v=2"></script>
+   <script src="inbox-core.js?v=1"></script>
+diff --git a/supabase/functions/_shared/guard.ts b/supabase/functions/_shared/guard.ts
+new file mode 100644
+index 0000000..f2c6f28
+--- /dev/null
++++ b/supabase/functions/_shared/guard.ts
+@@ -0,0 +1,115 @@
++// Gedeelde beveiliging voor Samen Thuis Edge Functions (risico R7, roadmap PR-8).
++// - JWT van een echte gebruiker verplicht (publishable key alleen is niet genoeg);
++// - CORS alleen voor toegestane origins (secret ALLOWED_ORIGINS, komma-gescheiden);
++// - groottelimiet op het verzoek en best-effort limiet per gebruiker.
++// Alleen standaard Web-API's, zodat dit bestand ook in Node-tests te importeren is.
++
++export const DEFAULT_ALLOWED_ORIGINS = ["https://kesga44-jpg.github.io"];
++export const MAX_BODY_BYTES = 8 * 1024;
++
++export function parseAllowedOrigins(value: string | undefined | null): string[] {
++  const list = String(value || "")
++    .split(",")
++    .map((x) => x.trim().replace(/\/+$/, ""))
++    .filter((x) => /^https?:\/\/[^\s/]+$/.test(x));
++  return list.length ? list : DEFAULT_ALLOWED_ORIGINS;
++}
++
++export function corsHeaders(origin: string | null, allowed: string[]): Record<string, string> {
++  const headers: Record<string, string> = {
++    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
++    "Access-Control-Allow-Methods": "POST, OPTIONS",
++    "Vary": "Origin",
++  };
++  if (origin && allowed.includes(origin)) headers["Access-Control-Allow-Origin"] = origin;
++  return headers;
++}
++
++export function bearerToken(req: Request): string {
++  const header = req.headers.get("authorization") || "";
++  const match = /^Bearer\s+(.+)$/i.exec(header.trim());
++  return match ? match[1].trim() : "";
++}
++
++// Een gebruikers-JWT bestaat uit drie base64url-delen. Publishable/anon keys en lege waarden vallen hierbuiten.
++export function looksLikeJwt(token: string): boolean {
++  return /^[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}$/.test(token);
++}
++
++export type UserCheck = { ok: true; userId: string } | { ok: false; status: number; error: string };
++
++// Controleert de token bij Supabase Auth (GET /auth/v1/user). Zonder geldige sessie: 401.
++export async function requireUser(
++  req: Request,
++  env: { url?: string; apikey?: string },
++  fetchImpl: typeof fetch = fetch,
++): Promise<UserCheck> {
++  const token = bearerToken(req);
++  if (!looksLikeJwt(token)) return { ok: false, status: 401, error: "Aanmelden vereist: log in met je persoonlijke account." };
++  const base = String(env.url || "").replace(/\/+$/, "");
++  const apikey = env.apikey || req.headers.get("apikey") || "";
++  if (!base || !apikey) return { ok: false, status: 500, error: "Serverconfiguratie onvolledig (SUPABASE_URL)." };
++  try {
++    const res = await fetchImpl(`${base}/auth/v1/user`, { headers: { apikey, Authorization: `Bearer ${token}` } });
++    if (!res.ok) return { ok: false, status: 401, error: "Sessie ongeldig of verlopen: log opnieuw in." };
++    const user = await res.json().catch(() => null) as { id?: string } | null;
++    if (!user || typeof user.id !== "string" || !user.id) return { ok: false, status: 401, error: "Sessie ongeldig." };
++    return { ok: true, userId: user.id };
++  } catch (_) {
++    return { ok: false, status: 503, error: "Aanmeldcontrole tijdelijk niet bereikbaar." };
++  }
++}
++
++// Best-effort limiet per gebruiker binnen één functie-instantie. Niet duurzaam (instanties kunnen herstarten);
++// beschermt tegen per ongeluk lussen en eenvoudig misbruik van de externe API-quota.
++export function createRateLimiter(limit = 30, windowMs = 60_000) {
++  const hits = new Map<string, number[]>();
++  return function allow(key: string, now = Date.now()): boolean {
++    const recent = (hits.get(key) || []).filter((t) => now - t < windowMs);
++    if (recent.length >= limit) { hits.set(key, recent); return false; }
++    recent.push(now);
++    hits.set(key, recent);
++    if (hits.size > 1000) hits.delete(hits.keys().next().value as string);
++    return true;
++  };
++}
++
++// Leest JSON met groottelimiet; geeft null bij te groot of ongeldig.
++export async function readJsonBody(req: Request, maxBytes = MAX_BODY_BYTES): Promise<Record<string, unknown> | null> {
++  const declared = Number(req.headers.get("content-length") || "0");
++  if (declared > maxBytes) return null;
++  const text = await req.text();
++  if (new TextEncoder().encode(text).length > maxBytes) return null;
++  try {
++    const value = JSON.parse(text || "{}");
++    return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
++  } catch (_) {
++    return null;
++  }
++}
++
++export function cleanText(value: unknown, max = 100): string {
++  return String(value ?? "").replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, max);
++}
++
++// Alles-in-één poort voor een POST-functie. Geeft óf een Response (afwijzing/preflight) óf de context terug.
++export async function guard(
++  req: Request,
++  opts: { env: { url?: string; apikey?: string; allowedOrigins?: string }; limiter: (key: string) => boolean; fetchImpl?: typeof fetch },
++): Promise<{ response: Response } | { userId: string; body: Record<string, unknown>; headers: Record<string, string> }> {
++  const allowed = parseAllowedOrigins(opts.env.allowedOrigins);
++  const origin = req.headers.get("origin");
++  const headers = corsHeaders(origin, allowed);
++  const reply = (status: number, error: string) =>
++    ({ response: new Response(JSON.stringify({ error }), { status, headers: { ...headers, "Content-Type": "application/json" } }) });
++  if (req.method === "OPTIONS") return { response: new Response("ok", { status: origin && allowed.includes(origin) ? 200 : 403, headers }) };
++  if (req.method !== "POST") return reply(405, "Alleen POST is toegestaan.");
++  // Een browser-aanvraag vanaf een niet-toegestane origin wordt geweigerd; server-tot-server (zonder Origin) valt onder de JWT-eis.
++  if (origin && !allowed.includes(origin)) return reply(403, "Origin niet toegestaan.");
++  const user = await requireUser(req, opts.env, opts.fetchImpl);
++  if (!user.ok) return reply(user.status, user.error);
++  if (!opts.limiter(user.userId)) return reply(429, "Te veel verzoeken; probeer het over een minuut opnieuw.");
++  const body = await readJsonBody(req);
++  if (!body) return reply(413, "Verzoek te groot of ongeldig.");
++  return { userId: user.userId, body, headers };
++}
+diff --git a/supabase/functions/data-sources/index.ts b/supabase/functions/data-sources/index.ts
+index 1397502..dd46104 100644
+--- a/supabase/functions/data-sources/index.ts
++++ b/supabase/functions/data-sources/index.ts
+@@ -1,12 +1,16 @@
+-const cors={
+-  "Access-Control-Allow-Origin":"*",
+-  "Access-Control-Allow-Headers":"authorization, x-client-info, apikey, content-type"
+-};
++import { guard, createRateLimiter, cleanText } from "../_shared/guard.ts";
++
++// R7/PR-8: gebruikers-JWT verplicht, CORS alleen voor ALLOWED_ORIGINS, groottelimiet en limiet per gebruiker.
++const limiter=createRateLimiter(20,60_000);
++const env={url:Deno.env.get("SUPABASE_URL")||"",apikey:Deno.env.get("SUPABASE_ANON_KEY")||"",allowedOrigins:Deno.env.get("ALLOWED_ORIGINS")||""};
+ 
+ Deno.serve(async(req)=>{
+-  if(req.method==="OPTIONS") return new Response("ok",{headers:cors});
++  const gate=await guard(req,{env,limiter});
++  if("response" in gate) return gate.response;
++  const headers=gate.headers;
++  const j=(v:any,status=200)=>new Response(JSON.stringify(v),{status,headers:{...headers,"Content-Type":"application/json"}});
+   try{
+-    const b=await req.json();
++    const b=gate.body as any;
+ 
+     if(b.action==="ned-energy"){
+       const key=Deno.env.get("NED_API_KEY");
+@@ -37,14 +41,14 @@ Deno.serve(async(req)=>{
+       const r=await fetch(u);
+       const x=await r.json().catch(()=>({}));
+       if(!r.ok||x.ok===false)throw new Error(x.message||`Tankerkönig ${r.status}`);
+-      return j({place:b.place||"",fuel,radius:rad,stations:(x.stations||[]).slice(0,12),license:x.license||"CC BY 4.0",updated:new Date().toISOString()});
++      return j({place:cleanText(b.place,80),fuel,radius:rad,stations:(x.stations||[]).slice(0,12),license:x.license||"CC BY 4.0",updated:new Date().toISOString()});
+     }
+ 
+     return j({error:"Onbekende actie"},400);
+   }catch(e){
+-    return j({error:e?.message||String(e)},500);
++    console.error("data-sources mislukt:",e instanceof Error?e.name:"onbekend");
++    return j({error:"Bron tijdelijk niet beschikbaar"},502);
+   }
+ });
+ 
+ function f(x:any){if(!x)return null;const k=Number(x.capacity);return Number.isFinite(k)?`${Math.round(k/1000).toLocaleString("nl-NL")} MW`:null}
+-function j(v:any,status=200){return new Response(JSON.stringify(v),{status,headers:{...cors,"Content-Type":"application/json"}})}
+diff --git a/supabase/functions/grocery-prices/index.ts b/supabase/functions/grocery-prices/index.ts
+index 9aa6419..8bfee84 100644
+--- a/supabase/functions/grocery-prices/index.ts
++++ b/supabase/functions/grocery-prices/index.ts
+@@ -1,10 +1,19 @@
+ import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
++import { guard, createRateLimiter, cleanText } from "../_shared/guard.ts";
+ 
+-const cors = {
+-  "Access-Control-Allow-Origin": "*",
+-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+-  "Access-Control-Allow-Methods": "POST, OPTIONS"
++// R7/PR-8: geen open CORS meer en een gebruikers-JWT is verplicht (zie ../_shared/guard.ts).
++// CORS-headers worden per verzoek toegevoegd door withHeaders().
++const limiter = createRateLimiter(30, 60_000);
++const env = {
++  url: Deno.env.get("SUPABASE_URL") || "",
++  apikey: Deno.env.get("SUPABASE_ANON_KEY") || "",
++  allowedOrigins: Deno.env.get("ALLOWED_ORIGINS") || ""
+ };
++function withHeaders(res: Response, headers: Record<string,string>) {
++  const merged = new Headers(res.headers);
++  Object.entries(headers).forEach(([k, v]) => merged.set(k, v));
++  return new Response(res.body, { status: res.status, headers: merged });
++}
+ // Provider access is server-side; an API key is optional and must be stored as a Supabase secret.
+ const API = "https://www.prijsprofeet.nl/api/v1/search";
+ const CATEGORIES_API = "https://www.prijsprofeet.nl/api/v1/categories";
+@@ -12,7 +21,7 @@ const PAGE_SIZE = 20;
+ const key = Deno.env.get("PRIJS_PROFEET_API_KEY") || "";
+ 
+ function json(body: unknown, status=200) {
+-  return new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
++  return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+ }
+ 
+ function numberOrNull(value: unknown) {
+@@ -169,20 +178,25 @@ async function lookup(item: {id:string;query:string;preferredRetailer?:string})
+ }
+ 
+ serve(async req => {
+-  if (req.method === "OPTIONS") return new Response("ok", { headers:cors });
+-  if (req.method !== "POST") return json({error:"Gebruik POST"},405);
++  const gate = await guard(req, { env, limiter });
++  if ("response" in gate) return gate.response;
++  return withHeaders(await handle(gate.body), gate.headers);
++});
++
++async function handle(body: any): Promise<Response> {
+   try {
+-    const body = await req.json();
+     if (body?.categories === true) return await listCategories();
+     if (body?.search != null) {
+-      const query = String(body.search).trim().slice(0, 100);
++      const query = cleanText(body.search, 100);
+       if (!query) return json({error:"Vul een productnaam of merk in"},400);
+       const category = String(body.category || "").trim().slice(0, 60);
+       if (category && !/^[a-z0-9-]+$/.test(category)) return json({error:"Ongeldige categorie"},400);
+       const page = Math.min(20, Math.max(1, Math.floor(Number(body.page)) || 1));
+       return await searchOffers(query, category, page);
+     }
+-    const queries = Array.isArray(body?.queries) ? body.queries.slice(0,25) : [];
++    const queries = (Array.isArray(body?.queries) ? body.queries.slice(0,25) : [])
++      .filter((q: any) => q && typeof q === "object")
++      .map((q: any) => ({ id: cleanText(q.id, 80), query: cleanText(q.query, 100), preferredRetailer: cleanText(q.preferredRetailer, 40) }));
+     if (!queries.length) return json({results:[]});
+     const results=[];
+     // Kleine batches beperken de druk op de publieke API.
+@@ -192,7 +206,7 @@ serve(async req => {
+     }
+     return json({results,source:"PrijsProfeet",checkedAt:new Date().toISOString()});
+   } catch (error) {
+-    console.error(error);
+-    return json({error:error instanceof Error?error.message:"Onbekende fout"},500);
++    console.error("grocery-prices mislukt:", error instanceof Error ? error.name : "onbekend");
++    return json({error:"Aanbiedingen ophalen mislukt"},500);
+   }
+-});
++}
+diff --git a/sw.js b/sw.js
+index 0271441..ada3787 100644
+--- a/sw.js
++++ b/sw.js
+@@ -1,7 +1,7 @@
+ // Service worker Samen Thuis. Versiebeheer: verhoog CACHE bij elke wijziging in index.html of een asset-versie (?v=).
+ // sw-assets.test.js controleert dat elke stylesheet en elk script uit index.html hier voorkomt (offline volledig).
+-const CACHE='samen-thuis-v40-weerbron';
+-const ASSETS=['./','./index.html','./css/tokens.css?v=249','./css/base.css?v=249','./css/layout.css?v=252','./css/components.css?v=249','./styles.css?v=256','./sportcoach.css?v=2','./shell.css?v=3','./css/personalization.css?v=5','./css/finance.css?v=1','./cdn-libs.js?v=1','./data-core.js?v=249','./savings-core.js?v=1','./offers-core.js?v=5','./dashboard-core.js?v=3','./chalkboard-core.js?v=1','./household-sync-core.js?v=1','./personal-preferences-core.js?v=4','./budget-ledger-core.js?v=3','./finance-plan-core.js?v=1','./finance-ui.js?v=1','./quotes-core.js?v=2','./rewards-core.js?v=1','./freezer-core.js?v=1','./weather-advice-core.js?v=1','./sportcoach-core.js?v=2','./nav-core.js?v=2','./search-core.js?v=1','./import-core.js?v=1','./import-readers.js?v=1','./app.js?v=273','./samen-thuis-update-v26-challenges.js?v=260','./account-sync.js?v=2','./inbox-core.js?v=1','./inbox.js?v=1','./weather-extras.js?v=1','./sportcoach.js?v=6','./nav-groups.js?v=3','./search.js?v=1','./manifest.webmanifest','./icon.svg'];
++const CACHE='samen-thuis-v41-edge';
++const ASSETS=['./','./index.html','./css/tokens.css?v=249','./css/base.css?v=249','./css/layout.css?v=252','./css/components.css?v=249','./styles.css?v=256','./sportcoach.css?v=2','./shell.css?v=3','./css/personalization.css?v=5','./css/finance.css?v=1','./cdn-libs.js?v=1','./data-core.js?v=249','./savings-core.js?v=1','./offers-core.js?v=5','./dashboard-core.js?v=3','./chalkboard-core.js?v=1','./household-sync-core.js?v=1','./personal-preferences-core.js?v=4','./budget-ledger-core.js?v=3','./finance-plan-core.js?v=1','./finance-ui.js?v=1','./quotes-core.js?v=2','./rewards-core.js?v=1','./freezer-core.js?v=1','./weather-advice-core.js?v=1','./sportcoach-core.js?v=2','./nav-core.js?v=2','./search-core.js?v=1','./import-core.js?v=1','./import-readers.js?v=1','./app.js?v=274','./samen-thuis-update-v26-challenges.js?v=260','./account-sync.js?v=2','./inbox-core.js?v=1','./inbox.js?v=1','./weather-extras.js?v=1','./sportcoach.js?v=6','./nav-groups.js?v=3','./search.js?v=1','./manifest.webmanifest','./icon.svg'];
+ 
+ self.addEventListener('install',event=>{
+   event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(ASSETS)).then(()=>self.skipWaiting()));
+-- 
+2.43.0
+

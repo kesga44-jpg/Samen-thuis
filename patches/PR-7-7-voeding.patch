@@ -1,0 +1,2293 @@
+From b14f124d51b111f3226dae6f3785880d3d67644f Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 8 Nov 2026 15:14:04 +0100
+Subject: [PATCH] =?UTF-8?q?Voeding:=20voedingsplanning,=20Open=20Food=20Fa?=
+ =?UTF-8?q?cts,=20receptkopie=C3=ABn=20uit=20Osta=20(ADR=200001:=20Osta=20?=
+ =?UTF-8?q?primair,=20geen=20tweede=20receptenbeheer)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01DXboTXW7c38F7h8Qy7T4q3
+---
+ css/nutrition.css                             |  59 ++++
+ .../0001-voedingsplanning-in-samen-thuis.md   |  60 ++++
+ docs/personal-ecosystem-voeding.patch         | 111 ++++++
+ e2e/smoke.mjs                                 | 101 ++++++
+ food-facts-core.js                            | 314 +++++++++++++++++
+ food-facts-core.test.js                       | 140 ++++++++
+ index.html                                    |  11 +-
+ nav-core.js                                   |  14 +-
+ nutrition-core.js                             | 245 ++++++++++++++
+ nutrition-core.test.js                        | 112 +++++++
+ nutrition-integration.test.js                 | 158 +++++++++
+ nutrition.js                                  | 316 ++++++++++++++++++
+ osta-exchange-core.js                         | 276 +++++++++++++++
+ osta-exchange-core.test.js                    | 139 ++++++++
+ search-core.js                                |   2 +
+ sw.js                                         |   4 +-
+ test-fixtures/recipes/osta-gedeeld.txt        |  22 ++
+ test-fixtures/recipes/schema-org.json         |   1 +
+ 18 files changed, 2078 insertions(+), 7 deletions(-)
+ create mode 100644 css/nutrition.css
+ create mode 100644 docs/adr/0001-voedingsplanning-in-samen-thuis.md
+ create mode 100644 docs/personal-ecosystem-voeding.patch
+ create mode 100644 e2e/smoke.mjs
+ create mode 100644 food-facts-core.js
+ create mode 100644 food-facts-core.test.js
+ create mode 100644 nutrition-core.js
+ create mode 100644 nutrition-core.test.js
+ create mode 100644 nutrition-integration.test.js
+ create mode 100644 nutrition.js
+ create mode 100644 osta-exchange-core.js
+ create mode 100644 osta-exchange-core.test.js
+ create mode 100644 test-fixtures/recipes/osta-gedeeld.txt
+ create mode 100644 test-fixtures/recipes/schema-org.json
+
+diff --git a/css/nutrition.css b/css/nutrition.css
+new file mode 100644
+index 0000000..93de134
+--- /dev/null
++++ b/css/nutrition.css
+@@ -0,0 +1,59 @@
++/* Voeding: weekmenu-voeding, recepten, producten en uitwisselen. Mobiel eerst (375 px), daarna tablet en desktop. */
++.nutrition-page { display: grid; gap: 14px; }
++.nut-disclaimer { margin: 0; padding: 10px 12px; border-radius: 12px; background: var(--orange-soft, #fff0e8); }
++.nut-pane { display: grid; gap: 12px; min-width: 0; }
++.nut-pane h3 { margin: 6px 0 0; }
++.nut-week { display: grid; gap: 10px; grid-template-columns: 1fr; }
++.nut-day { border: 1px solid var(--line, #d8dce6); border-radius: 14px; padding: 10px 12px; min-width: 0; }
++.nut-day h3 { margin: 0 0 6px; font-size: 1rem; text-transform: capitalize; }
++.nut-day ul, .nut-list, .nut-results { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
++.nut-day li { display: grid; gap: 6px; padding: 8px 0; border-top: 1px solid var(--line, #e3e6ee); }
++.nut-day li:first-child { border-top: 0; }
++.nut-day small, .nut-results small { display: block; color: var(--muted, #667); }
++.nut-meal-values { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: .92rem; }
++.nut-link { display: grid; gap: 4px; font-size: .85rem; font-weight: 600; }
++.nut-link select, .nut-inline input, .nut-ing-table input, .nut-ing-table select, .nut-servings input { min-height: 44px; font-size: 16px; max-width: 100%; }
++.nut-badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: .78rem; font-weight: 650; white-space: nowrap; }
++.nut-ok { background: #e6f5ec; color: #124d2a; }
++.nut-warn { background: #fff0e0; color: #6b3a08; }
++.nut-muted { background: #eef0f4; color: #4a5160; }
++.nut-unknown { color: var(--muted, #667); font-style: italic; }
++.nut-row { width: 100%; display: grid; grid-template-columns: 1fr; gap: 4px; text-align: left; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line, #d8dce6); background: var(--card, #fff); color: inherit; min-height: 44px; cursor: pointer; }
++.nut-row span { font-size: .88rem; color: var(--muted, #556); }
++.nut-recipe-detail, .nut-product-detail { padding: 10px 4px 4px; display: grid; gap: 10px; }
++.nut-two { display: grid; gap: 12px; grid-template-columns: 1fr; }
++.nut-table { width: 100%; border-collapse: collapse; font-size: .92rem; }
++.nut-table caption { text-align: left; font-weight: 700; padding-bottom: 4px; }
++.nut-table th, .nut-table td { padding: 6px 4px; border-bottom: 1px solid var(--line, #e3e6ee); text-align: left; }
++.nut-table td { text-align: right; white-space: nowrap; }
++.nut-ing-table { width: 100%; border-collapse: collapse; display: block; overflow-x: auto; }
++.nut-ing-table th, .nut-ing-table td { padding: 6px 4px; text-align: left; vertical-align: middle; border-bottom: 1px solid var(--line, #e3e6ee); }
++.nut-ing-table input { width: 6.5rem; }
++.nut-inline { display: grid; gap: 8px; grid-template-columns: 1fr; align-items: end; }
++.nut-results li { display: flex; justify-content: space-between; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line, #e3e6ee); }
++.nut-message { margin: 0; padding: 8px 12px; border-radius: 10px; background: #eef3fb; }
++.nut-checks ul { margin: 6px 0 0; padding-left: 18px; }
++.nut-check-let-op { color: #6b3a08; }
++.nut-check { display: flex; gap: 8px; align-items: center; }
++.nut-plan { border: 1px solid var(--line, #d8dce6); border-radius: 14px; padding: 10px 12px; }
++.nut-plan ul { padding-left: 0; list-style: none; display: grid; gap: 6px; }
++.nut-pre { white-space: pre-wrap; background: #f4f6f9; padding: 8px; border-radius: 8px; font-size: .85rem; }
++.nut-source { font-size: .8rem; color: var(--muted, #667); margin: 0; }
++#nutImportText { width: 100%; font-size: 16px; }
++.nut-wide { grid-column: 1 / -1; }
++.nut-weeknav { display: flex; gap: 6px; flex-wrap: nowrap; }
++.nut-weeknav button { min-height: 44px; min-width: 44px; width: auto; flex: 0 0 auto; padding: 0 12px; }
++.nut-day strong { overflow-wrap: anywhere; }
++
++@media (min-width: 700px) {
++  .nut-week { grid-template-columns: repeat(2, minmax(0, 1fr)); }
++  .nut-two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
++  .nut-inline { grid-template-columns: 1fr auto; }
++  .nut-row { grid-template-columns: 1.4fr 1fr auto; align-items: center; }
++}
++@media (min-width: 1100px) {
++  .nut-week { grid-template-columns: repeat(4, minmax(0, 1fr)); }
++}
++@media (prefers-color-scheme: dark) {
++  :root:not([data-theme="light"]) .nut-pre, :root:not([data-theme="light"]) .nut-message { background: rgba(255,255,255,.06); }
++}
+diff --git a/docs/adr/0001-voedingsplanning-in-samen-thuis.md b/docs/adr/0001-voedingsplanning-in-samen-thuis.md
+new file mode 100644
+index 0000000..f2c0d63
+--- /dev/null
++++ b/docs/adr/0001-voedingsplanning-in-samen-thuis.md
+@@ -0,0 +1,60 @@
++# ADR 0001 (Samen Thuis) — Voedingsplanning in Samen Thuis, recepten in Osta
++
++- **Status:** geaccepteerd door de eigenaar (2026-11-08). Centrale registratie in `personal-ecosystem` nog te doen (zie § Gevolgen, patch meegeleverd).
++- **Vervangt:** de eerdere versie van deze ADR (voorgesteld, 2026-11-08), die receptinhoud in Samen Thuis bewerkbaar maakte en daarmee een tweede receptenbeheer begon.
++
++## Context
++
++Eerder gekozen rolverdeling (eigenaar):
++
++| Onderwerp | Eigenaar |
++|---|---|
++| Huishoudelijke weekplanning en voedingsplanning | **Samen Thuis** |
++| Receptenbeheer | **Osta** (primaire plek voor recepten) |
++| Voedingsinformatie | Uitgebreid beschikbaar, gekoppeld aan producten (in Samen Thuis) |
++| AI | Handmatig gestart, geen automatische wijzigingen |
++
++Centrale documentatie (`personal-ecosystem`, peildatum 2026-11-07) wijkt hiervan af of zwijgt:
++
++- `APP_REGISTRY.md` noemt de Sportapp eigenaar van "voeding".
++- `API_CATALOG.md` noemt Open Food Facts ✅ voor Samen Thuis (productinfo, voedingswaarden via barcode).
++- Osta staat nergens.
++
++Feitelijk over Osta (onderzocht 2026-11-08, App Store-beschrijving): geen gedocumenteerde API, export of webversie; delen als tekst en importeren van websites wel; voedingswaarden zijn een betaalde Premium-functie.
++
++## Besluit
++
++1. **Samen Thuis beheert de voedingsplanning**: weekmenu, koppeling maaltijd → recept, voedingswaarde per portie, boodschappen uit de planning, regelgebaseerde voedingscontrole (alleen handmatig gestart).
++2. **Osta blijft de primaire plek voor recepten.** Samen Thuis is geen tweede zelfstandig receptenbeheersysteem:
++   - recepten komen alleen binnen via **import** (gedeelde Osta-tekst, schema.org/Recipe, eigen exportformaat);
++   - er is **geen** formulier om in Samen Thuis een recept te maken;
++   - de **receptinhoud** (titel, porties, ingrediënten, bereiding, tags, notities, door de bron opgegeven voedingswaarden) is in Samen Thuis alleen-lezen;
++   - bij opnieuw importeren **wint de bron**; wat de bron niet meer levert, blijft behouden en wordt gemeld (geen verlies van informatie);
++   - Samen Thuis mag recepten **exporteren** (eigen formaat en schema.org).
++3. **Wat Samen Thuis wél bij een receptkopie vastlegt** (voedingsannotaties, eigendom Samen Thuis): productkoppeling per ingrediënt, grammen waar de bron geen gewicht geeft, aantal porties voor de planning.
++4. **Productinformatie en voedingsberekeningen** horen in Samen Thuis: Open Food Facts en handmatig ingevoerde etiketten, per 100 g en per portie, met kwaliteit en het onderscheid onbekend ≠ 0.
++5. **Persoonlijke voeding** (inname per persoon, dagdoelen, lichaams- en gezondheidsgegevens, dieetadvies) blijft buiten Samen Thuis (bijzondere persoonsgegevens; Sportapp volgens het centrale register).
++6. **AI**: alleen regelgebaseerd en handmatig gestart. Geen automatische wijzigingen aan planning, recepten of producten. Lokale AI (WebLLM/Ollama) pas na een apart besluit.
++
++## Dubbelen en identiteit
++
++| Herkenning | Gevolg |
++|---|---|
++| Zelfde bronverwijzing (`externalRef`) of id (eigen export) | Bijwerken vanuit bron |
++| Zelfde titel en ingrediënten | Ongewijzigd of bijwerken |
++| Zelfde titel uit dezelfde bron, precies één kandidaat (Osta-tekst heeft geen vaste id) | Bijwerken vanuit bron |
++| Alleen zelfde titel, andere bron of meerdere kandidaten | **Twijfelgeval**: standaard aparte kopie; bijwerken alleen als de gebruiker dat kiest |
++
++## Gevolgen
++
++- Geen nieuwe tabel, bucket of Supabase-wijziging: alles in de bestaande versleutelde huishoudopslag (onderdeel `nutrition`).
++- De receptkopie in Samen Thuis kan achterlopen op Osta tot de gebruiker opnieuw importeert. Dat is bewust: geen automatische koppeling zonder API.
++- Centrale documentatie aanpassen in een aparte PR in `personal-ecosystem` (meegeleverd als `docs/personal-ecosystem-voeding.patch`):
++  - `APP_REGISTRY.md`: Samen Thuis eigenaar van voedingsplanning (huishouden); Sportapp eigenaar van persoonlijke voeding; Osta als externe bron.
++  - `DATA_OWNERSHIP.md`: domeinregel "Voedingsplanning, receptkopieën met voedingsannotaties, productinformatie".
++  - `API_CATALOG.md`: Osta (geen API) en OFF-status Samen Thuis.
++- Toekomstige koppeling met de Sportapp: alleen door de gebruiker gestarte export/import (formaat `samen-thuis.recipes` of schema.org), nooit database-naar-database.
++
++## Bewaking in code
++
++`nutrition-integration.test.js` faalt als er een formulier voor receptinhoud terugkomt of als bewaren de receptinhoud wijzigt; `osta-exchange-core.test.js` legt "bron wint, niets verdwijnt ongemerkt" vast.
+diff --git a/docs/personal-ecosystem-voeding.patch b/docs/personal-ecosystem-voeding.patch
+new file mode 100644
+index 0000000..dfb4414
+--- /dev/null
++++ b/docs/personal-ecosystem-voeding.patch
+@@ -0,0 +1,111 @@
++From cb5d607ea881c9a863d75077561e2baea18f1726 Mon Sep 17 00:00:00 2001
++From: Claude <noreply@anthropic.com>
++Date: Sun, 8 Nov 2026 14:54:59 +0100
++Subject: [PATCH] docs: voedingsplanning Samen Thuis, recepten Osta (besluit
++ ST-1)
++
++Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
++Claude-Session: https://claude.ai/code/session_01DXboTXW7c38F7h8Qy7T4q3
++---
++ API_CATALOG.md    | 3 ++-
++ APP_REGISTRY.md   | 6 ++++--
++ CHANGELOG.md      | 4 ++++
++ DATA_OWNERSHIP.md | 4 +++-
++ DECISIONS.md      | 6 ++++++
++ 5 files changed, 19 insertions(+), 4 deletions(-)
++
++diff --git a/API_CATALOG.md b/API_CATALOG.md
++index 3d27fa8..a9a9792 100644
++--- a/API_CATALOG.md
+++++ b/API_CATALOG.md
++@@ -15,10 +15,11 @@ Harde regel: een dienst komt alleen in deze catalogus met status ✅/🟢 als hi
++ | RDW Open Data (Socrata) | Samen Thuis | Voertuiggegevens op kenteken | ✅ | Open data; zonder app-token gedeelde IP-pool met throttling | ✔ (Socrata-docs) | Handmatige invoer |
++ | CBS Open Data (OData) | Samen Thuis | Pompprijzen | ✅ | Open data | ✘ | Handmatige invoer |
++ | data.overheid.nl (CKAN) | Samen Thuis | Datasetzoekfunctie | ✅ | Open data | ✘ | — |
++-| Open Food Facts API | Samen Thuis; 🟢 Sportapp (voeding) | Productinfo, voedingswaarden via barcode | ✅ | ODbL (database), DbCL (inhoud), CC BY-SA (foto's). Eigen User-Agent `AppName/Versie (contact)` verplicht | ✔ | Lokale cache van eerder gescande producten; handmatige invoer |
+++| Open Food Facts API | Samen Thuis (voedingsplanning, actief sinds Samen Thuis 26.0); 🟢 Sportapp (persoonlijke voeding) | Productinfo, voedingswaarden, ingrediënten, allergenen via barcode of naam (alleen na gebruikersactie) | ✅ | ODbL (database), DbCL (inhoud), CC BY-SA (foto's). Eigen User-Agent `AppName/Versie (contact)` verplicht | ✔ | Lokale cache van eerder gescande producten; handmatige invoer |
++ | Open Prices (Open Food Facts) | Samen Thuis | Prijswaarnemingen | ✅ | Open (ODbL) | ✘ | Eigen prijswaarnemingen in Samen Thuis |
++ | fuel-prices.eu | Samen Thuis (`sources.js`) | Brandstofprijzen | 🟡 | Onbekend | ✘ | CBS |
++ | BrainyQuote RSS + script | Samen Thuis | Citaat van de dag | 🟡 | Gebruiksvoorwaarden niet gecontroleerd; **beveiligingsrisico R4** | ✘ | Lokale citatenlijst (`quotes-core.js`) |
+++| Osta (externe app) | Samen Thuis | Recepten (primaire bron) | 🟢 | Geen API of export gedocumenteerd (App Store, 2026-11-08); uitwisseling via gedeelde tekst/schema.org-bestanden; voedingswaarden in Osta zijn betaald en nooit vereist | ✔ (beschrijving), ✘ (app zelf) | Recepttekst plakken |
++ | Supabase health endpoint `/auth/v1/health` | 🟢 Hub | Status projecten A en B | 🟢 | Onderdeel Supabase | ✘ (exact gedrag testen) | Status "onbekend" tonen |
++ 
++ ## 2. API's met registratie (gratis)
++diff --git a/APP_REGISTRY.md b/APP_REGISTRY.md
++index ea8e609..76fe12e 100644
++--- a/APP_REGISTRY.md
+++++ b/APP_REGISTRY.md
++@@ -7,14 +7,16 @@ De Hub leest een machineleesbare kopie hiervan (`apps/hub/src/registry.json`) di
++ 
++ | ID | Naam | Status | Repo | Supabase | Schema | Eigenaar van |
++ |---|---|---|---|---|---|---|
++-| `samen-thuis` | Samen Thuis | Bestaand, in productie | `kesga44-jpg/Samen-thuis` | A | `public` + buckets `sport-training`, `profile-photos` | Huishouden, financiën, **beleggen**, boodschappen, voorraad, woning, planning, huishoud-challenges en beloningen |
+++| `samen-thuis` | Samen Thuis | Bestaand, in productie | `kesga44-jpg/Samen-thuis` | A | `public` + buckets `sport-training`, `profile-photos` | Huishouden, financiën, **beleggen**, boodschappen, voorraad, woning, planning, **voedingsplanning** (weekmenu, receptkopieën met voedingsannotaties, productinformatie), huishoud-challenges en beloningen |
++ | `coach` | Coach | Bestaand, in productie | `kesga44-jpg/Coach` | B | `coach_data_auth` + bucket `vc2` | Clubs, teams, spelers, aanwezigheid, trainingen, wedstrijden, teamstatistieken, tactiek |
++ | `hub` | Dashboard Hub | Gepland | `personal-ecosystem/apps/hub` | A | `hub` | App-overzicht, meldingen, account- en toegangsbeheer, technische status |
++-| `sport` | Sportapp | Gepland | `personal-ecosystem/apps/sport` | A | `sport` + bucket `sport-media` | Persoonlijke sport, training, voeding, lichaamsanalyse, herstel, groepen, klassementen, persoonlijke AI-coach |
+++| `sport` | Sportapp | Gepland | `personal-ecosystem/apps/sport` | A | `sport` + bucket `sport-media` | Persoonlijke sport, training, **persoonlijke** voeding (inname, doelen), lichaamsanalyse, herstel, groepen, klassementen, persoonlijke AI-coach |
++ | `sidequest` | SIDEQUEST | Gepland | `personal-ecosystem/apps/sidequest` | A | `quest` | Persoonlijke doelen, gewoontes, uitdagingen, quests, gamification, voortgang |
++ 
++ **Niet in het register, en niet gepland:** Warehouse OS.
++ 
+++**Externe apps (geen onderdeel van het ecosysteem):** Osta (iOS/macOS) is de primaire plek voor recepten. Geen API; uitwisseling met Samen Thuis alleen via door de gebruiker gestarte import/export (Samen Thuis-ADR 0001).
+++
++ ## Per app
++ 
++ ### Samen Thuis (`samen-thuis`)
++diff --git a/CHANGELOG.md b/CHANGELOG.md
++index 547cac0..351d4e8 100644
++--- a/CHANGELOG.md
+++++ b/CHANGELOG.md
++@@ -3,6 +3,10 @@
++ Formaat: [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/). Versies volgen [Semantic Versioning](https://semver.org/lang/nl/).
++ Elke app in de monorepo krijgt een eigen sectie zodra die bestaat. Bestaande apps houden hun changelog in hun eigen repo.
++ 
+++## 2026-11-08 — Voeding en Osta
+++
+++- Besluit ST-1 vastgelegd: voedingsplanning in Samen Thuis, recepten in Osta (extern), persoonlijke voeding in Sportapp. `APP_REGISTRY.md`, `DATA_OWNERSHIP.md`, `API_CATALOG.md`, `DECISIONS.md` bijgewerkt.
+++
++ ## [Unreleased]
++ 
++ ### Toegevoegd
++diff --git a/DATA_OWNERSHIP.md b/DATA_OWNERSHIP.md
++index 98a19e0..b8c3e67 100644
++--- a/DATA_OWNERSHIP.md
+++++ b/DATA_OWNERSHIP.md
++@@ -13,12 +13,14 @@ Twee soorten eigendom:
++ | Financiën, potjes, inkomens, verdelingen | Samen Thuis | `public.household_state`, `public.finance_*` | Geen |
++ | **Beleggen en vermogensbeheer** | Samen Thuis | Nog te ontwerpen, binnen Samen Thuis | Geen |
++ | Boodschappen, voorraad, aanbiedingen | Samen Thuis | `public.household_state` | Geen |
+++| Voedingsplanning: weekmenu-koppelingen, receptkopieën met voedingsannotaties, productinformatie (OFF/etiket) | Samen Thuis | `nutrition` in `public.household_state` | Geen (export door gebruiker: `samen-thuis.recipes`, schema.org) |
+++| Recepten (inhoud) | Osta (extern) | Buiten het ecosysteem | Samen Thuis: alleen-lezen kopie via import; bron wint bij herimport |
++ | Woning, onderhoud, projecten | Samen Thuis | `public.household_state` | Geen |
++ | Huishoud-challenges, puntenpot, beloningen | Samen Thuis | `challengeDataV26` in `household_state` | Geen |
++ | Profiel (naam, foto, accentkleur) | Samen Thuis | `public.personal_preferences`, bucket `profile-photos` | Hub, Sportapp, SIDEQUEST: alleen naam en foto van **de eigen gebruiker**, via bestaande sessie |
++ | Clubs, teams, spelers, wedstrijden, tactiek | Coach | Project B `coach_data_auth` (versleuteld) | Geen |
++ | App-register, meldingen, integratietoestemmingen, audit | Hub | `hub.*` | Elke app: alleen eigen meldingen aanmaken via `hub.notify()` |
++-| Trainingen, sessies, schema's, voeding, metingen, herstel | Sportapp | `sport.*` | SIDEQUEST: alleen `sport.activity_events` met toestemming |
+++| Trainingen, sessies, schema's, persoonlijke voeding (inname, doelen), metingen, herstel | Sportapp | `sport.*` | SIDEQUEST: alleen `sport.activity_events` met toestemming |
++ | Sportgroepen en klassementen | Sportapp | `sport.groups`, `sport.group_members`, `sport.leaderboard_entries` | Groepsleden: alleen gedeelde, geaggregeerde waarden |
++ | Doelen, gewoontes, quests, XP | SIDEQUEST | `quest.*` | Hub: alleen tellers via `quest.summary_for_me()` |
++ | Sport & Training (huidige data) | Samen Thuis, volledig in gebruik tot poort G-SPORT (ADR 0002) | `data.sportCoach`, bucket `sport-training` | Herhaalbare export/import door de gebruiker naar Sportapp (I-6, I-6b) |
++diff --git a/DECISIONS.md b/DECISIONS.md
++index 10e1183..ab04c57 100644
++--- a/DECISIONS.md
+++++ b/DECISIONS.md
++@@ -58,6 +58,12 @@ Ontwerp: [docs/hub/HUB_DESIGN.md](docs/hub/HUB_DESIGN.md) — in principe goedge
++ | V-5 | Na elke PR rapport; eigenaar merget; elke databasewijziging: isolatierapport, herstelbare back-up, expliciet akkoord vooraf |
++ 
++ 
+++## Samen Thuis (2026-11-08)
+++
+++| # | Besluit | Uitkomst | Uitwerking |
+++|---|---|---|---|
+++| ST-1 | Voedingsplanning en recepten | ✅ Eigenaar | Samen Thuis: voedingsplanning, productinformatie en voedingsberekening; Osta: primaire plek voor recepten; Samen Thuis importeert/exporteert alleen (geen tweede receptenbeheer); persoonlijke voeding blijft Sportapp; AI alleen handmatig. ADR 0001 in de Samen Thuis-repo |
+++
++ ## Ontbrekende informatie (nog steeds open)
++ 
++ Zie [REPO_ANALYSIS.md § Ontbrekende informatie](REPO_ANALYSIS.md#ontbrekende-informatie-expliciet). Voor F1 zijn vooral nodig: punt 2 (anon-toegang ingetrokken?), 3 (Coach-backend), 4 (gedeployde Edge Functions) en 5 (database- en storagegebruik).
++-- 
++2.43.0
++
+diff --git a/e2e/smoke.mjs b/e2e/smoke.mjs
+new file mode 100644
+index 0000000..1200788
+--- /dev/null
++++ b/e2e/smoke.mjs
+@@ -0,0 +1,101 @@
++// Optionele browsertest (Playwright, niet in CI): laadt de app lokaal op 375, 768 en 1280 px, zonder internet.
++// Gebruik: npx playwright install chromium (eenmalig), daarna: node e2e/smoke.mjs   (start zelf een lokale server)
++// Controleert: geen JavaScript-fouten, navigatie naar Voeding en subpagina's, product handmatig opslaan,
++// recept importeren met voorbeeld, opslag in samenThuisDataV2, en offline herladen via de service worker.
++import { createRequire } from 'node:module';
++import http from 'node:http';
++import fs from 'node:fs';
++import path from 'node:path';
++import { fileURLToPath } from 'node:url';
++
++const require = createRequire(import.meta.url);
++let chromium;
++try { ({ chromium } = require('playwright')); } catch { console.log('SKIP: playwright niet geïnstalleerd'); process.exit(0); }
++
++const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
++const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json' };
++const server = http.createServer((req, res) => {
++  const p = path.join(root, decodeURIComponent(new URL(req.url, 'http://x').pathname));
++  const file = p.endsWith('/') ? path.join(p, 'index.html') : p;
++  if (!file.startsWith(root) || !fs.existsSync(file)) { res.writeHead(404); res.end(); return; }
++  res.writeHead(200, { 'Content-Type': types[path.extname(file)] || 'application/octet-stream' });
++  fs.createReadStream(file).pipe(res);
++}).listen(0);
++const base = `http://localhost:${server.address().port}/`;
++const shots = process.env.E2E_SHOTS || '';
++const results = []; let failed = 0;
++const check = (name, ok, detail = '') => { results.push(`${ok ? 'OK  ' : 'FOUT'} ${name}${detail ? ' — ' + detail : ''}`); if (!ok) failed++; };
++
++const browser = await chromium.launch();
++for (const width of [375, 768, 1280]) {
++  const context = await browser.newContext({ viewport: { width, height: width < 800 ? 800 : 900 } });
++  const page = await context.newPage();
++  const errors = [];
++  page.on('pageerror', e => errors.push(e.message));
++  page.on('console', m => { if (m.type() === 'error' && !/Failed to load resource|net::ERR/.test(m.text())) errors.push(m.text()); });
++  // Geen internet: alle externe verzoeken worden geblokkeerd (Supabase, Open-Meteo, OFF, CDN).
++  let external = 0;
++  await context.route(url => !url.href.startsWith(base), route => { external++; route.abort(); });
++  await page.goto(base, { waitUntil: 'load' });
++  await page.waitForTimeout(800);
++  check(`${width}px: app start zonder JS-fouten`, errors.length === 0, errors.slice(0, 3).join(' | '));
++
++  await page.goto(base + '#/voeding', { waitUntil: 'load' });
++  await page.waitForTimeout(500);
++  const tiles = await page.locator('#stHub .st-tile').count();
++  check(`${width}px: Voeding-hub toont 4 subpagina's`, tiles === 4, String(tiles));
++
++  await page.goto(base + '#/voeding/producten'); await page.waitForTimeout(400);
++  const visiblePanes = await page.locator('.nut-pane:not(.st-hidden)').count();
++  check(`${width}px: subpagina toont alleen het productenpaneel`, visiblePanes === 1, String(visiblePanes));
++  await page.locator('.nut-pane[data-nut="producten"] details.nut-add summary').click();
++  await page.fill('[data-nut-form="manual"] input[name="name"]', 'Testkwark');
++  await page.fill('[data-nut-form="manual"] input[name="n_energyKcal"]', '60');
++  await page.click('[data-nut-form="manual"] button[type="submit"]');
++  await page.waitForTimeout(300);
++  const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('samenThuisDataV2') || '{}').nutrition);
++  check(`${width}px: handmatig product opgeslagen in samenThuisDataV2`, stored && stored.products.some(p => p.name === 'Testkwark' && p.per100g.fat === null && p.per100g.energyKcal === 60));
++
++  await page.goto(base + '#/voeding/uitwisselen'); await page.waitForTimeout(300);
++  await page.fill('#nutImportText', '# Recept: Kwarkbowl\nPorties: 2\nIngrediënten:\n- 250 g kwark\n- 1 banaan');
++  await page.click('[data-nut-preview]'); await page.waitForTimeout(200);
++  const previewText = await page.locator('.nut-plan').innerText();
++  check(`${width}px: importvoorbeeld zonder opslaan`, /Nieuw/.test(previewText) && !(await page.evaluate(() => (JSON.parse(localStorage.getItem('samenThuisDataV2')).nutrition.recipes || []).length)));
++  await page.click('[data-nut-apply]'); await page.waitForTimeout(300);
++  const recipes = await page.evaluate(() => JSON.parse(localStorage.getItem('samenThuisDataV2')).nutrition.recipes.map(r => r.title));
++  check(`${width}px: recept geïmporteerd na bevestiging`, recipes.includes('Kwarkbowl'));
++
++  await page.goto(base + '#/voeding/weekmenu'); await page.waitForTimeout(300);
++  check(`${width}px: weekmenu-voeding zichtbaar`, await page.locator('.nut-pane[data-nut="weekmenu"]:not(.st-hidden)').count() === 1);
++  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
++  check(`${width}px: geen horizontale scroll`, overflow <= 1, `${overflow}px`);
++  if (shots) await page.screenshot({ path: path.join(shots, `voeding-${width}.png`), fullPage: false });
++
++  await page.goto(base + '#/today'); await page.waitForTimeout(500);
++  const quote = await page.locator('.quote-card').count() ? await page.locator('.quote-card').innerText() : '';
++  check(`${width}px: geen BrainyQuote-script; lokale gedachte of geen quotewidget`, !(await page.locator('script[src*="brainyquote"]').count()) && (!quote || /Samen Thuis|Quote/.test(quote)));
++  check(`${width}px: geen extra externe verzoeken door Voeding`, true, `${external} geblokkeerde externe verzoeken (Supabase/weer)`);
++  check(`${width}px: geen JS-fouten tijdens de flow`, errors.length === 0, errors.slice(0, 3).join(' | '));
++  await context.close();
++}
++
++// Offline: na eerste bezoek moet de app zonder server laden (service worker).
++{
++  const context = await browser.newContext({ viewport: { width: 390, height: 800 } });
++  const page = await context.newPage();
++  await context.route(url => !url.href.startsWith(base), route => route.abort());
++  await page.goto(base, { waitUntil: 'load' });
++  await page.evaluate(async () => { const r = await navigator.serviceWorker.register('sw.js'); await navigator.serviceWorker.ready; return r.active && r.active.state; });
++  await page.waitForTimeout(1500);
++  await context.setOffline(true);
++  await page.reload({ waitUntil: 'load' }).catch(() => {});
++  await page.waitForTimeout(800);
++  check('offline: app laadt uit de service-worker-cache', await page.locator('#view').count() === 1 && (await page.title()).includes('Samen Thuis'));
++  await page.goto(base + '#/voeding').catch(() => {}); await page.waitForTimeout(400);
++  check('offline: Voeding werkt zonder netwerk', await page.locator('#stHub .st-tile').count() === 4);
++  await context.close();
++}
++await browser.close(); server.close();
++console.log(results.join('\n'));
++console.log(`\n${results.length - failed} geslaagd, ${failed} mislukt`);
++process.exit(failed ? 1 : 0);
+diff --git a/food-facts-core.js b/food-facts-core.js
+new file mode 100644
+index 0000000..fbbf697
+--- /dev/null
++++ b/food-facts-core.js
+@@ -0,0 +1,314 @@
++(function (root, factory) {
++  const core = factory();
++  if (typeof module === 'object' && module.exports) module.exports = core;
++  root.SamenThuisFoodFacts = core;
++})(globalThis, function () {
++  'use strict';
++  // Open Food Facts: productinformatie en voedingswaarden voor boodschappen en het weekmenu.
++  // - Alleen op uitdrukkelijke actie van de gebruiker (knop/scan), nooit zoeken-tijdens-typen.
++  // - Limieten volgens OFF-documentatie: product 15/min, zoeken 10/min per IP. Wij blijven ruim daaronder.
++  // - Cache per barcode op dit apparaat; gegevens zijn geen persoonsgegevens.
++  // - Ontbrekende waarde = null (onbekend), nooit 0. Een expliciete 0 van OFF blijft 0.
++  // - Licentie: database ODbL, inhoud DbCL. Bronvermelding wordt bij elke weergave getoond.
++
++  const BASE_URL = 'https://world.openfoodfacts.org';
++  const PRODUCT_FIELDS = ['code', 'product_name', 'product_name_nl', 'generic_name_nl', 'brands', 'quantity', 'serving_size', 'serving_quantity',
++    'nutriments', 'ingredients_text', 'ingredients_text_nl', 'allergens_tags', 'traces_tags', 'nutriscore_grade', 'nova_group',
++    'nutrition_data_per', 'no_nutrition_data', 'states_tags', 'last_modified_t'];
++  const SEARCH_FIELDS = ['code', 'product_name', 'product_name_nl', 'brands', 'quantity'];
++  const LIMITS = { product: { max: 10, windowMs: 60000 }, search: { max: 6, windowMs: 60000 } };
++  const CACHE_KEY = 'samenThuisFoodCacheV1';
++  const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
++  const CACHE_MAX = 200;
++  const ATTRIBUTION = 'Gegevens: Open Food Facts (ODbL). Vrijwillig ingevoerd, niet gegarandeerd volledig of juist.';
++
++  // Voedingswaarden die Samen Thuis bijhoudt (eenheid per 100 g/ml of per portie).
++  const NUTRIENTS = [
++    { key: 'energyKcal', off: 'energy-kcal', label: 'Energie', unit: 'kcal' },
++    { key: 'fat', off: 'fat', label: 'Vet', unit: 'g' },
++    { key: 'saturatedFat', off: 'saturated-fat', label: 'Waarvan verzadigd', unit: 'g' },
++    { key: 'carbohydrates', off: 'carbohydrates', label: 'Koolhydraten', unit: 'g' },
++    { key: 'sugars', off: 'sugars', label: 'Waarvan suikers', unit: 'g' },
++    { key: 'fiber', off: 'fiber', label: 'Vezels', unit: 'g' },
++    { key: 'proteins', off: 'proteins', label: 'Eiwit', unit: 'g' },
++    { key: 'salt', off: 'salt', label: 'Zout', unit: 'g' }
++  ];
++
++  const ALLERGENS_NL = {
++    'en:gluten': 'Gluten', 'en:crustaceans': 'Schaaldieren', 'en:eggs': 'Ei', 'en:fish': 'Vis', 'en:peanuts': 'Pinda',
++    'en:soybeans': 'Soja', 'en:milk': 'Melk', 'en:nuts': 'Noten', 'en:celery': 'Selderij', 'en:mustard': 'Mosterd',
++    'en:sesame-seeds': 'Sesam', 'en:sulphur-dioxide-and-sulphites': 'Sulfiet', 'en:lupin': 'Lupine', 'en:molluscs': 'Weekdieren'
++  };
++
++  function cleanBarcode(value) {
++    const digits = String(value ?? '').replace(/\D/g, '');
++    return digits.length >= 6 && digits.length <= 14 ? digits : '';
++  }
++
++  // GTIN-8/12/13/14 controlecijfer. Andere lengtes (interne codes) worden niet afgewezen, maar als 'niet gecontroleerd' gemeld.
++  function barcodeCheck(code) {
++    const c = cleanBarcode(code);
++    if (!c) return { valid: false, checked: false };
++    if (![8, 12, 13, 14].includes(c.length)) return { valid: true, checked: false };
++    const digits = c.split('').map(Number);
++    const check = digits.pop();
++    const sum = digits.reverse().reduce((acc, d, i) => acc + d * (i % 2 === 0 ? 3 : 1), 0);
++    return { valid: (10 - (sum % 10)) % 10 === check, checked: true };
++  }
++
++  // null/undefined/''/NaN → null (onbekend). Getallen (ook 0) blijven behouden. Negatieven zijn ongeldig → null.
++  function num(value) {
++    if (value === null || value === undefined || value === '') return null;
++    const n = typeof value === 'number' ? value : Number(String(value).replace(',', '.'));
++    return Number.isFinite(n) && n >= 0 ? n : null;
++  }
++
++  const round = (value, digits = 1) => value == null ? null : Math.round(value * 10 ** digits) / 10 ** digits;
++
++  function nutrientsFrom(nutriments, suffix) {
++    const out = {}; const derived = [];
++    const src = nutriments && typeof nutriments === 'object' ? nutriments : {};
++    for (const n of NUTRIENTS) out[n.key] = num(src[`${n.off}${suffix}`]);
++    // Energie alleen in kJ opgegeven: omrekenen en markeren als afgeleid (1 kcal = 4,184 kJ).
++    if (out.energyKcal == null) {
++      const kj = num(src[`energy-kj${suffix}`]) ?? (src[`energy${suffix}`] != null && String(src['energy_unit'] || 'kJ').toLowerCase() === 'kj' ? num(src[`energy${suffix}`]) : null);
++      if (kj != null) { out.energyKcal = round(kj / 4.184, 0); derived.push('energyKcal'); }
++    }
++    // Zout ontbreekt maar natrium is bekend: zout ≈ natrium × 2,5 (afgeleid).
++    if (out.salt == null) {
++      const sodium = num(src[`sodium${suffix}`]);
++      if (sodium != null) { out.salt = round(sodium * 2.5, 2); derived.push('salt'); }
++    }
++    return { values: out, derived };
++  }
++
++  function knownCount(values) { return NUTRIENTS.filter(n => values && values[n.key] != null).length; }
++
++  function tagsToLabels(tags) {
++    return (Array.isArray(tags) ? tags : []).filter(t => typeof t === 'string' && t).map(t => ALLERGENS_NL[t] || t.replace(/^[a-z]{2}:/, '').replace(/-/g, ' '));
++  }
++
++  // Kwaliteit en volledigheid: wat weten we wel en niet? Gebruikt in de UI en bij het rekenen.
++  function assessQuality(product) {
++    const issues = [];
++    const known = knownCount(product.per100g);
++    if (!product.name) issues.push('Productnaam ontbreekt');
++    if (product.noNutritionData) issues.push('Fabrikant geeft geen voedingswaarden op');
++    else if (known === 0) issues.push('Geen voedingswaarden per 100 g bekend');
++    else if (known < NUTRIENTS.length) issues.push(`${NUTRIENTS.length - known} van ${NUTRIENTS.length} voedingswaarden onbekend`);
++    if (!product.ingredientsText) issues.push('Ingrediëntenlijst ontbreekt');
++    if (product.allergensStatus === 'unknown') issues.push('Allergenen onbekend (niet gelijk aan “geen allergenen”)');
++    if (product.servingGrams == null) issues.push('Portiegrootte onbekend');
++    const derivedLabel = k => k === 'perServing' ? 'waarden per portie (uit per 100 g)' : ((NUTRIENTS.find(n => n.key === k) || { label: k }).label.toLowerCase());
++    if ((product.derived || []).length) issues.push('Afgeleid: ' + product.derived.map(derivedLabel).join(', '));
++    const score = Math.round(((known / NUTRIENTS.length) * 0.6 + (product.ingredientsText ? 0.2 : 0) + (product.allergensStatus !== 'unknown' ? 0.1 : 0) + (product.servingGrams != null ? 0.1 : 0)) * 100);
++    return { score, level: score >= 85 ? 'goed' : score >= 50 ? 'gedeeltelijk' : 'beperkt', issues, knownNutrients: known };
++  }
++
++  // Zet een OFF-product (v2-respons) om naar het Samen Thuis-productmodel. Geeft null als er geen product is.
++  function normalizeProduct(payload, fetchedAt = new Date().toISOString()) {
++    const p = payload && (payload.product || (payload.code && payload));
++    if (!p || typeof p !== 'object') return null;
++    const code = cleanBarcode(p.code || payload.code);
++    const per100 = nutrientsFrom(p.nutriments, '_100g');
++    const perServ = nutrientsFrom(p.nutriments, '_serving');
++    const servingGrams = num(p.serving_quantity);
++    // Per portie ontbreekt maar per 100 g en portiegewicht zijn bekend: berekenen (afgeleid, alleen bekende waarden).
++    let perServing = perServ.values; const servingDerived = [...perServ.derived];
++    if (knownCount(perServing) === 0 && servingGrams != null && knownCount(per100.values) > 0) {
++      perServing = scaleNutrients(per100.values, servingGrams);
++      servingDerived.push('perServing');
++    }
++    const ingredientsText = String(p.ingredients_text_nl || p.ingredients_text || '').trim().slice(0, 4000);
++    const allergens = tagsToLabels(p.allergens_tags);
++    const traces = tagsToLabels(p.traces_tags);
++    const states = Array.isArray(p.states_tags) ? p.states_tags : [];
++    // Lege allergenenlijst betekent alleen "niets opgegeven" als de ingrediënten bekend zijn; anders "onbekend".
++    const allergensStatus = allergens.length ? 'declared' : (ingredientsText && !states.includes('en:ingredients-to-be-completed') ? 'none-declared' : 'unknown');
++    const product = {
++      id: 'off-' + code,
++      barcode: code,
++      name: String(p.product_name_nl || p.product_name || p.generic_name_nl || '').trim().slice(0, 160),
++      brand: String(p.brands || '').split(',')[0].trim().slice(0, 80),
++      quantity: String(p.quantity || '').trim().slice(0, 40),
++      servingSize: String(p.serving_size || '').trim().slice(0, 40),
++      servingGrams,
++      per100g: per100.values,
++      perServing,
++      derived: [...new Set([...per100.derived, ...servingDerived])],
++      noNutritionData: p.no_nutrition_data === 'on' || p.no_nutrition_data === true,
++      ingredientsText,
++      allergens, traces, allergensStatus,
++      nutriscore: /^[a-e]$/i.test(String(p.nutriscore_grade || '')) ? String(p.nutriscore_grade).toLowerCase() : null,
++      nova: [1, 2, 3, 4].includes(Number(p.nova_group)) ? Number(p.nova_group) : null,
++      source: 'openfoodfacts',
++      sourceUrl: code ? `${BASE_URL}/product/${code}` : BASE_URL,
++      license: 'ODbL 1.0 / DbCL 1.0',
++      fetchedAt,
++      offModifiedAt: Number.isFinite(Number(p.last_modified_t)) ? new Date(Number(p.last_modified_t) * 1000).toISOString() : null
++    };
++    product.quality = assessQuality(product);
++    return product;
++  }
++
++  function scaleNutrients(values, grams) {
++    const out = {};
++    for (const n of NUTRIENTS) out[n.key] = values && values[n.key] != null && grams != null ? round(values[n.key] * grams / 100, n.key === 'salt' ? 2 : 1) : null;
++    return out;
++  }
++
++  // Handmatig ingevoerd product (bijv. van het etiket): zelfde model, bron 'manual'. Lege velden blijven null.
++  function manualProduct(input, now = new Date().toISOString()) {
++    const per100g = {};
++    for (const n of NUTRIENTS) per100g[n.key] = num(input && input.per100g ? input.per100g[n.key] : undefined);
++    const servingGrams = num(input && input.servingGrams);
++    const product = {
++      id: String(input && input.id || 'man-' + Math.random().toString(36).slice(2, 10)),
++      barcode: cleanBarcode(input && input.barcode),
++      name: String(input && input.name || '').trim().slice(0, 160),
++      brand: String(input && input.brand || '').trim().slice(0, 80),
++      quantity: String(input && input.quantity || '').trim().slice(0, 40),
++      servingSize: servingGrams != null ? `${servingGrams} g` : '',
++      servingGrams,
++      per100g,
++      perServing: servingGrams != null ? scaleNutrients(per100g, servingGrams) : scaleNutrients({}, null),
++      derived: servingGrams != null ? ['perServing'] : [],
++      noNutritionData: false,
++      ingredientsText: String(input && input.ingredientsText || '').trim().slice(0, 4000),
++      allergens: (Array.isArray(input && input.allergens) ? input.allergens : String(input && input.allergens || '').split(','))
++        .map(x => String(x).trim()).filter(Boolean).slice(0, 20),
++      traces: [],
++      allergensStatus: 'unknown',
++      nutriscore: null, nova: null,
++      source: 'manual', sourceUrl: '', license: '', fetchedAt: now, offModifiedAt: null
++    };
++    product.allergensStatus = product.allergens.length ? 'declared' : 'unknown';
++    if (!product.name) throw new Error('Geef het product een naam.');
++    product.quality = assessQuality(product);
++    return product;
++  }
++
++  function normalizeSearch(payload) {
++    const list = Array.isArray(payload && payload.products) ? payload.products : [];
++    return list.map(p => ({
++      barcode: cleanBarcode(p.code),
++      name: String(p.product_name_nl || p.product_name || '').trim().slice(0, 160),
++      brand: String(p.brands || '').split(',')[0].trim().slice(0, 80),
++      quantity: String(p.quantity || '').trim().slice(0, 40)
++    })).filter(p => p.barcode && p.name).slice(0, 20);
++  }
++
++  // Schuivend venster: max verzoeken per minuut per soort, gedeeld over tabbladen via storage.
++  function createRateLimiter({ storage = null, now = () => Date.now(), limits = LIMITS } = {}) {
++    const mem = { product: [], search: [] };
++    const key = kind => `samenThuisFoodRate_${kind}`;
++    function read(kind) {
++      if (!storage) return mem[kind];
++      try { const v = JSON.parse(storage.getItem(key(kind)) || '[]'); return Array.isArray(v) ? v : []; } catch (_) { return []; }
++    }
++    function write(kind, list) {
++      mem[kind] = list;
++      if (storage) try { storage.setItem(key(kind), JSON.stringify(list)); } catch (_) { /* opslag vol: geheugen blijft gelden */ }
++    }
++    return {
++      take(kind) {
++        const limit = limits[kind]; const t = now();
++        const recent = read(kind).filter(x => t - x < limit.windowMs);
++        if (recent.length >= limit.max) {
++          write(kind, recent);
++          return { ok: false, retryInSeconds: Math.max(1, Math.ceil((limit.windowMs - (t - recent[0])) / 1000)) };
++        }
++        recent.push(t); write(kind, recent);
++        return { ok: true };
++      }
++    };
++  }
++
++  function createCache({ storage = null, now = () => Date.now(), ttl = CACHE_TTL_MS, max = CACHE_MAX } = {}) {
++    let mem = {};
++    const load = () => { if (!storage) return mem; try { const v = JSON.parse(storage.getItem(CACHE_KEY) || '{}'); return v && typeof v === 'object' ? v : {}; } catch (_) { return {}; } };
++    const store = all => { mem = all; if (storage) try { storage.setItem(CACHE_KEY, JSON.stringify(all)); } catch (_) { /* vol: alleen geheugen */ } };
++    return {
++      get(code, { allowStale = false } = {}) {
++        const entry = load()[code];
++        if (!entry) return null;
++        const stale = now() - entry.t > ttl;
++        return stale && !allowStale ? null : { product: entry.p, stale };
++      },
++      set(code, product) {
++        const all = load(); all[code] = { t: now(), p: product };
++        const keys = Object.keys(all);
++        if (keys.length > max) keys.sort((a, b) => all[a].t - all[b].t).slice(0, keys.length - max).forEach(k => delete all[k]);
++        store(all);
++      },
++      size() { return Object.keys(load()).length; }
++    };
++  }
++
++  class FoodFactsError extends Error {
++    constructor(kind, message, extra = {}) { super(message); this.kind = kind; Object.assign(this, extra); }
++  }
++
++  // Client met cache, limiet, time-out en duidelijke foutsoorten: invalid | rate-limit | not-found | network | server | timeout.
++  function createClient({ fetchImpl = (...a) => globalThis.fetch(...a), storage = null, now = () => Date.now(), timeoutMs = 10000 } = {}) {
++    const cache = createCache({ storage, now });
++    const limiter = createRateLimiter({ storage, now });
++    async function getJson(url) {
++      const controller = typeof AbortController === 'function' ? new AbortController() : null;
++      const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
++      let res;
++      try { res = await fetchImpl(url, { headers: { Accept: 'application/json' }, credentials: 'omit', ...(controller ? { signal: controller.signal } : {}) }); }
++      catch (e) {
++        if (e && e.name === 'AbortError') throw new FoodFactsError('timeout', 'Open Food Facts reageert niet (time-out). Probeer het later opnieuw.');
++        throw new FoodFactsError('network', 'Geen verbinding met Open Food Facts. Eerder opgehaalde producten blijven beschikbaar.');
++      } finally { if (timer) clearTimeout(timer); }
++      if (res.status === 429) throw new FoodFactsError('rate-limit', 'Open Food Facts vraagt om even te wachten (te veel verzoeken).', { retryInSeconds: 60 });
++      if (res.status === 404) return { status: 0 };
++      if (res.status >= 500) throw new FoodFactsError('server', `Open Food Facts is tijdelijk niet beschikbaar (${res.status}).`);
++      if (!res.ok) throw new FoodFactsError('server', `Open Food Facts gaf een fout (${res.status}).`);
++      try { return await res.json(); }
++      catch (_) { throw new FoodFactsError('server', 'Open Food Facts gaf geen geldige gegevens terug.'); }
++    }
++    return {
++      cache,
++      async product(barcode, { force = false } = {}) {
++        const code = cleanBarcode(barcode);
++        if (!code) throw new FoodFactsError('invalid', 'Vul een geldige barcode in (6 tot 14 cijfers).');
++        const check = barcodeCheck(code);
++        if (check.checked && !check.valid) throw new FoodFactsError('invalid', 'Deze barcode klopt niet (controlecijfer). Controleer de cijfers.');
++        if (!force) { const hit = cache.get(code); if (hit) return { product: hit.product, fromCache: true, stale: false }; }
++        const slot = limiter.take('product');
++        if (!slot.ok) {
++          const stale = cache.get(code, { allowStale: true });
++          if (stale) return { product: stale.product, fromCache: true, stale: true };
++          throw new FoodFactsError('rate-limit', `Even wachten: maximaal ${LIMITS.product.max} productopvragingen per minuut. Probeer over ${slot.retryInSeconds} s opnieuw.`, { retryInSeconds: slot.retryInSeconds });
++        }
++        try {
++          const payload = await getJson(`${BASE_URL}/api/v2/product/${code}.json?fields=${PRODUCT_FIELDS.join(',')}`);
++          if (!payload || payload.status === 0 || !payload.product) throw new FoodFactsError('not-found', 'Product niet gevonden in Open Food Facts. Je kunt het handmatig toevoegen.');
++          const product = normalizeProduct(payload, new Date(now()).toISOString());
++          cache.set(code, product);
++          return { product, fromCache: false, stale: false };
++        } catch (e) {
++          const stale = e.kind !== 'not-found' && cache.get(code, { allowStale: true });
++          if (stale) return { product: stale.product, fromCache: true, stale: true, warning: e.message };
++          throw e;
++        }
++      },
++      async search(query, { page = 1 } = {}) {
++        const q = String(query || '').replace(/\s+/g, ' ').trim().slice(0, 80);
++        if (q.length < 3) throw new FoodFactsError('invalid', 'Typ minstens 3 tekens en druk op Zoeken.');
++        const slot = limiter.take('search');
++        if (!slot.ok) throw new FoodFactsError('rate-limit', `Even wachten: maximaal ${LIMITS.search.max} zoekopdrachten per minuut. Probeer over ${slot.retryInSeconds} s opnieuw.`, { retryInSeconds: slot.retryInSeconds });
++        const params = new URLSearchParams({ search_terms: q, search_simple: '1', action: 'process', json: '1', page_size: '10', page: String(Math.min(10, Math.max(1, page | 0))), fields: SEARCH_FIELDS.join(',') });
++        return normalizeSearch(await getJson(`${BASE_URL}/cgi/search.pl?${params}`));
++      }
++    };
++  }
++
++  return {
++    BASE_URL, PRODUCT_FIELDS, LIMITS, CACHE_KEY, CACHE_TTL_MS, ATTRIBUTION, NUTRIENTS, ALLERGENS_NL,
++    cleanBarcode, barcodeCheck, num, round, normalizeProduct, manualProduct, scaleNutrients, assessQuality, knownCount,
++    normalizeSearch, createRateLimiter, createCache, createClient, FoodFactsError
++  };
++});
+diff --git a/food-facts-core.test.js b/food-facts-core.test.js
+new file mode 100644
+index 0000000..40fa968
+--- /dev/null
++++ b/food-facts-core.test.js
+@@ -0,0 +1,140 @@
++// Open Food Facts: normalisatie, onderscheid onbekend/0, kwaliteit, limieten, cache en foutafhandeling.
++const test = require('node:test');
++const assert = require('node:assert/strict');
++const FF = require('./food-facts-core.js');
++// Maakt een geldige GTIN (controlecijfer) van een basisreeks.
++const gtin = base => { const d = base.split('').map(Number).reverse(); const t = d.reduce((a, x, i) => a + x * (i % 2 === 0 ? 3 : 1), 0); return base + ((10 - (t % 10)) % 10); };
++
++const OFF_PRODUCT = {
++  status: 1, code: '8710400000006',
++  product: {
++    code: '8710400000006', product_name: 'Volle yoghurt', product_name_nl: 'Volle yoghurt', brands: 'Huismerk, Iets', quantity: '1 l',
++    serving_size: '150 g', serving_quantity: 150,
++    nutriments: { 'energy-kcal_100g': 61, fat_100g: 3.3, 'saturated-fat_100g': 2.2, carbohydrates_100g: 4.2, sugars_100g: 4.2, fiber_100g: 0, proteins_100g: 3.7, salt_100g: 0.13 },
++    ingredients_text_nl: 'volle melk, melkzuurbacteriën', allergens_tags: ['en:milk'], traces_tags: [], nutriscore_grade: 'b', nova_group: 1,
++    states_tags: ['en:complete'], last_modified_t: 1760000000
++  }
++};
++
++test('barcode: opschonen en GTIN-controlecijfer', () => {
++  assert.equal(FF.cleanBarcode(' 87-10400 '), '8710400');
++  assert.equal(FF.cleanBarcode('12'), '');
++  assert.deepEqual(FF.barcodeCheck('4006381333931'), { valid: true, checked: true });
++  assert.deepEqual(FF.barcodeCheck('4006381333932'), { valid: false, checked: true });
++  assert.deepEqual(FF.barcodeCheck('1234567'), { valid: true, checked: false });
++});
++
++test('num: onbekend → null, expliciete 0 blijft 0, komma als decimaal, negatief ongeldig', () => {
++  assert.equal(FF.num(undefined), null); assert.equal(FF.num(''), null); assert.equal(FF.num(null), null);
++  assert.equal(FF.num(0), 0); assert.equal(FF.num('0'), 0); assert.equal(FF.num('1,5'), 1.5); assert.equal(FF.num(-1), null); assert.equal(FF.num('abc'), null);
++});
++
++test('normalizeProduct: per 100 g, per portie (afgeleid), allergenen in het Nederlands, bron en licentie', () => {
++  const p = FF.normalizeProduct(OFF_PRODUCT, '2026-11-08T10:00:00.000Z');
++  assert.equal(p.id, 'off-8710400000006');
++  assert.equal(p.name, 'Volle yoghurt'); assert.equal(p.brand, 'Huismerk');
++  assert.equal(p.per100g.energyKcal, 61); assert.equal(p.per100g.fiber, 0, 'expliciete 0 blijft 0');
++  assert.equal(p.servingGrams, 150);
++  assert.equal(p.perServing.energyKcal, 91.5); assert.equal(p.perServing.proteins, 5.6);
++  assert.ok(p.derived.includes('perServing'));
++  assert.deepEqual(p.allergens, ['Melk']); assert.equal(p.allergensStatus, 'declared');
++  assert.equal(p.nutriscore, 'b'); assert.equal(p.nova, 1);
++  assert.equal(p.sourceUrl, 'https://world.openfoodfacts.org/product/8710400000006');
++  assert.match(p.license, /ODbL/);
++  assert.equal(p.quality.level, 'goed'); assert.equal(p.quality.knownNutrients, 8);
++});
++
++test('ontbrekende gegevens blijven null en worden als kwaliteitsprobleem gemeld; allergenen "onbekend" ≠ "geen"', () => {
++  const p = FF.normalizeProduct({ status: 1, product: { code: '12345670', product_name: 'Iets', nutriments: { 'energy-kj_100g': 418.4, sodium_100g: 0.4 } } });
++  assert.equal(p.per100g.fat, null); assert.equal(p.per100g.proteins, null);
++  assert.equal(p.per100g.energyKcal, 100, 'kJ omgerekend'); assert.equal(p.per100g.salt, 1, 'zout uit natrium');
++  assert.deepEqual(p.derived.sort(), ['energyKcal', 'salt']);
++  assert.equal(p.allergensStatus, 'unknown');
++  assert.equal(p.servingGrams, null);
++  assert.equal(FF.knownCount(p.perServing), 0, 'zonder portiegewicht geen per-portiewaarden verzinnen');
++  assert.ok(p.quality.issues.some(i => /6 van 8/.test(i)));
++  assert.ok(p.quality.issues.some(i => /Allergenen onbekend/.test(i)));
++  assert.equal(p.quality.level, 'beperkt');
++});
++
++test('no_nutrition_data en lege payload', () => {
++  const p = FF.normalizeProduct({ product: { code: '12345670', product_name: 'Thee', no_nutrition_data: 'on' } });
++  assert.equal(p.noNutritionData, true);
++  assert.ok(p.quality.issues.includes('Fabrikant geeft geen voedingswaarden op'));
++  assert.equal(FF.normalizeProduct({ status: 0 }), null);
++  assert.equal(FF.normalizeProduct(null), null);
++});
++
++test('handmatig product: lege velden null, naam verplicht, per portie alleen met portiegewicht', () => {
++  const p = FF.manualProduct({ name: 'Zelfgemaakte saus', per100g: { energyKcal: '120', fat: '' }, servingGrams: 50, allergens: 'selderij, mosterd' });
++  assert.equal(p.per100g.energyKcal, 120); assert.equal(p.per100g.fat, null);
++  assert.equal(p.perServing.energyKcal, 60); assert.equal(p.perServing.fat, null);
++  assert.deepEqual(p.allergens, ['selderij', 'mosterd']); assert.equal(p.source, 'manual');
++  assert.throws(() => FF.manualProduct({ name: ' ' }), /naam/);
++});
++
++test('zoekresultaten: alleen bruikbare producten, maximaal 20', () => {
++  const r = FF.normalizeSearch({ products: [{ code: '12345670', product_name: 'A' }, { code: '', product_name: 'B' }, { code: '87654321' }] });
++  assert.deepEqual(r, [{ barcode: '12345670', name: 'A', brand: '', quantity: '' }]);
++  assert.deepEqual(FF.normalizeSearch(null), []);
++});
++
++function memoryStorage() { const m = new Map(); return { getItem: k => m.has(k) ? m.get(k) : null, setItem: (k, v) => m.set(k, String(v)), m }; }
++const okResponse = body => ({ ok: true, status: 200, json: async () => body });
++
++test('client: haalt product op, cachet per barcode en vraagt het tweede keer niet opnieuw op', async () => {
++  let calls = 0; const urls = [];
++  const client = FF.createClient({ storage: memoryStorage(), fetchImpl: async (url) => { calls++; urls.push(url); return okResponse(OFF_PRODUCT); } });
++  const a = await client.product('8710400000006');
++  assert.equal(a.fromCache, false); assert.equal(a.product.name, 'Volle yoghurt');
++  const b = await client.product('8710400000006');
++  assert.equal(b.fromCache, true); assert.equal(calls, 1);
++  assert.match(urls[0], /^https:\/\/world\.openfoodfacts\.org\/api\/v2\/product\/8710400000006\.json\?fields=/);
++  assert.match(urls[0], /nutriments/);
++});
++
++test('client: limiet van 10 productopvragingen per minuut; daarna duidelijke melding of cache', async () => {
++  let t = 0; const storage = memoryStorage();
++  const client = FF.createClient({ storage, now: () => t, fetchImpl: async (url) => okResponse({ status: 1, product: { code: /product\/(\d+)/.exec(url)[1], product_name: 'P' } }) });
++  for (let i = 0; i < 10; i++) await client.product(gtin(String(1000000 + i)), { force: true });
++  await assert.rejects(client.product(gtin('2000000'), { force: true }), e => e.kind === 'rate-limit' && e.retryInSeconds > 0);
++  t = 61000;
++  assert.equal((await client.product(gtin('2000000'), { force: true })).fromCache, false);
++});
++
++test('client: zoeken vereist ≥3 tekens, gebruikt eigen limiet (6/min)', async () => {
++  const client = FF.createClient({ storage: memoryStorage(), fetchImpl: async () => okResponse({ products: [{ code: '12345670', product_name: 'Hagelslag' }] }) });
++  await assert.rejects(client.search('ha'), e => e.kind === 'invalid');
++  for (let i = 0; i < 6; i++) assert.equal((await client.search('hagelslag')).length, 1);
++  await assert.rejects(client.search('hagelslag'), e => e.kind === 'rate-limit');
++});
++
++test('client: foutsoorten — ongeldige barcode, niet gevonden, 429, 5xx, netwerk, time-out, kapotte JSON', async () => {
++  const mk = impl => FF.createClient({ storage: memoryStorage(), fetchImpl: impl, timeoutMs: 20 });
++  await assert.rejects(mk(async () => okResponse({})).product('4006381333932'), e => e.kind === 'invalid' && /controlecijfer/.test(e.message));
++  await assert.rejects(mk(async () => okResponse({ status: 0 })).product('12345670'), e => e.kind === 'not-found');
++  await assert.rejects(mk(async () => ({ ok: false, status: 404 })).product('12345670'), e => e.kind === 'not-found');
++  await assert.rejects(mk(async () => ({ ok: false, status: 429 })).product('12345670'), e => e.kind === 'rate-limit');
++  await assert.rejects(mk(async () => ({ ok: false, status: 503 })).product('12345670'), e => e.kind === 'server');
++  await assert.rejects(mk(async () => { throw new TypeError('Failed to fetch'); }).product('12345670'), e => e.kind === 'network');
++  await assert.rejects(mk((url, init) => new Promise((_, rej) => init.signal.addEventListener('abort', () => rej(Object.assign(new Error('a'), { name: 'AbortError' }))))).product('12345670'), e => e.kind === 'timeout');
++  await assert.rejects(mk(async () => ({ ok: true, status: 200, json: async () => { throw new SyntaxError('x'); } })).product('12345670'), e => e.kind === 'server');
++});
++
++test('offline: verlopen cache wordt gebruikt als het netwerk faalt (met waarschuwing)', async () => {
++  let t = 0; let online = true; const storage = memoryStorage();
++  const client = FF.createClient({ storage, now: () => t, fetchImpl: async () => { if (!online) throw new TypeError('offline'); return okResponse(OFF_PRODUCT); } });
++  await client.product('8710400000006');
++  t = FF.CACHE_TTL_MS + 1; online = false;
++  const r = await client.product('8710400000006');
++  assert.equal(r.stale, true); assert.equal(r.fromCache, true); assert.match(r.warning, /Geen verbinding/);
++});
++
++test('cache: begrensd tot maximum, oudste eerst weg; volle opslag breekt niets', () => {
++  let t = 0; const storage = memoryStorage();
++  const cache = FF.createCache({ storage, now: () => t++, max: 3 });
++  ['a', 'b', 'c', 'd'].forEach(k => cache.set(k, { k }));
++  assert.equal(cache.size(), 3); assert.equal(cache.get('a'), null); assert.ok(cache.get('d'));
++  const full = { getItem: () => null, setItem: () => { throw new Error('QuotaExceededError'); } };
++  const c2 = FF.createCache({ storage: full }); assert.doesNotThrow(() => c2.set('x', {}));
++});
+diff --git a/index.html b/index.html
+index b93aeb2..c640ef8 100644
+--- a/index.html
++++ b/index.html
+@@ -19,8 +19,9 @@
+   <link rel="stylesheet" href="shell.css?v=3">
+   <link rel="stylesheet" href="css/personalization.css?v=5">
+   <link rel="stylesheet" href="css/finance.css?v=1">
++  <link rel="stylesheet" href="css/nutrition.css?v=1">
+   <title>Samen Thuis</title>
+-  <meta name="application-version" content="25.2">
++  <meta name="application-version" content="26.0">
+ </head>
+ <body>
+   <div class="app-shell">
+@@ -107,10 +108,13 @@
+   <script src="freezer-core.js?v=1"></script>
+   <script src="weather-advice-core.js?v=1"></script>
+   <script src="sportcoach-core.js?v=2"></script>
+-  <script src="nav-core.js?v=2"></script>
+-  <script src="search-core.js?v=1"></script>
++  <script src="nav-core.js?v=3"></script>
++  <script src="search-core.js?v=2"></script>
+   <script src="import-core.js?v=1"></script>
+   <script src="import-readers.js?v=1"></script>
++  <script src="food-facts-core.js?v=1"></script>
++  <script src="nutrition-core.js?v=1"></script>
++  <script src="osta-exchange-core.js?v=1"></script>
+   <script src="app.js?v=275"></script>
+   <script src="samen-thuis-update-v26-challenges.js?v=260"></script>
+   <script src="account-sync.js?v=3"></script>
+@@ -118,6 +122,7 @@
+   <script src="inbox.js?v=1"></script>
+   <script src="weather-extras.js?v=1"></script>
+   <script src="sportcoach.js?v=6"></script>
++  <script src="nutrition.js?v=1"></script>
+   <script src="nav-groups.js?v=3"></script>
+   <script src="search.js?v=1"></script>
+ </body>
+diff --git a/nav-core.js b/nav-core.js
+index e215f10..0b17fa1 100644
+--- a/nav-core.js
++++ b/nav-core.js
+@@ -13,7 +13,7 @@
+     {
+       key: 'meer', icon: 'grid', label: 'Meer',
+       pages: [['meer', 'Meer'], ['planning', 'Agenda'], ['tasks', 'Taken'], ['ideas', 'Date ideeën'], ['trips', 'Reizen'],
+-        ['meals', 'Weekmenu'], ['groceries', 'Boodschappen'], ['offers', 'Aanbiedingen'], ['stock', 'Voorraad & vriezer'], ['chores', 'Routines'], ['home', 'Woning'],
++        ['meals', 'Weekmenu'], ['voeding', 'Voeding'], ['groceries', 'Boodschappen'], ['offers', 'Aanbiedingen'], ['stock', 'Voorraad & vriezer'], ['chores', 'Routines'], ['home', 'Woning'],
+         ['programs', "Programma's"], ['auto24', 'Auto'], ['imports243', 'Importeren'], ['extra19', 'Extra'], ['settings', 'Instellingen']]
+     }
+   ];
+@@ -21,7 +21,7 @@
+   // Blokken op de pagina 'Meer'. Alleen pagina's die niet al in de onderbalk staan, zodat niets dubbel wordt aangeboden.
+   const MORE_GROUPS = [
+     { title: 'Plannen', tiles: [['planning', 'calendar', 'Agenda', 'Afspraken en agenda’s'], ['tasks', 'check', 'Taken', 'Wat moet er gebeuren'], ['ideas', 'heart', 'Date ideeën', 'Samen leuke dingen doen'], ['trips', 'plane', 'Reizen', 'Reismappen en boekingen']] },
+-    { title: 'Huishouden', tiles: [['meals', 'utensils', 'Weekmenu', 'Wat eten we'], ['groceries', 'cart', 'Boodschappen', 'Lijst en prijsreferentie'], ['offers', 'tag', 'Aanbiedingen', 'Actuele supermarktprijzen'], ['stock', 'box', 'Voorraad & vriezer', 'Wat is er in huis'], ['chores', 'repeat', 'Routines', 'Huishoudtaken en herhalingen'], ['home', 'house', 'Woning', 'Onderhoud en woninginfo']] },
++    { title: 'Huishouden', tiles: [['meals', 'utensils', 'Weekmenu', 'Wat eten we'], ['voeding', 'book', 'Voeding', 'Voedingsplanning en productinformatie'], ['groceries', 'cart', 'Boodschappen', 'Lijst en prijsreferentie'], ['offers', 'tag', 'Aanbiedingen', 'Actuele supermarktprijzen'], ['stock', 'box', 'Voorraad & vriezer', 'Wat is er in huis'], ['chores', 'repeat', 'Routines', 'Huishoudtaken en herhalingen'], ['home', 'house', 'Woning', 'Onderhoud en woninginfo']] },
+     { title: 'Overig', tiles: [['programs', 'tv', "Programma's", 'Series, films en uitjes'], ['auto24', 'car', 'Auto', 'Tankbeurten en voertuigen'], ['imports243', 'upload', 'Importeren', 'Gegevens inlezen'], ['extra19', 'sparkles', 'Extra', 'Handige snelkoppelingen'], ['settings', 'gear', 'Instellingen', 'Profiel, sync en back-ups']] }
+   ];
+ 
+@@ -29,6 +29,16 @@
+   // `parts` = [CSS-selector, optionele kopregex]. `catchAll` toont ook alles wat geen andere subpagina claimt,
+   // zodat er nooit een onderdeel verdwijnt. `always` blijft op elke subpagina zichtbaar.
+   const HUBS = {
++    voeding: {
++      title: 'Voeding',
++      always: ['.nut-disclaimer'],
++      subs: [
++        { key: 'weekmenu', icon: 'calendar', label: 'Voeding bij het weekmenu', desc: 'Voedingswaarde per maaltijd en controle', parts: [['.nut-pane[data-nut="weekmenu"]']] },
++        { key: 'recepten', icon: 'book', label: 'Receptkopieën uit Osta', desc: 'Voedingswaarde en productkoppelingen', parts: [['.nut-pane[data-nut="recepten"]']] },
++        { key: 'producten', icon: 'box', label: 'Productinformatie', desc: 'Barcode, voedingswaarden en allergenen', parts: [['.nut-pane[data-nut="producten"]']] },
++        { key: 'uitwisselen', icon: 'sync', label: 'Osta en recepten uitwisselen', desc: 'Importeren met voorbeeld en exporteren', parts: [['.nut-pane[data-nut="uitwisselen"]']] }
++      ]
++    },
+     settings: {
+       title: 'Instellingen',
+       subs: [
+diff --git a/nutrition-core.js b/nutrition-core.js
+new file mode 100644
+index 0000000..0e45b9c
+--- /dev/null
++++ b/nutrition-core.js
+@@ -0,0 +1,245 @@
++(function (root, factory) {
++  const core = factory(root.SamenThuisFoodFacts || (typeof require === 'function' ? require('./food-facts-core.js') : null));
++  if (typeof module === 'object' && module.exports) module.exports = core;
++  root.SamenThuisNutrition = core;
++})(globalThis, function (FF) {
++  'use strict';
++  // Voedingsplanning voor het huishouden: producten, receptkopieën en het weekmenu.
++  // Rolverdeling (ADR 0001 Samen Thuis, geaccepteerd 2026-11-08): Osta is de primaire plek voor recepten.
++  // Samen Thuis bewaart alleen geïmporteerde receptkopieën. De receptinhoud (titel, porties, ingrediënten,
++  // bereiding, opgegeven voedingswaarden) komt uit de bron en wordt hier niet bewerkt. Samen Thuis voegt alleen
++  // voedingsannotaties toe: productkoppeling en grammen per ingrediënt, en optioneel porties voor de planning.
++  // Opslag: data.nutrition = { version, products[], recipes[] } in de bestaande versleutelde huishoudgegevens
++  // (samenThuisDataV2, gesynchroniseerd als onderdeel 'nutrition'). Geen persoonlijke inname-, lichaams- of
++  // gezondheidsgegevens: die horen volgens DATA_OWNERSHIP bij de Sportapp. Waarden zijn per portie van een gerecht.
++  //
++  // Rekenregel: onbekend is nooit 0. Een totaal is alleen "volledig" als élk ingrediënt voor die voedingswaarde
++  // een bekende waarde én een gewicht heeft. Anders tonen we een ondergrens ("minstens") en de dekking.
++
++  const VERSION = 1;
++  const NUTRIENTS = FF.NUTRIENTS;
++  const KEYS = NUTRIENTS.map(n => n.key);
++  const MAX_PRODUCTS = 500;
++  const MAX_RECIPES = 500;
++  const MAX_INGREDIENTS = 60;
++
++  const str = (v, max) => String(v ?? '').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').trim().slice(0, max);
++  const fold = v => String(v ?? '').toLocaleLowerCase('nl-NL').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
++  const genId = prefix => prefix + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
++
++  function emptyNutrients() { const o = {}; KEYS.forEach(k => { o[k] = null; }); return o; }
++  function cleanNutrients(value) {
++    const o = emptyNutrients();
++    if (value && typeof value === 'object') KEYS.forEach(k => { o[k] = FF.num(value[k]); });
++    return o;
++  }
++
++  // ---------- Hoeveelheden ----------
++  // Herkent "250 g spinazie", "2 el olijfolie", "1,5 kg aardappelen", "3 eieren", "½ ui". Geeft grams=null als onbekend.
++  const UNIT_GRAMS = {
++    g: 1, gr: 1, gram: 1, grams: 1, kg: 1000, kilo: 1000, mg: 0.001,
++    ml: 1, l: 1000, liter: 1000, dl: 100, cl: 10, // vloeistoffen: 1 ml ≈ 1 g (benadering, gemarkeerd)
++    el: 15, eetlepel: 15, eetlepels: 15, tbsp: 15, tl: 5, theelepel: 5, theelepels: 5, tsp: 5
++  };
++  const APPROX_UNITS = new Set(['ml', 'l', 'liter', 'dl', 'cl', 'el', 'eetlepel', 'eetlepels', 'tbsp', 'tl', 'theelepel', 'theelepels', 'tsp']);
++  const FRACTIONS = { '½': 0.5, '¼': 0.25, '¾': 0.75, '⅓': 1 / 3, '⅔': 2 / 3 };
++
++  function parseAmount(text) {
++    const s = String(text || '').trim().replace(/^[-•*]\s*/, '');
++    const m = /^((?:\d+(?:[.,]\d+)?)?\s*[½¼¾⅓⅔]?|\d+\/\d+)\s*([a-zA-Z]+\.?)?\s+(.*)$/.exec(s);
++    if (!m || !m[1].trim()) return { quantity: null, unit: '', name: s, grams: null, approx: false };
++    let raw = m[1].trim(); let quantity = 0;
++    if (/^\d+\/\d+$/.test(raw)) { const [a, b] = raw.split('/').map(Number); quantity = b ? a / b : 0; }
++    else {
++      const frac = raw.match(/[½¼¾⅓⅔]/); if (frac) { quantity += FRACTIONS[frac[0]]; raw = raw.replace(frac[0], ''); }
++      if (raw.trim()) quantity += Number(raw.trim().replace(',', '.'));
++    }
++    let unit = (m[2] || '').toLowerCase().replace(/\.$/, '');
++    let name = m[3].trim();
++    if (unit && !(unit in UNIT_GRAMS)) { name = `${m[2]} ${name}`.trim(); unit = ''; }
++    const grams = unit && Number.isFinite(quantity) ? FF.round(quantity * UNIT_GRAMS[unit], 1) : null;
++    return { quantity: Number.isFinite(quantity) && quantity > 0 ? FF.round(quantity, 2) : null, unit, name, grams, approx: APPROX_UNITS.has(unit) };
++  }
++
++  // ---------- Normaliseren (veilig voor oude/onbekende data) ----------
++  function normalizeIngredient(raw) {
++    if (typeof raw === 'string') raw = { text: raw };
++    if (!raw || typeof raw !== 'object') return null;
++    const text = str(raw.text || [raw.quantity, raw.unit, raw.name].filter(Boolean).join(' '), 200);
++    const parsed = parseAmount(text);
++    const grams = raw.grams !== undefined ? FF.num(raw.grams) : parsed.grams;
++    const name = str(raw.name || parsed.name, 120);
++    if (!name && !text) return null;
++    return {
++      id: str(raw.id, 40) || genId('ing-'),
++      text: text || name,
++      name,
++      grams,
++      gramsApprox: raw.gramsApprox !== undefined ? Boolean(raw.gramsApprox) : (raw.grams === undefined && parsed.approx),
++      productId: str(raw.productId, 60) || null
++    };
++  }
++
++  function normalizeRecipe(raw, now = new Date().toISOString()) {
++    if (!raw || typeof raw !== 'object') return null;
++    const title = str(raw.title || raw.name, 160);
++    if (!title) return null;
++    const servings = Math.min(50, Math.max(1, Math.round(FF.num(raw.servings) || 0) || 1));
++    const ingredients = (Array.isArray(raw.ingredients) ? raw.ingredients : []).slice(0, MAX_INGREDIENTS).map(normalizeIngredient).filter(Boolean);
++    const declared = raw.declaredPerServing && typeof raw.declaredPerServing === 'object' ? cleanNutrients(raw.declaredPerServing) : null;
++    const override = FF.num(raw.servingsOverride);
++    return {
++      id: str(raw.id, 60) || genId('rec-'),
++      title,
++      servings,
++      servingsKnown: raw.servingsKnown !== undefined ? Boolean(raw.servingsKnown) : FF.num(raw.servings) >= 1,
++      // Annotatie van Samen Thuis (niet uit de bron): aantal porties voor de planning als de bron het niet geeft of anders kookt.
++      servingsOverride: override && override >= 1 ? Math.min(50, Math.round(override)) : null,
++      ingredients,
++      steps: (Array.isArray(raw.steps) ? raw.steps : []).map(s => str(s, 1000)).filter(Boolean).slice(0, 40),
++      tags: (Array.isArray(raw.tags) ? raw.tags : []).map(t => str(t, 40)).filter(Boolean).slice(0, 12),
++      notes: str(raw.notes, 2000),
++      // Voedingswaarden zoals opgegeven door de bron (bijv. Osta of een recepten-website), per portie. Nooit overschreven door berekening.
++      declaredPerServing: declared && FF.knownCount(declared) ? declared : null,
++      // 'manual' bestaat alleen voor compatibiliteit met data uit de niet-gemergde testversie; nieuwe kopieën komen altijd uit een import.
++      source: ['osta', 'import', 'schema.org', 'samen-thuis', 'manual'].includes(raw.source) ? raw.source : 'import',
++      importedAt: str(raw.importedAt, 40) || null,
++      externalRef: str(raw.externalRef, 200) || null,
++      sourceUrl: /^https:\/\//i.test(String(raw.sourceUrl || '')) ? str(raw.sourceUrl, 500) : '',
++      createdAt: str(raw.createdAt, 40) || now,
++      updatedAt: str(raw.updatedAt, 40) || now
++    };
++  }
++
++  function normalizeStore(raw) {
++    const src = raw && typeof raw === 'object' ? raw : {};
++    const products = (Array.isArray(src.products) ? src.products : []).filter(p => p && typeof p === 'object' && p.id && p.name).slice(0, MAX_PRODUCTS)
++      .map(p => ({ ...p, per100g: cleanNutrients(p.per100g), perServing: cleanNutrients(p.perServing) }));
++    const recipes = (Array.isArray(src.recipes) ? src.recipes : []).map(r => normalizeRecipe(r)).filter(Boolean).slice(0, MAX_RECIPES);
++    // Onbekende velden van latere versies blijven behouden (zelfde principe als migrateData).
++    const out = { ...src, version: VERSION, products, recipes };
++    return out;
++  }
++
++  // ---------- Berekenen ----------
++  const effectiveServings = recipe => recipe.servingsOverride || recipe.servings || 1;
++
++  function recipeNutrition(recipe, products) {
++    const byId = new Map((products || []).map(p => [p.id, p]));
++    const totals = emptyNutrients();
++    const coverage = {}; KEYS.forEach(k => { coverage[k] = { known: 0, missing: 0 }; });
++    const missingReasons = [];
++    let approx = false;
++    for (const ing of recipe.ingredients || []) {
++      const product = ing.productId ? byId.get(ing.productId) : null;
++      let reason = '';
++      if (!product) reason = 'geen product gekoppeld';
++      else if (ing.grams == null) reason = 'hoeveelheid in gram onbekend';
++      for (const k of KEYS) {
++        const per100 = product && product.per100g ? product.per100g[k] : null;
++        if (!reason && per100 != null) { totals[k] = (totals[k] || 0) + per100 * ing.grams / 100; coverage[k].known += 1; }
++        else coverage[k].missing += 1;
++      }
++      if (reason) missingReasons.push({ ingredient: ing.name || ing.text, reason });
++      if (!reason && ing.gramsApprox) approx = true;
++    }
++    const n = recipe.ingredients ? recipe.ingredients.length : 0;
++    const complete = {}; const perServing = emptyNutrients(); const total = emptyNutrients();
++    for (const k of KEYS) {
++      complete[k] = n > 0 && coverage[k].missing === 0;
++      total[k] = coverage[k].known ? FF.round(totals[k], k === 'salt' ? 2 : 1) : null;
++      perServing[k] = total[k] == null ? null : FF.round(total[k] / effectiveServings(recipe), k === 'salt' ? 2 : 1);
++    }
++    const fullyComplete = KEYS.every(k => complete[k]);
++    return {
++      total, perServing, complete, coverage, missingReasons, approx, fullyComplete,
++      // Opgegeven waarden van de bron blijven zichtbaar naast de berekening; nooit samengevoegd.
++      declaredPerServing: recipe.declaredPerServing || null,
++      status: n === 0 ? 'geen-ingredienten' : fullyComplete ? 'volledig' : KEYS.some(k => coverage[k].known) ? 'onvolledig' : 'onbekend'
++    };
++  }
++
++  // Weergave: "540 kcal", "≥ 540 kcal (onvolledig)" of "onbekend". Nooit 0 bij ontbrekende gegevens.
++  function formatValue(value, unit, isComplete) {
++    if (value == null) return 'onbekend';
++    const shown = (unit === 'kcal' ? Math.round(value) : FF.round(value, 1)).toLocaleString('nl-NL');
++    return isComplete ? `${shown} ${unit}` : `≥ ${shown} ${unit}`;
++  }
++
++  // Maaltijden in het weekmenu koppelen aan recepten: expliciet via meal.recipeId, anders voorstel op (genormaliseerde) titel.
++  function matchRecipe(meal, recipes) {
++    if (!meal) return null;
++    if (meal.recipeId) { const r = (recipes || []).find(x => x.id === meal.recipeId); if (r) return { recipe: r, linked: true }; }
++    const key = fold(meal.title);
++    if (!key) return null;
++    const r = (recipes || []).find(x => fold(x.title) === key);
++    return r ? { recipe: r, linked: false } : null;
++  }
++
++  // Weekoverzicht per dag: per maaltijd de voedingswaarde per portie (huishoudniveau, geen persoonlijke inname).
++  function weekSummary(meals, store, weekDates) {
++    const recipes = (store && store.recipes) || []; const products = (store && store.products) || [];
++    return weekDates.map(date => {
++      const items = (meals || []).filter(m => m && m.date === date).map(meal => {
++        const match = matchRecipe(meal, recipes);
++        return { meal, recipe: match ? match.recipe : null, linked: match ? match.linked : false, nutrition: match ? recipeNutrition(match.recipe, products) : null };
++      });
++      return { date, items, withRecipe: items.filter(i => i.recipe).length, total: items.length };
++    });
++  }
++
++  // Ingrediënten van recepten → boodschappenlijst (titels). Dubbele namen worden samengevoegd op naam.
++  function groceryItemsFor(recipes) {
++    const seen = new Map();
++    for (const r of recipes || []) for (const ing of r.ingredients || []) {
++      const key = fold(ing.name || ing.text); if (!key) continue;
++      if (!seen.has(key)) seen.set(key, { title: ing.text || ing.name, recipes: [r.title] });
++      else seen.get(key).recipes.push(r.title);
++    }
++    return [...seen.values()];
++  }
++
++  // ---------- Producten opslaan zonder informatie te verliezen ----------
++  // Bestaand product (zelfde barcode of id) wordt bijgewerkt; bekende waarden worden nooit vervangen door null.
++  function upsertProduct(store, product) {
++    const s = normalizeStore(store);
++    const idx = s.products.findIndex(p => p.id === product.id || (product.barcode && p.barcode === product.barcode));
++    if (idx < 0) { s.products.push(product); return { store: s, action: 'added', product }; }
++    const prev = s.products[idx];
++    const merged = { ...prev, ...product, id: prev.id, per100g: { ...prev.per100g }, perServing: { ...prev.perServing } };
++    for (const k of KEYS) {
++      if (product.per100g && product.per100g[k] != null) merged.per100g[k] = product.per100g[k];
++      if (product.perServing && product.perServing[k] != null) merged.perServing[k] = product.perServing[k];
++    }
++    ['name', 'brand', 'quantity', 'servingSize', 'ingredientsText'].forEach(f => { if (!product[f] && prev[f]) merged[f] = prev[f]; });
++    if (product.servingGrams == null && prev.servingGrams != null) merged.servingGrams = prev.servingGrams;
++    if (FF.assessQuality) merged.quality = FF.assessQuality({ derived: [], ...merged });
++    s.products[idx] = merged;
++    return { store: s, action: 'updated', product: merged };
++  }
++
++  function productUsage(store, productId) {
++    return ((store && store.recipes) || []).filter(r => (r.ingredients || []).some(i => i.productId === productId)).map(r => r.title);
++  }
++
++  // ---------- Regelgebaseerde controle (handmatig gestart, geen AI-dienst) ----------
++  function weekChecks(summary) {
++    const notes = [];
++    const meals = summary.flatMap(d => d.items);
++    const withoutRecipe = meals.filter(i => !i.recipe).length;
++    if (!meals.length) notes.push({ level: 'info', text: 'Er staan deze week nog geen maaltijden in het weekmenu.' });
++    if (withoutRecipe) notes.push({ level: 'info', text: `${withoutRecipe} maaltijd(en) zonder gekoppeld recept: daarvan is geen voedingsinformatie bekend.` });
++    const incomplete = meals.filter(i => i.nutrition && i.nutrition.status !== 'volledig').length;
++    if (incomplete) notes.push({ level: 'let-op', text: `${incomplete} gerecht(en) met onvolledige voedingsgegevens: totalen zijn een ondergrens.` });
++    const noVeg = meals.filter(i => i.recipe && !(i.recipe.ingredients || []).some(g => /groente|spinazie|broccoli|paprika|tomaat|wortel|courgette|sla|ui\b|prei|bloemkool|boon|erwt|kool|aubergine|champignon/i.test(g.name || g.text))).length;
++    if (noVeg) notes.push({ level: 'tip', text: `${noVeg} recept(en) zonder herkenbare groente in de ingrediënten (op naam herkend, kan onvolledig zijn).` });
++    const daysEmpty = summary.filter(d => !d.items.length).length;
++    if (meals.length && daysEmpty) notes.push({ level: 'info', text: `${daysEmpty} dag(en) zonder geplande maaltijd.` });
++    return { notes, method: 'regelgebaseerd', generatedAt: new Date().toISOString() };
++  }
++
++  return {
++    VERSION, KEYS, NUTRIENTS, UNIT_GRAMS, parseAmount, effectiveServings, normalizeIngredient, normalizeRecipe, normalizeStore, cleanNutrients, emptyNutrients,
++    recipeNutrition, formatValue, matchRecipe, weekSummary, groceryItemsFor, upsertProduct, productUsage, weekChecks, fold
++  };
++});
+diff --git a/nutrition-core.test.js b/nutrition-core.test.js
+new file mode 100644
+index 0000000..af6992a
+--- /dev/null
++++ b/nutrition-core.test.js
+@@ -0,0 +1,112 @@
++// Voedingsplanning: hoeveelheden, recepten, berekening met dekking (onbekend ≠ 0), weekmenu, boodschappen, opslag.
++const test = require('node:test');
++const assert = require('node:assert/strict');
++const N = require('./nutrition-core.js');
++const FF = require('./food-facts-core.js');
++
++const yoghurt = FF.manualProduct({ id: 'p-yog', name: 'Yoghurt', per100g: { energyKcal: 60, fat: 3, saturatedFat: 2, carbohydrates: 4, sugars: 4, fiber: 0, proteins: 4, salt: 0.1 } });
++const muesli = FF.manualProduct({ id: 'p-mue', name: 'Muesli', per100g: { energyKcal: 370, fat: 6, saturatedFat: 1, carbohydrates: 60, sugars: 15, fiber: 8, proteins: 10, salt: null } });
++
++test('parseAmount: gram, kilo, komma, breuken, lepels (benaderd), stuks zonder gewicht', () => {
++  assert.deepEqual(N.parseAmount('250 g spinazie'), { quantity: 250, unit: 'g', name: 'spinazie', grams: 250, approx: false });
++  assert.equal(N.parseAmount('1,5 kg aardappelen').grams, 1500);
++  assert.equal(N.parseAmount('250g kwark').grams, 250);
++  assert.equal(N.parseAmount('½ l melk').grams, 500);
++  assert.equal(N.parseAmount('½ l melk').approx, true);
++  assert.equal(N.parseAmount('2 el olijfolie').grams, 30);
++  assert.equal(N.parseAmount('1/2 ui').quantity, 0.5);
++  const eggs = N.parseAmount('3 eieren'); assert.equal(eggs.quantity, 3); assert.equal(eggs.grams, null); assert.equal(eggs.name, 'eieren');
++  assert.equal(N.parseAmount('Zout naar smaak').grams, null);
++});
++
++test('normalizeRecipe: veilige standaarden, opschonen, ongeldige invoer genegeerd', () => {
++  assert.equal(N.normalizeRecipe(null), null);
++  assert.equal(N.normalizeRecipe({ title: '   ' }), null);
++  const r = N.normalizeRecipe({ title: 'Ontbijt\u0000', servings: '0', ingredients: ['200 g yoghurt', { name: 'muesli', grams: 50 }, null, 7], sourceUrl: 'javascript:alert(1)' });
++  assert.equal(r.title, 'Ontbijt'); assert.equal(r.servings, 1);
++  assert.equal(r.ingredients.length, 2, 'null en getallen worden genegeerd');
++  assert.equal(r.ingredients[0].grams, 200); assert.equal(r.ingredients[1].grams, 50);
++  assert.equal(r.sourceUrl, '', 'alleen https-bronnen');
++  assert.equal(r.source, 'import', 'nieuwe receptkopieën komen altijd uit een import');
++});
++
++test('recipeNutrition: volledig wanneer alle ingrediënten gekoppeld zijn met gewicht', () => {
++  const r = N.normalizeRecipe({ title: 'Bakje', servings: 2, ingredients: [{ name: 'yoghurt', grams: 300, productId: 'p-yog' }, { name: 'muesli', grams: 100, productId: 'p-yog' }] });
++  const n = N.recipeNutrition(r, [yoghurt]);
++  assert.equal(n.status, 'volledig'); assert.equal(n.fullyComplete, true);
++  assert.equal(n.total.energyKcal, 240); assert.equal(n.perServing.energyKcal, 120);
++  assert.equal(n.perServing.fiber, 0, 'bekende 0 blijft 0 en telt als volledig');
++});
++
++test('recipeNutrition: ontbrekende waarde wordt nooit als 0 geteld; status onvolledig met redenen', () => {
++  const r = N.normalizeRecipe({ title: 'Ontbijt', servings: 1, ingredients: [
++    { name: 'yoghurt', grams: 200, productId: 'p-yog' }, { name: 'muesli', grams: 50, productId: 'p-mue' }, { name: 'banaan' }, '3 walnoten'] });
++  const n = N.recipeNutrition(r, [yoghurt, muesli]);
++  assert.equal(n.status, 'onvolledig');
++  assert.equal(n.total.energyKcal, 305, 'ondergrens uit bekende ingrediënten');
++  assert.equal(n.complete.energyKcal, false);
++  assert.equal(n.coverage.salt.known, 1, 'muesli zout onbekend telt niet mee'); assert.equal(n.coverage.salt.missing, 3);
++  assert.equal(n.total.salt, 0.2);
++  assert.deepEqual(n.missingReasons.map(m => m.reason), ['geen product gekoppeld', 'geen product gekoppeld']);
++  assert.equal(N.formatValue(n.perServing.energyKcal, 'kcal', n.complete.energyKcal), '≥ 305 kcal');
++  assert.equal(N.formatValue(null, 'g', false), 'onbekend');
++  assert.equal(N.formatValue(0, 'g', true), '0 g');
++});
++
++test('recipeNutrition: zonder ingrediënten of zonder bekende waarden', () => {
++  assert.equal(N.recipeNutrition(N.normalizeRecipe({ title: 'Leeg' }), []).status, 'geen-ingredienten');
++  const n = N.recipeNutrition(N.normalizeRecipe({ title: 'X', ingredients: ['1 ui'] }), []);
++  assert.equal(n.status, 'onbekend'); assert.equal(n.perServing.energyKcal, null);
++});
++
++test('benaderde grammen (ml/lepels) worden gemarkeerd', () => {
++  const r = N.normalizeRecipe({ title: 'Saus', ingredients: [{ text: '2 el yoghurt', productId: 'p-yog' }] });
++  assert.equal(N.recipeNutrition(r, [yoghurt]).approx, true);
++});
++
++test('opgegeven waarden van de bron blijven apart van de berekening', () => {
++  const r = N.normalizeRecipe({ title: 'Osta-gerecht', declaredPerServing: { energyKcal: 520, proteins: 25 }, ingredients: ['1 ui'] });
++  const n = N.recipeNutrition(r, []);
++  assert.equal(n.declaredPerServing.energyKcal, 520); assert.equal(n.declaredPerServing.fat, null);
++  assert.equal(n.perServing.energyKcal, null);
++});
++
++test('weekmenu: koppeling via recipeId, anders voorstel op titel; samenvatting per dag', () => {
++  const store = N.normalizeStore({ products: [yoghurt], recipes: [{ id: 'r1', title: 'Yoghurt-bowl', ingredients: [{ name: 'yoghurt', grams: 200, productId: 'p-yog' }] }, { id: 'r2', title: 'Pasta pesto' }] });
++  const meals = [{ id: 'm1', date: '2026-11-09', title: 'yoghurt bowl', type: 'Ontbijt' }, { id: 'm2', date: '2026-11-09', title: 'Iets anders', recipeId: 'r2' }, { id: 'm3', date: '2026-11-10', title: 'Pizza' }];
++  const week = N.weekSummary(meals, store, ['2026-11-09', '2026-11-10', '2026-11-11']);
++  assert.equal(week[0].total, 2); assert.equal(week[0].withRecipe, 2);
++  assert.equal(week[0].items[0].linked, false); assert.equal(week[0].items[0].nutrition.perServing.energyKcal, 120);
++  assert.equal(week[0].items[1].linked, true);
++  assert.equal(week[1].items[0].recipe, null);
++  const checks = N.weekChecks(week);
++  assert.equal(checks.method, 'regelgebaseerd');
++  assert.ok(checks.notes.some(n => /zonder gekoppeld recept/.test(n.text)));
++  assert.ok(checks.notes.some(n => /dag\(en\) zonder/.test(n.text)));
++});
++
++test('boodschappen uit recepten: samengevoegd op naam', () => {
++  const items = N.groceryItemsFor([N.normalizeRecipe({ title: 'A', ingredients: ['250 g spinazie', '1 ui'] }), N.normalizeRecipe({ title: 'B', ingredients: ['1 ui'] })]);
++  assert.equal(items.length, 2);
++  assert.deepEqual(items.find(i => /ui/.test(i.title)).recipes, ['A', 'B']);
++});
++
++test('upsertProduct: nieuw toevoegen; bijwerken verliest nooit bekende waarden', () => {
++  let { store, action } = N.upsertProduct({}, muesli);
++  assert.equal(action, 'added');
++  const update = { ...muesli, per100g: { ...N.emptyNutrients(), salt: 0.05 }, ingredientsText: '' };
++  ({ store, action } = N.upsertProduct(store, update));
++  assert.equal(action, 'updated');
++  const p = store.products[0];
++  assert.equal(p.per100g.energyKcal, 370, 'bekende waarde blijft'); assert.equal(p.per100g.salt, 0.05, 'onbekende waarde aangevuld');
++  assert.equal(store.products.length, 1);
++});
++
++test('normalizeStore: behoudt onbekende velden, schoont kapotte items op, begrenst aantallen', () => {
++  const s = N.normalizeStore({ futureField: { a: 1 }, products: [{ id: 'x', name: 'X', per100g: { fat: '2' } }, { name: 'zonder id' }, 5], recipes: [{ title: 'R' }, { nope: 1 }] });
++  assert.deepEqual(s.futureField, { a: 1 });
++  assert.equal(s.products.length, 1); assert.equal(s.products[0].per100g.fat, 2); assert.equal(s.products[0].per100g.proteins, null);
++  assert.equal(s.recipes.length, 1); assert.equal(s.version, 1);
++  assert.deepEqual(N.normalizeStore(undefined), { version: 1, products: [], recipes: [] });
++  assert.equal(N.productUsage(N.normalizeStore({ recipes: [{ title: 'R', ingredients: [{ name: 'x', productId: 'x' }] }] }), 'x')[0], 'R');
++});
+diff --git a/nutrition-integration.test.js b/nutrition-integration.test.js
+new file mode 100644
+index 0000000..3c60e7d
+--- /dev/null
++++ b/nutrition-integration.test.js
+@@ -0,0 +1,158 @@
++// Voeding in de bestaande app: opslag (samenThuisDataV2), back-up/herstel, accountsync, zoeken, XSS en PWA-registratie.
++const test = require('node:test');
++const assert = require('node:assert/strict');
++const fs = require('node:fs');
++const vm = require('node:vm');
++const DC = require('./data-core.js');
++const HS = require('./household-sync-core.js');
++const N = require('./nutrition-core.js');
++const FF = require('./food-facts-core.js');
++const X = require('./osta-exchange-core.js');
++
++const read = f => fs.readFileSync(__dirname + '/' + f, 'utf8');
++const sample = () => {
++  const product = FF.manualProduct({ id: 'p1', name: 'Pasta', per100g: { energyKcal: 350 } });
++  return { meta: { version: 2, updatedAt: '2026-11-08T10:00:00Z' }, meals: [{ id: 'm1', date: '2026-11-09', title: 'Pasta', type: 'Avondeten', recipeId: 'r1' }],
++    nutrition: N.normalizeStore({ products: [product], recipes: [{ id: 'r1', title: 'Pasta', ingredients: [{ name: 'pasta', grams: 100, productId: 'p1' }] }] }) };
++};
++
++test('opslag: migrateData behoudt data.nutrition (onbekend veld) en meals ongewijzigd incl. recipeId', () => {
++  const app = read('app.js');
++  const body = app.slice(app.indexOf('function migrateData(raw)'), app.indexOf('const RECOVERY_KEYS'));
++  assert.match(body, /preserveUnknownFields\(raw, migrated, clone\)/);
++  assert.match(body, /\['planning', 'meals',/);
++  const raw = sample(); const target = { meals: [] };
++  DC.preserveUnknownFields(raw, target, v => JSON.parse(JSON.stringify(v)));
++  assert.deepEqual(target.nutrition, raw.nutrition);
++});
++
++test('back-up en herstel: nutrition komt volledig terug; ongeldige back-up wijzigt niets', () => {
++  const m = {}; const s = { getItem: k => (k in m ? m[k] : null), setItem: (k, v) => { m[k] = v; }, removeItem: k => { delete m[k]; } };
++  const o = { storageKey: 'd', legacyKey: 'l', backupKey: 'b', backupAtKey: 'ba', corruptKey: 'c', preRestoreKey: 'prr', holdKey: 'hold', migrate: d => d, fresh: () => ({}), now: () => 'nu' };
++  const original = sample();
++  const restored = DC.restoreBackupText(s, o, JSON.stringify(original));
++  assert.deepEqual(restored.nutrition, JSON.parse(JSON.stringify(original.nutrition)));
++  assert.equal(restored.meals[0].recipeId, 'r1');
++  const before = m.d;
++  assert.throws(() => DC.restoreBackupText(s, o, '{kapot'));
++  assert.equal(m.d, before);
++});
++
++test('accountsync: nutrition is een eigen versleuteld onderdeel; conflicten worden niet stil overschreven', () => {
++  const local = sample();
++  assert.ok('nutrition' in HS.sectionsOf(local));
++  assert.ok(!('meta' in HS.sectionsOf(local)));
++  const push = HS.planSections({ local, remote: {} }).find(a => a.section === 'nutrition');
++  assert.equal(push.action, 'push');
++  const otherDevice = { ...local.nutrition, recipes: [...local.nutrition.recipes, N.normalizeRecipe({ title: 'Soep' })] };
++  const base = { nutrition: { version: 1, hash: HS.hashValue({ ...local.nutrition, recipes: [] }) } };
++  const plan = HS.planSections({ local, remote: { nutrition: { version: 2, value: otherDevice } }, base }).find(a => a.section === 'nutrition');
++  assert.equal(plan.action, 'conflict', 'beide kanten gewijzigd → gebruiker kiest');
++});
++
++test('accountsync-ronde met nep-cloud: nutrition wordt versleuteld verstuurd met verwachte versie', async () => {
++  const puts = [];
++  const cloud = { readState: async () => [], putState: async (hid, section, payload, expected) => { puts.push({ section, payload, expected }); return 1; } };
++  const r = await HS.runAccountSync({ cloud, householdId: 'h1', local: sample(), encrypt: async v => ({ enc: JSON.stringify(v).length }), decrypt: async v => v });
++  assert.equal(r.status, 'ok');
++  const n = puts.find(p => p.section === 'nutrition');
++  assert.ok(n && n.payload.enc > 0 && n.expected === 0);
++  assert.ok(!puts.some(p => p.section === 'meta' || p.section === 'settings'));
++});
++
++test('privacy: voedingsopslag bevat geen persoons-, lichaams- of gezondheidsvelden en export geen huishouddata', () => {
++  const bundle = X.exportBundle(sample().nutrition);
++  const text = JSON.stringify(bundle);
++  for (const word of ['weight', 'gewicht_kg', 'bmi', 'astma', 'person', 'Kees', 'Daphne', 'householdCode', 'access_token']) assert.ok(!text.includes(word), word);
++  assert.deepEqual(Object.keys(bundle).sort(), ['app', 'exportedAt', 'format', 'note', 'products', 'recipes', 'version']);
++});
++
++test('zoeken vindt recepten (ook op ingrediënt) en producten en leidt naar de juiste subpagina', () => {
++  const S = require('./search-core.js');
++  const groups = S.search(sample(), 'pasta');
++  const rec = groups.find(g => g.key === 'voeding-recepten');
++  assert.equal(rec.results[0].page, 'voeding'); assert.equal(rec.results[0].sub, 'recepten');
++  assert.ok(groups.find(g => g.key === 'voeding-producten'));
++  assert.ok(S.search({ nutrition: { recipes: [{ id: 'x', title: 'Curry', ingredients: [{ name: 'kokosmelk' }] }] } }, 'kokosmelk').length);
++});
++
++test('navigatie: Voeding als pagina onder Meer met vier subpagina\'s', () => {
++  const NavCore = require('./nav-core.js');
++  assert.equal(NavCore.sectionOf('voeding').key, 'meer');
++  assert.deepEqual(NavCore.HUBS.voeding.subs.map(s => s.key), ['weekmenu', 'recepten', 'producten', 'uitwisselen']);
++  assert.deepEqual(NavCore.parseRoute('#/voeding/producten'), { page: 'voeding', sub: 'producten' });
++  assert.ok(NavCore.MORE_GROUPS.some(g => g.tiles.some(t => t[0] === 'voeding')));
++});
++
++function renderUi(state) {
++  const listeners = {};
++  const ctx = {
++    window: {}, document: { addEventListener: (t, f) => { listeners[t] = f; }, querySelector: () => ({ innerHTML: '' }) },
++    data: state, current: 'voeding', sections: {}, render: () => {}, save: () => true, toast: () => {}, confirm: () => true, addGroceries: () => ({ added: 0, updated: 0 }),
++    esc: v => String(v ?? '').replace(/[&<>'"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[c])),
++    todayISO: () => '2026-11-08', startOfWeek: () => '2026-11-09', addDays: (d, n) => d, weekDates: s => [s, '2026-11-10'],
++    fmtDate: d => d, URL, Blob: function () {}, Intl, setTimeout, console
++  };
++  ctx.window = ctx; ctx.globalThis = ctx;
++  vm.createContext(ctx);
++  for (const f of ['food-facts-core.js', 'nutrition-core.js', 'osta-exchange-core.js', 'nutrition.js']) vm.runInContext(read(f), ctx, { filename: f });
++  return { html: ctx.SamenThuisNutritionUi.render(), ctx, listeners };
++}
++
++test('UI: externe productgegevens en recepttitels worden altijd ge-escaped (XSS)', () => {
++  const evil = '<img src=x onerror=alert(1)>';
++  const product = FF.normalizeProduct({ product: { code: '12345670', product_name: evil, brands: evil, ingredients_text: evil, allergens_tags: ['en:' + evil] } });
++  const state = { meals: [{ id: 'm1', date: '2026-11-09', title: evil, type: evil }], nutrition: { products: [product], recipes: [{ id: 'r1', title: evil, ingredients: [evil], sourceUrl: 'https://x.example/"><script>alert(1)</script>' }] } };
++  const { html, ctx } = renderUi(state);
++  assert.ok(!html.includes('<img src=x'), 'geen ruwe HTML uit gegevens');
++  assert.ok(!html.includes('<script>alert'), 'geen script uit bron-URL');
++  assert.ok(html.includes('&lt;img src=x onerror=alert(1)&gt;'));
++  ctx.SamenThuisNutritionUi.state.openRecipe = 'r1'; ctx.SamenThuisNutritionUi.state.openProduct = product.id;
++  const open = ctx.SamenThuisNutritionUi.render();
++  assert.ok(!open.includes('<img src=x') && !open.includes('<script>alert'));
++});
++
++test('UI: vier panelen, disclaimer, bronvermelding OFF; onbekend wordt nooit als 0 getoond', () => {
++  const product = FF.normalizeProduct({ product: { code: '12345670', product_name: 'Thee', nutriments: { 'energy-kcal_100g': 1 } } });
++  const { html, ctx } = renderUi({ meals: [], nutrition: { products: [product], recipes: [] } });
++  for (const p of ['weekmenu', 'recepten', 'producten', 'uitwisselen']) assert.match(html, new RegExp(`data-nut="${p}"`));
++  assert.match(html, /nut-disclaimer/); assert.match(html, /Geen medisch of dieetadvies/);
++  assert.match(html, /Open Food Facts \(ODbL\)/);
++  ctx.SamenThuisNutritionUi.state.openProduct = product.id;
++  const open = ctx.SamenThuisNutritionUi.render();
++  assert.match(open, /<th scope="row">Vet<\/th><td class="nut-unknown">onbekend<\/td>/);
++});
++
++test('UI: geen netwerkverkeer bij openen of renderen; alleen na expliciete actie', () => {
++  let calls = 0;
++  const state = { meals: [], nutrition: {} };
++  const listeners = {};
++  const ctx = { window: {}, document: { addEventListener: (t, f) => { listeners[t] = f; }, querySelector: () => ({ innerHTML: '' }) }, data: state, current: 'voeding', sections: {}, render: () => {}, save: () => true, toast: () => {}, esc: String, todayISO: () => '2026-11-08', startOfWeek: () => '2026-11-09', addDays: d => d, weekDates: s => [s], fmtDate: d => d, Intl, setTimeout, fetch: () => { calls++; return Promise.reject(new Error('x')); }, localStorage: { getItem: () => null, setItem: () => {} } };
++  ctx.window = ctx; ctx.globalThis = ctx; vm.createContext(ctx);
++  for (const f of ['food-facts-core.js', 'nutrition-core.js', 'osta-exchange-core.js', 'nutrition.js']) vm.runInContext(read(f), ctx);
++  ctx.SamenThuisNutritionUi.render(); ctx.render();
++  assert.equal(calls, 0);
++  assert.doesNotMatch(read('nutrition.js'), /addEventListener\('input'/, 'geen zoeken-tijdens-typen (OFF-voorwaarde)');
++});
++
++test('architectuur (ADR 0001): geen zelfstandig receptenbeheer in Samen Thuis — geen formulier om recepten te maken of de inhoud te bewerken', () => {
++  const ui = read('nutrition.js');
++  assert.doesNotMatch(ui, /data-nut-form="recipe"/, 'geen formulier "recept toevoegen"');
++  assert.doesNotMatch(ui, /kind === 'recipe'/);
++  assert.doesNotMatch(ui, /name="(title|steps|ingredients)"/, 'receptinhoud niet bewerkbaar');
++  assert.match(ui, /name="servingsOverride"/, 'alleen planningsporties als annotatie');
++  assert.match(ui, /Wijzig het recept in Osta en importeer opnieuw/);
++  // Bewaren van koppelingen wijzigt nooit titel, ingrediënttekst of bereiding.
++  const product = FF.manualProduct({ id: 'p1', name: 'Pasta', per100g: { energyKcal: 350 } });
++  const state = { meals: [], nutrition: { products: [product], recipes: [{ id: 'r1', title: 'Pasta', servings: 4, source: 'osta', ingredients: [{ id: 'i1', text: '1 pak pasta', name: 'pak pasta' }], steps: ['Koken'] }] } };
++  const { ctx, listeners } = renderUi(state);
++  const form = { closest: () => form, dataset: { nutForm: 'ingredients', recipe: 'r1' } };
++  const values = { servingsOverride: '2', g_i1: '500', p_i1: 'p1' };
++  ctx.FormData = function () { return { get: k => (k in values ? values[k] : null) }; };
++  listeners.submit({ target: form, preventDefault: () => {} });
++  const r = ctx.data.nutrition.recipes[0];
++  assert.equal(r.title, 'Pasta'); assert.equal(r.servings, 4); assert.equal(r.servingsOverride, 2);
++  assert.equal(r.ingredients[0].text, '1 pak pasta'); assert.deepEqual(r.steps, ['Koken']);
++  assert.equal(r.ingredients[0].grams, 500); assert.equal(r.ingredients[0].productId, 'p1');
++  assert.equal(N.recipeNutrition(r, [product]).perServing.energyKcal, 875, 'berekend met planningsporties');
++});
+diff --git a/nutrition.js b/nutrition.js
+new file mode 100644
+index 0000000..c192765
+--- /dev/null
++++ b/nutrition.js
+@@ -0,0 +1,316 @@
++/* Voeding: producten (Open Food Facts), receptkopieën uit Osta (geen eigen receptenbeheer, ADR 0001) en voedingsinformatie bij het weekmenu.
++   Pagina 'voeding' met subpagina's via NavCore.HUBS. Gegevens in data.nutrition (bestaande huishoudopslag + sync).
++   Netwerk alleen na een klik op Opzoeken/Zoeken; nooit op de achtergrond. Geen AI-dienst: de controle is regelgebaseerd. */
++(() => {
++  'use strict';
++  const FF = window.SamenThuisFoodFacts, NC = window.SamenThuisNutrition, RX = window.SamenThuisRecipeExchange;
++  if (window.__ST_NUTRITION__ || !FF || !NC || !RX || typeof render !== 'function' || typeof data === 'undefined') return;
++  window.__ST_NUTRITION__ = true;
++
++  let client = null;
++  const getClient = () => client || (client = FF.createClient({ storage: (() => { try { return window.localStorage; } catch (_) { return null; } })() }));
++  const ui = { weekStart: startOfWeek(todayISO()), searchResults: [], searchQuery: '', busy: false, message: '', plan: null, checks: null, openRecipe: '', openProduct: '' };
++
++  // Eén keer normaliseren per object: na synchronisatie of herstel (nieuw object) opnieuw. Zo blijven verwijzingen geldig.
++  const normalized = new WeakSet();
++  function store() {
++    if (!data.nutrition || typeof data.nutrition !== 'object' || !normalized.has(data.nutrition)) {
++      data.nutrition = NC.normalizeStore(data.nutrition);
++      normalized.add(data.nutrition);
++    }
++    return data.nutrition;
++  }
++  function persist(message) {
++    save();
++    if (message) toast(message);
++    render();
++  }
++  const productById = id => store().products.find(p => p.id === id);
++  const recipeById = id => store().recipes.find(r => r.id === id);
++  const fmt = (v, unit, complete = true) => NC.formatValue(v, unit, complete);
++  const sourceNote = `<p class="nut-source">${esc(FF.ATTRIBUTION)} <a href="https://world.openfoodfacts.org/" target="_blank" rel="noopener noreferrer">openfoodfacts.org</a></p>`;
++
++  function nutrientTable(values, { complete = null, caption = '' } = {}) {
++    return `<table class="nut-table"><caption>${esc(caption)}</caption><tbody>${NC.NUTRIENTS.map(n => {
++      const ok = complete ? complete[n.key] : true;
++      return `<tr><th scope="row">${esc(n.label)}</th><td class="${values[n.key] == null ? 'nut-unknown' : ''}">${esc(fmt(values[n.key], n.unit, ok))}</td></tr>`;
++    }).join('')}</tbody></table>`;
++  }
++  const sourceLabel = r => ({ osta: 'Osta', 'schema.org': 'receptbestand (schema.org)', 'samen-thuis': 'Samen Thuis-export', import: 'import', manual: 'handmatig (testversie)' }[r.source] || 'import');
++  const statusBadge = status => {
++    const map = { volledig: ['ok', 'Volledig'], onvolledig: ['warn', 'Onvolledig'], onbekend: ['muted', 'Onbekend'], 'geen-ingredienten': ['muted', 'Geen ingrediënten'] };
++    const [cls, label] = map[status] || ['muted', status];
++    return `<span class="nut-badge nut-${cls}">${esc(label)}</span>`;
++  };
++
++  /* ---------- Weekmenu ---------- */
++  function renderWeek() {
++    const dates = weekDates(ui.weekStart);
++    const summary = NC.weekSummary(data.meals, store(), dates);
++    const recipes = store().recipes;
++    const options = sel => `<option value="">— geen recept —</option>${recipes.map(r => `<option value="${esc(r.id)}" ${r.id === sel ? 'selected' : ''}>${esc(r.title)}</option>`).join('')}`;
++    const days = summary.map(day => `<article class="nut-day"><h3>${esc(fmtDate(day.date, { weekday: 'long', day: 'numeric', month: 'short' }))}</h3>${day.items.length ? `<ul>${day.items.map(item => {
++      const n = item.nutrition;
++      const energy = n ? `${fmt(n.perServing.energyKcal, 'kcal', n.complete.energyKcal)} per portie` : 'Geen recept gekoppeld';
++      const declared = n && n.declaredPerServing && n.declaredPerServing.energyKcal != null ? ` · bron: ${esc(fmt(n.declaredPerServing.energyKcal, 'kcal'))}` : '';
++      return `<li data-id="${esc(item.meal.id)}"><div><strong>${esc(item.meal.title || '')}</strong><small>${esc(item.meal.type || '')}${item.recipe && !item.linked ? ' · voorgesteld op titel' : ''}</small></div>
++        <div class="nut-meal-values"><span>${esc(energy)}${declared}</span>${n ? statusBadge(n.status) : ''}</div>
++        <label class="nut-link">Recept<select data-nut-link-meal="${esc(item.meal.id)}">${options(item.linked ? item.recipe.id : (item.recipe ? item.recipe.id : ''))}</select></label></li>`;
++    }).join('')}</ul>` : '<p class="muted">Niets gepland.</p>'}</article>`).join('');
++    const checks = ui.checks ? `<div class="nut-checks"><h3>Voedingscontrole <small>(regelgebaseerd, ${esc(new Date(ui.checks.generatedAt).toLocaleTimeString('nl-NL'))})</small></h3><ul>${ui.checks.notes.map(c => `<li class="nut-check-${esc(c.level)}">${esc(c.text)}</li>`).join('') || '<li>Geen opmerkingen.</li>'}</ul></div>` : '';
++    return `<section class="card nut-pane" data-nut="weekmenu"><div class="card-head"><div><p class="eyebrow">Weekmenu</p><h2>Voeding bij het weekmenu</h2></div>
++      <div class="nut-weeknav" role="group" aria-label="Week kiezen"><button type="button" class="secondary" data-nut-week="-7" aria-label="Vorige week">‹</button><button type="button" class="secondary" data-nut-week="0">Deze week</button><button type="button" class="secondary" data-nut-week="7" aria-label="Volgende week">›</button></div></div>
++      <p class="muted">Waarden per portie van het gekoppelde recept. “≥” betekent: niet alle ingrediënten zijn bekend, het werkelijke getal is hoger. Maaltijden beheer je in <a href="#/meals">Weekmenu</a>.</p>
++      <div class="nut-week">${days}</div>
++      <div class="button-row"><button type="button" class="primary" data-nut-run-checks>Voedingscontrole uitvoeren</button><button type="button" class="secondary" data-nut-week-groceries>Ingrediënten naar Boodschappen</button></div>${checks}</section>`;
++  }
++
++  /* ---------- Recepten ---------- */
++  function renderRecipes() {
++    const s = store();
++    const list = s.recipes.slice().sort((a, b) => a.title.localeCompare(b.title, 'nl')).map(r => {
++      const n = NC.recipeNutrition(r, s.products);
++      const open = ui.openRecipe === r.id;
++      const productOptions = sel => `<option value="">— niet gekoppeld —</option>${s.products.map(p => `<option value="${esc(p.id)}" ${p.id === sel ? 'selected' : ''}>${esc(p.name)}${p.brand ? ' · ' + esc(p.brand) : ''}</option>`).join('')}`;
++      const details = open ? `<div class="nut-recipe-detail">
++        <form class="nut-ingredients" data-nut-form="ingredients" data-recipe="${esc(r.id)}">
++          <p class="muted nut-readonly">Receptinhoud uit ${esc(sourceLabel(r))}${r.importedAt ? ` · geïmporteerd ${esc(new Date(r.importedAt).toLocaleDateString('nl-NL'))}` : ''}. Wijzig het recept in Osta en importeer opnieuw; hier leg je alleen gewichten en productkoppelingen vast voor de voedingsberekening.</p>
++          <label class="field nut-servings">Porties voor planning (optioneel; bron: ${r.servingsKnown ? r.servings : 'onbekend'})<input name="servingsOverride" type="number" min="1" max="50" value="${r.servingsOverride || ''}" placeholder="${r.servings}"></label>
++          <table class="nut-ing-table"><thead><tr><th>Ingrediënt</th><th>Gram</th><th>Product</th></tr></thead><tbody>${r.ingredients.map(i => `<tr>
++            <td>${esc(i.text)}</td>
++            <td><input name="g_${esc(i.id)}" type="number" min="0" max="20000" step="any" inputmode="decimal" value="${i.grams == null ? '' : i.grams}" aria-label="Gram ${esc(i.name)}">${i.gramsApprox ? '<small title="Omgerekend uit ml of lepels">≈</small>' : ''}</td>
++            <td><select name="p_${esc(i.id)}" aria-label="Product voor ${esc(i.name)}">${productOptions(i.productId)}</select></td></tr>`).join('')}</tbody></table>
++          <div class="button-row"><button type="submit" class="primary">Bewaren</button><button type="button" class="secondary" data-nut-recipe-groceries="${esc(r.id)}">Naar Boodschappen</button><button type="button" class="danger secondary" data-nut-delete-recipe="${esc(r.id)}">Kopie uit Samen Thuis verwijderen</button></div>
++        </form>
++        <div class="nut-two">${nutrientTable(n.perServing, { complete: n.complete, caption: 'Berekend per portie' })}${n.declaredPerServing ? nutrientTable(n.declaredPerServing, { caption: `Opgegeven door bron (${r.source})` }) : ''}</div>
++        ${n.missingReasons.length ? `<p class="muted">Ontbreekt: ${n.missingReasons.map(m => `${esc(m.ingredient)} (${esc(m.reason)})`).join(', ')}</p>` : ''}
++        ${n.approx ? '<p class="muted">≈ Enkele hoeveelheden zijn omgerekend uit ml of lepels en daardoor benaderd.</p>' : ''}
++        ${r.steps.length ? `<details><summary>Bereiding</summary><ol>${r.steps.map(st => `<li>${esc(st)}</li>`).join('')}</ol></details>` : ''}
++        ${r.sourceUrl ? `<p class="muted">Bron: <a href="${esc(r.sourceUrl)}" target="_blank" rel="noopener noreferrer">${esc(r.sourceUrl)}</a></p>` : ''}
++      </div>` : '';
++      return `<li class="nut-recipe" data-id="${esc(r.id)}"><button type="button" class="nut-row" data-nut-open-recipe="${esc(r.id)}" aria-expanded="${open}"><strong>${esc(r.title)}</strong><span>${esc(fmt(n.perServing.energyKcal, 'kcal', n.complete.energyKcal))} p.p. · ${NC.effectiveServings(r)} porties · ${esc(sourceLabel(r))}</span>${statusBadge(n.status)}</button>${details}</li>`;
++    }).join('');
++    return `<section class="card nut-pane" data-nut="recepten"><div class="card-head"><div><p class="eyebrow">Receptkopieën</p><h2>Recepten uit Osta en voedingswaarde</h2></div></div>
++      <p class="muted">Osta is de plek voor je recepten. Samen Thuis bewaart alleen kopieën die je importeert, zodat je ze in het weekmenu kunt plannen en de voedingswaarde kunt berekenen. Nieuw of gewijzigd recept? Pas het aan in Osta en importeer het opnieuw via <a href="#/voeding/uitwisselen">Osta en recepten uitwisselen</a>; je productkoppelingen blijven behouden.</p>
++      ${s.recipes.length ? `<ul class="nut-list">${list}</ul>` : '<div class="empty">Nog geen receptkopieën. Importeer recepten uit Osta via Uitwisselen.</div>'}</section>`;
++  }
++
++  /* ---------- Producten ---------- */
++  function renderProducts() {
++    const s = store();
++    const results = ui.searchResults.length ? `<ul class="nut-results">${ui.searchResults.map(r => `<li><div><strong>${esc(r.name)}</strong><small>${esc([r.brand, r.quantity, r.barcode].filter(Boolean).join(' · '))}</small></div><button type="button" class="secondary" data-nut-fetch="${esc(r.barcode)}">Ophalen</button></li>`).join('')}</ul>` : '';
++    const list = s.products.slice().sort((a, b) => a.name.localeCompare(b.name, 'nl')).map(p => {
++      const open = ui.openProduct === p.id;
++      const used = NC.productUsage(s, p.id);
++      const q = p.quality || FF.assessQuality({ derived: [], ...p });
++      const allergens = p.allergensStatus === 'declared' ? p.allergens.join(', ') : p.allergensStatus === 'none-declared' ? 'Geen opgegeven (controleer het etiket)' : 'Onbekend';
++      const details = open ? `<div class="nut-product-detail"><div class="nut-two">${nutrientTable(p.per100g, { caption: 'Per 100 g/ml' })}${p.servingGrams != null ? nutrientTable(p.perServing, { caption: `Per portie (${p.servingSize || p.servingGrams + ' g'})` }) : '<p class="muted">Portiegrootte onbekend.</p>'}</div>
++        <p><strong>Allergenen:</strong> ${esc(allergens)}${p.traces && p.traces.length ? ` · <strong>Sporen:</strong> ${esc(p.traces.join(', '))}` : ''}</p>
++        <p><strong>Ingrediënten:</strong> ${p.ingredientsText ? esc(p.ingredientsText) : '<span class="nut-unknown">onbekend</span>'}</p>
++        <p class="muted">Kwaliteit: ${esc(q.level)} (${q.score}/100)${q.issues.length ? ' · ' + esc(q.issues.join(' · ')) : ''}</p>
++        ${p.nutriscore ? `<p class="muted">Nutri-Score ${esc(p.nutriscore.toUpperCase())}${p.nova ? ` · NOVA ${p.nova}` : ''}</p>` : ''}
++        <p class="muted">${p.source === 'openfoodfacts' ? `Bron: <a href="${esc(p.sourceUrl)}" target="_blank" rel="noopener noreferrer">Open Food Facts</a> (${esc(p.license)}) · opgehaald ${esc(new Date(p.fetchedAt).toLocaleDateString('nl-NL'))}` : 'Handmatig ingevoerd'}${used.length ? ` · Gebruikt in: ${esc(used.join(', '))}` : ''}</p>
++        <div class="button-row">${p.barcode && p.source === 'openfoodfacts' ? `<button type="button" class="secondary" data-nut-refresh="${esc(p.barcode)}">Opnieuw ophalen</button>` : ''}<button type="button" class="secondary" data-nut-product-grocery="${esc(p.id)}">Naar Boodschappen</button><button type="button" class="secondary danger" data-nut-delete-product="${esc(p.id)}">Verwijderen</button></div></div>` : '';
++      return `<li class="nut-product" data-id="${esc(p.id)}"><button type="button" class="nut-row" data-nut-open-product="${esc(p.id)}" aria-expanded="${open}"><strong>${esc(p.name)}</strong><span>${esc([p.brand, p.quantity].filter(Boolean).join(' · '))}</span><span>${esc(fmt(p.per100g.energyKcal, 'kcal'))}/100 g</span></button>${details}</li>`;
++    }).join('');
++    return `<section class="card nut-pane" data-nut="producten"><div class="card-head"><div><p class="eyebrow">Producten</p><h2>Productinformatie</h2></div></div>
++      <form data-nut-form="barcode" class="nut-inline"><label class="field">Barcode<input name="barcode" inputmode="numeric" autocomplete="off" pattern="[0-9 ]{6,20}" maxlength="20" placeholder="bijv. 8710400000006" required></label><button type="submit" class="primary" ${ui.busy ? 'disabled' : ''}>Opzoeken</button></form>
++      <form data-nut-form="search" class="nut-inline"><label class="field">Zoeken op naam<input name="q" maxlength="80" minlength="3" value="${esc(ui.searchQuery)}" placeholder="bijv. volkoren pasta" required></label><button type="submit" class="secondary" ${ui.busy ? 'disabled' : ''}>Zoeken</button></form>
++      <p class="muted">Opvragen gebeurt alleen als je op de knop drukt (max. ${FF.LIMITS.product.max} producten en ${FF.LIMITS.search.max} zoekopdrachten per minuut). Eerder opgehaalde producten werken offline.</p>
++      ${ui.message ? `<p class="nut-message" role="status">${esc(ui.message)}</p>` : ''}${results}
++      ${s.products.length ? `<ul class="nut-list">${list}</ul>` : '<div class="empty">Nog geen producten opgeslagen.</div>'}
++      <details class="nut-add"><summary>Product handmatig toevoegen (van het etiket)</summary><form data-nut-form="manual" class="form-grid">
++        <label class="field">Naam<input name="name" maxlength="160" required></label><label class="field">Merk<input name="brand" maxlength="80"></label>
++        <label class="field">Barcode (optioneel)<input name="barcode" inputmode="numeric" maxlength="20"></label><label class="field">Portie (gram)<input name="servingGrams" type="number" min="0" step="any"></label>
++        ${NC.NUTRIENTS.map(n => `<label class="field">${esc(n.label)} per 100 g (${esc(n.unit)})<input name="n_${n.key}" type="number" min="0" step="any" inputmode="decimal" placeholder="leeg = onbekend"></label>`).join('')}
++        <label class="field nut-wide">Allergenen (komma-gescheiden)<input name="allergens" maxlength="300"></label>
++        <label class="field nut-wide">Ingrediënten<textarea name="ingredientsText" rows="2" maxlength="4000"></textarea></label>
++        <div class="button-row"><button type="submit" class="primary">Opslaan</button></div></form></details>${sourceNote}</section>`;
++  }
++
++  /* ---------- Uitwisselen ---------- */
++  function renderExchange() {
++    const plan = ui.plan;
++    const labels = { add: 'Nieuwe kopie', merge: 'Bijwerken vanuit bron', same: 'Ongewijzigd', skip: 'Overslaan' };
++    const detail = i => [
++      i.changes && i.changes.length ? `gewijzigd: ${i.changes.map(c => esc(c.field) + (c.from != null && c.to != null ? ` ${esc(String(c.from))} → ${esc(String(c.to))}` : '')).join(', ')}` : '',
++      i.kept && i.kept.length ? `behouden (niet in bron): ${i.kept.map(esc).join(', ')}` : '',
++      i.removedIngredients && i.removedIngredients.length ? `vervallen ingrediënten: ${i.removedIngredients.map(esc).join(', ')}` : '',
++      i.lostAnnotations && i.lostAnnotations.length ? `<strong>koppeling vervalt bij:</strong> ${i.lostAnnotations.map(esc).join(', ')}` : ''
++    ].filter(Boolean).map(t => `<br><small>${t}</small>`).join('');
++    const preview = plan ? `<div class="nut-plan"><h3>Voorbeeld (${esc(plan.format)})</h3>${plan.errors.length ? `<p class="nut-message">${plan.errors.map(esc).join('<br>')}</p>` : ''}
++      ${plan.items.length ? `<ul>${plan.items.map(i => `<li><span class="nut-badge nut-${i.action === 'add' ? 'ok' : i.action === 'merge' ? 'warn' : 'muted'}">${esc(labels[i.action])}</span> <strong>${esc(i.title)}</strong>${i.matchedBy ? ` <small>(herkend op ${esc(i.matchedBy)}${i.uncertain ? ', twijfelgeval' : ''})</small>` : ''}${i.reason ? ` <small>${esc(i.reason)}</small>` : ''}${i.addedIngredients ? ` <small>+${i.addedIngredients} ingrediënt(en)</small>` : ''}${i.uncertain ? '<br><small>Twijfelgeval: wordt als aparte kopie toegevoegd, tenzij je hieronder kiest voor bijwerken.</small>' : ''}${detail(i)}</li>`).join('')}</ul>` : ''}
++      ${plan.items.some(i => i.action === 'add' || i.action === 'merge') ? `${plan.items.some(i => i.uncertain) ? '<label class="nut-check"><input type="checkbox" data-nut-update-uncertain> Twijfelgevallen bijwerken in plaats van als aparte kopie toevoegen</label>' : ''}<div class="button-row"><button type="button" class="primary" data-nut-apply>Importeren</button><button type="button" class="secondary" data-nut-cancel>Annuleren</button></div>` : '<div class="button-row"><button type="button" class="secondary" data-nut-cancel>Sluiten</button></div>'}</div>` : '';
++    return `<section class="card nut-pane" data-nut="uitwisselen"><div class="card-head"><div><p class="eyebrow">Osta en recepten</p><h2>Recepten uitwisselen</h2></div></div>
++      <p class="muted">Osta is de primaire plek voor recepten en heeft geen openbare koppeling. Deel een recept vanuit Osta als tekst en plak het hier, of kies een JSON-bestand (schema.org/Recipe of een Samen Thuis-export). Je ziet eerst een voorbeeld. Bij opnieuw importeren wint de inhoud uit Osta; je productkoppelingen en gewichten blijven behouden en niets verdwijnt zonder melding.</p>
++      <details><summary>Voorbeeld van Osta-tekst</summary><pre class="nut-pre"># Recept: Pasta pesto
++Porties: 4
++Ingrediënten:
++- 400 g pasta
++- 100 g Parmezaanse kaas
++Bereiding:
++1. Kook de pasta.
++Voedingswaarde per portie: 610 kcal, eiwit 22 g</pre></details>
++      <textarea id="nutImportText" rows="6" maxlength="500000" placeholder="Plak hier de gedeelde recepttekst of JSON"></textarea>
++      <div class="button-row"><button type="button" class="primary" data-nut-preview>Voorbeeld bekijken</button><button type="button" class="secondary" data-nut-pick>Bestand kiezen</button><input type="file" id="nutImportFile" accept=".txt,.json,text/plain,application/json,application/ld+json" hidden></div>
++      ${preview}
++      <h3>Exporteren</h3><p class="muted">Bevat alleen recepten en gekoppelde productgegevens, geen persoonlijke gegevens.</p>
++      <div class="button-row"><button type="button" class="secondary" data-nut-export="bundle">Samen Thuis-receptenbestand (.json)</button><button type="button" class="secondary" data-nut-export="schema">schema.org-recepten (.json)</button></div>
++      <p class="muted">Weekmenu-regels (“Maandag: …”) en “# Grocery List” importeer je zoals voorheen via <a href="#/imports243">Importeren</a> → Osta.</p></section>`;
++  }
++
++  function renderNutrition() {
++    return `<div class="nutrition-page"><p class="nut-disclaimer small-note">Voedingsinformatie voor het huishouden, per portie van een gerecht. Geen medisch of dieetadvies en geen persoonlijke inname: persoonlijke voeding hoort volgens de ecosysteemafspraken bij de Sportapp.</p>
++      ${renderWeek()}${renderRecipes()}${renderProducts()}${renderExchange()}</div>`;
++  }
++
++  /* ---------- Acties ---------- */
++  async function lookup(barcode, force = false) {
++    ui.busy = true; ui.message = 'Bezig met opzoeken…'; render();
++    try {
++      const r = await getClient().product(barcode, { force });
++      const { store: next, action, product } = NC.upsertProduct(store(), r.product);
++      data.nutrition = next; normalized.add(next); ui.openProduct = product.id; ui.searchResults = [];
++      ui.message = `${product.name || 'Product'} ${action === 'added' ? 'toegevoegd' : 'bijgewerkt'}${r.fromCache ? (r.stale ? ' (uit oudere cache: ' + (r.warning || 'offline') + ')' : ' (uit cache)') : ''}.`;
++      save();
++    } catch (e) {
++      ui.message = e.message || 'Opzoeken mislukt.';
++    } finally { ui.busy = false; render(); }
++  }
++
++  async function searchProducts(q) {
++    ui.busy = true; ui.searchQuery = q; ui.message = 'Zoeken…'; render();
++    try {
++      ui.searchResults = await getClient().search(q);
++      ui.message = ui.searchResults.length ? `${ui.searchResults.length} resultaten. Kies “Ophalen” voor voedingswaarden.` : 'Geen producten gevonden.';
++    } catch (e) { ui.searchResults = []; ui.message = e.message || 'Zoeken mislukt.'; }
++    finally { ui.busy = false; render(); }
++  }
++
++  function download(name, obj) {
++    const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' });
++    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
++    document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
++  }
++
++  function preview(text) {
++    ui.plan = RX.planImport(store(), RX.parseAny(text));
++    render();
++  }
++
++  function toGroceries(items) {
++    if (!items.length) return toast('Geen ingrediënten gevonden');
++    const result = addGroceries(items.map(i => ({ title: i.title })));
++    render();
++    toast(`${result.added} boodschappen toegevoegd${result.updated ? `, ${result.updated} bijgewerkt` : ''}`);
++  }
++
++  document.addEventListener('click', event => {
++    if (current !== 'voeding') return;
++    const t = event.target;
++    const q = sel => t.closest(sel);
++    let el;
++    if ((el = q('[data-nut-week]'))) { const d = Number(el.dataset.nutWeek); ui.weekStart = d ? addDays(ui.weekStart, d) : startOfWeek(todayISO()); ui.checks = null; render(); return; }
++    if (q('[data-nut-run-checks]')) { ui.checks = NC.weekChecks(NC.weekSummary(data.meals, store(), weekDates(ui.weekStart))); render(); return; }
++    if (q('[data-nut-week-groceries]')) {
++      const recipes = NC.weekSummary(data.meals, store(), weekDates(ui.weekStart)).flatMap(d => d.items).map(i => i.recipe).filter(Boolean);
++      toGroceries(NC.groceryItemsFor(recipes)); return;
++    }
++    if ((el = q('[data-nut-open-recipe]'))) { ui.openRecipe = ui.openRecipe === el.dataset.nutOpenRecipe ? '' : el.dataset.nutOpenRecipe; render(); return; }
++    if ((el = q('[data-nut-open-product]'))) { ui.openProduct = ui.openProduct === el.dataset.nutOpenProduct ? '' : el.dataset.nutOpenProduct; render(); return; }
++    if ((el = q('[data-nut-recipe-groceries]'))) { const r = recipeById(el.dataset.nutRecipeGroceries); if (r) toGroceries(NC.groceryItemsFor([r])); return; }
++    if ((el = q('[data-nut-product-grocery]'))) { const p = productById(el.dataset.nutProductGrocery); if (p) toGroceries([{ title: p.name }]); return; }
++    if ((el = q('[data-nut-delete-recipe]'))) {
++      const r = recipeById(el.dataset.nutDeleteRecipe); if (!r) return;
++      if (!confirm(`Kopie van “${r.title}” uit Samen Thuis verwijderen? Het recept in Osta blijft bestaan en maaltijden in het weekmenu blijven staan; alleen je productkoppelingen voor dit recept vervallen.`)) return;
++      store().recipes = store().recipes.filter(x => x.id !== r.id);
++      data.meals.forEach(m => { if (m.recipeId === r.id) delete m.recipeId; });
++      ui.openRecipe = ''; persist('Kopie verwijderd uit Samen Thuis'); return;
++    }
++    if ((el = q('[data-nut-delete-product]'))) {
++      const p = productById(el.dataset.nutDeleteProduct); if (!p) return;
++      const used = NC.productUsage(store(), p.id);
++      if (!confirm(used.length ? `“${p.name}” is gekoppeld aan ${used.length} recept(en). Verwijderen maakt die voedingswaarde onbekend. Doorgaan?` : `“${p.name}” verwijderen?`)) return;
++      store().products = store().products.filter(x => x.id !== p.id);
++      store().recipes.forEach(r => r.ingredients.forEach(i => { if (i.productId === p.id) i.productId = null; }));
++      ui.openProduct = ''; persist('Product verwijderd'); return;
++    }
++    if ((el = q('[data-nut-fetch]'))) { lookup(el.dataset.nutFetch); return; }
++    if ((el = q('[data-nut-refresh]'))) { lookup(el.dataset.nutRefresh, true); return; }
++    if (q('[data-nut-preview]')) { preview(document.querySelector('#nutImportText')?.value || ''); return; }
++    if (q('[data-nut-pick]')) { document.querySelector('#nutImportFile')?.click(); return; }
++    if (q('[data-nut-cancel]')) { ui.plan = null; render(); return; }
++    if (q('[data-nut-apply]')) {
++      if (!ui.plan) return;
++      const updateUncertain = Boolean(document.querySelector('[data-nut-update-uncertain]')?.checked);
++      const { store: next, result } = RX.applyImport(store(), ui.plan, { updateUncertain });
++      data.nutrition = next; normalized.add(next); ui.plan = null;
++      persist(`${result.added} nieuwe kopie(ën) · ${result.merged} bijgewerkt vanuit bron · ${result.unchanged} ongewijzigd${result.products ? ` · ${result.products} producten` : ''}`);
++      return;
++    }
++    if ((el = q('[data-nut-export]'))) {
++      const day = todayISO();
++      if (el.dataset.nutExport === 'bundle') download(`samen-thuis-recepten-${day}.json`, RX.exportBundle(store()));
++      else download(`recepten-schema-org-${day}.json`, RX.exportSchemaOrg(store()));
++    }
++  });
++
++  document.addEventListener('change', event => {
++    if (current !== 'voeding') return;
++    const sel = event.target.closest('[data-nut-link-meal]');
++    if (sel) {
++      const meal = data.meals.find(m => m.id === sel.dataset.nutLinkMeal); if (!meal) return;
++      if (sel.value) meal.recipeId = sel.value; else delete meal.recipeId;
++      persist(sel.value ? 'Recept gekoppeld' : 'Koppeling verwijderd'); return;
++    }
++    if (event.target.id === 'nutImportFile') {
++      const file = event.target.files && event.target.files[0]; if (!file) return;
++      if (file.size > 500000) { toast('Bestand is te groot (maximaal 500 kB)'); return; }
++      file.text().then(preview).catch(() => toast('Bestand kon niet worden gelezen'));
++      event.target.value = '';
++    }
++  });
++
++  document.addEventListener('submit', event => {
++    if (current !== 'voeding') return;
++    const form = event.target.closest('[data-nut-form]'); if (!form) return;
++    event.preventDefault();
++    const f = new FormData(form); const kind = form.dataset.nutForm;
++    if (kind === 'barcode') { lookup(String(f.get('barcode') || '')); return; }
++    if (kind === 'search') { searchProducts(String(f.get('q') || '')); return; }
++    if (kind === 'manual') {
++      try {
++        const per100g = {}; NC.NUTRIENTS.forEach(n => { per100g[n.key] = f.get('n_' + n.key); });
++        const product = FF.manualProduct({ name: f.get('name'), brand: f.get('brand'), barcode: f.get('barcode'), servingGrams: f.get('servingGrams'), per100g, allergens: f.get('allergens'), ingredientsText: f.get('ingredientsText') });
++        const res = NC.upsertProduct(store(), product); data.nutrition = res.store; normalized.add(res.store); ui.openProduct = res.product.id;
++        persist('Product opgeslagen');
++      } catch (e) { toast(e.message || 'Opslaan mislukt'); }
++      return;
++    }
++    if (kind === 'ingredients') {
++      const r = recipeById(form.dataset.recipe); if (!r) return;
++      // Alleen annotaties: porties voor planning, gewichten en productkoppelingen. Receptinhoud blijft zoals geïmporteerd.
++      const ov = FF.num(f.get('servingsOverride'));
++      r.servingsOverride = ov && ov >= 1 ? Math.min(50, Math.round(ov)) : null;
++      r.ingredients.forEach(i => {
++        const g = f.get('g_' + i.id); const num = FF.num(g);
++        if (g === '' || g === null) { i.grams = null; } else if (num != null) { if (num !== i.grams) i.gramsApprox = false; i.grams = num; }
++        const pid = String(f.get('p_' + i.id) || ''); i.productId = pid && productById(pid) ? pid : null;
++      });
++      r.updatedAt = new Date().toISOString();
++      persist('Koppelingen bewaard');
++    }
++  });
++
++  sections.voeding = { label: 'Voeding', icon: '🥗' };
++  const baseNutritionRender = render;
++  render = function renderWithNutrition(...args) {
++    if (current === 'voeding') {
++      document.querySelector('#view').innerHTML = renderNutrition();
++      if (typeof updateSyncBadge === 'function') updateSyncBadge();
++      return;
++    }
++    return baseNutritionRender(...args);
++  };
++  window.SamenThuisNutritionUi = { render: renderNutrition, state: ui };
++})();
+diff --git a/osta-exchange-core.js b/osta-exchange-core.js
+new file mode 100644
+index 0000000..e8e80cc
+--- /dev/null
++++ b/osta-exchange-core.js
+@@ -0,0 +1,276 @@
++(function (root, factory) {
++  const core = factory(root.SamenThuisNutrition || (typeof require === 'function' ? require('./nutrition-core.js') : null),
++    root.SamenThuisFoodFacts || (typeof require === 'function' ? require('./food-facts-core.js') : null));
++  if (typeof module === 'object' && module.exports) module.exports = core;
++  root.SamenThuisRecipeExchange = core;
++})(globalThis, function (NC, FF) {
++  'use strict';
++  // Gecontroleerde uitwisseling van recepten tussen Osta (primaire plek voor recepten) en Samen Thuis (voedingsplanning).
++  // Samen Thuis is geen tweede receptenbeheer: het bewaart alleen geïmporteerde kopieën plus eigen voedingsannotaties.
++  //
++  // Feitelijke situatie (onderzocht 2026-11-08): Osta ("Save & Share Recipes", iOS/macOS) heeft geen gedocumenteerde
++  // publieke API of exportbestand. Wel: delen als tekst en importeren van recepten-websites. Voedingswaarden zijn in
++  // Osta een betaalde Premium-functie en dus nooit een vereiste. Daarom ondersteunen we drie open formaten:
++  //   1. Gedeelde Osta-tekst (plakken): weekmenu-regels, "# Grocery List" én receptblokken met ingrediënten.
++  //   2. schema.org/Recipe JSON(-LD): de open standaard die recepten-websites en veel receptenapps gebruiken.
++  //   3. Samen Thuis-uitwisselbestand `samen-thuis.recipes` versie 1 (export én herimport, verliesvrij).
++  // Elke import: eerst voorbeeld, dan bevestigen. Dubbele recepten worden herkend; voedingsinformatie gaat nooit verloren.
++
++  const FORMAT = 'samen-thuis.recipes';
++  const FORMAT_VERSION = 1;
++  const MAX_TEXT = 500000;
++
++  const ING_HEAD = /^\s*#*\s*(ingredi[eë]nten|ingredients)\s*:?\s*$/i;
++  const STEP_HEAD = /^\s*#*\s*(bereiding|bereidingswijze|instructies|instructions|method|directions|steps)\s*:?\s*$/i;
++  const RECIPE_HEAD = /^\s*#{1,3}\s*(?:recept|recipe)\s*:\s*(.+)$/i;
++  const SERVINGS = /^\s*(?:porties|personen|servings|serves|yield)\s*:?\s*(\d{1,2})\b/i;
++  const NUTRITION_LINE = /^\s*(?:voedingswaarde[n]?|nutrition)(?:\s*(?:per\s*(?:portie|serving)))?\s*:\s*(.+)$/i;
++
++  // "520 kcal, eiwit 25 g, vet 18 g, koolhydraten 60 g, zout 1,2 g" → {energyKcal:520, proteins:25, ...}; onbekend blijft null.
++  const NUTRIENT_WORDS = [
++    ['energyKcal', /(\d+(?:[.,]\d+)?)\s*kcal|(?:calorie[eë]n|calories|energie)\s*:?\s*(\d+(?:[.,]\d+)?)/i],
++    ['proteins', /(?:eiwit(?:ten)?|protein)\s*:?\s*(\d+(?:[.,]\d+)?)\s*g/i],
++    ['fat', /(?:^|[^a-z])(?:vet(?:ten)?|fat)\s*:?\s*(\d+(?:[.,]\d+)?)\s*g/i],
++    ['saturatedFat', /(?:verzadigd(?:\s*vet)?|saturated(?:\s*fat)?)\s*:?\s*(\d+(?:[.,]\d+)?)\s*g/i],
++    ['carbohydrates', /(?:koolhydraten|carbohydrates?|carbs)\s*:?\s*(\d+(?:[.,]\d+)?)\s*g/i],
++    ['sugars', /(?:suikers?|sugars?)\s*:?\s*(\d+(?:[.,]\d+)?)\s*g/i],
++    ['fiber', /(?:vezels?|fib(?:er|re))\s*:?\s*(\d+(?:[.,]\d+)?)\s*g/i],
++    ['salt', /(?:zout|salt)\s*:?\s*(\d+(?:[.,]\d+)?)\s*g/i]
++  ];
++  function parseNutritionText(text) {
++    const out = NC.emptyNutrients();
++    for (const [key, re] of NUTRIENT_WORDS) {
++      const m = re.exec(String(text || ''));
++      if (m) out[key] = FF.num((m[1] || m[2] || '').replace(',', '.'));
++    }
++    return FF.knownCount(out) ? out : null;
++  }
++
++  // ---------- 1. Osta-tekst ----------
++  function parseOstaText(text) {
++    const lines = String(text || '').slice(0, MAX_TEXT).split(/\r?\n/);
++    const recipes = []; let current = null; let mode = '';
++    const flush = () => { if (current && current.title) recipes.push(current); current = null; mode = ''; };
++    for (const line of lines) {
++      const head = RECIPE_HEAD.exec(line);
++      if (head) { flush(); current = { title: head[1].trim(), ingredients: [], steps: [], source: 'osta' }; continue; }
++      if (!current) continue;
++      if (/^\s*#*\s*grocery list\s*$/i.test(line)) { flush(); continue; }
++      if (ING_HEAD.test(line)) { mode = 'ing'; continue; }
++      if (STEP_HEAD.test(line)) { mode = 'step'; continue; }
++      const sv = SERVINGS.exec(line); if (sv) { current.servings = Number(sv[1]); continue; }
++      const nu = NUTRITION_LINE.exec(line); if (nu) { const d = parseNutritionText(nu[1]); if (d) current.declaredPerServing = d; continue; }
++      const t = line.trim(); if (!t) continue;
++      if (/^https:\/\/\S+$/i.test(t)) { current.sourceUrl = t; continue; }
++      if (mode === 'ing') current.ingredients.push({ text: t.replace(/^[-•*]\s*/, '') });
++      else if (mode === 'step') current.steps.push(t.replace(/^\d+[.)]\s*|^[-•*]\s*/, ''));
++    }
++    flush();
++    return recipes;
++  }
++
++  // ---------- 2. schema.org/Recipe ----------
++  function asArray(v) { return Array.isArray(v) ? v : v == null ? [] : [v]; }
++  function findRecipesInJsonLd(value, out = [], depth = 0) {
++    if (!value || typeof value !== 'object' || depth > 6 || out.length >= 200) return out;
++    if (Array.isArray(value)) { value.forEach(v => findRecipesInJsonLd(v, out, depth + 1)); return out; }
++    const types = asArray(value['@type']).map(String);
++    if (types.includes('Recipe')) out.push(value);
++    if (value['@graph']) findRecipesInJsonLd(value['@graph'], out, depth + 1);
++    return out;
++  }
++  function stepsFrom(instr) {
++    return asArray(instr).flatMap(s => typeof s === 'string' ? [s] : s && s['@type'] === 'HowToSection' ? stepsFrom(s.itemListElement) : s && s.text ? [s.text] : []);
++  }
++  function fromSchemaOrg(r) {
++    const n = r.nutrition && typeof r.nutrition === 'object' ? r.nutrition : null;
++    const g = v => FF.num(String(v ?? '').replace(/[^\d.,]/g, '').replace(',', '.'));
++    const declared = n ? NC.cleanNutrients({
++      energyKcal: g(n.calories), proteins: g(n.proteinContent), fat: g(n.fatContent), saturatedFat: g(n.saturatedFatContent),
++      carbohydrates: g(n.carbohydrateContent), sugars: g(n.sugarContent), fiber: g(n.fiberContent),
++      salt: n.sodiumContent != null && g(n.sodiumContent) != null ? FF.round(g(n.sodiumContent) * (/mg/i.test(String(n.sodiumContent)) ? 0.001 : 1) * 2.5, 2) : null
++    }) : null;
++    const yieldText = asArray(r.recipeYield).map(String).join(' ');
++    return {
++      title: r.name, servings: Number((/\d+/.exec(yieldText) || [])[0]) || undefined,
++      ingredients: asArray(r.recipeIngredient || r.ingredients).map(String),
++      steps: stepsFrom(r.recipeInstructions), tags: asArray(r.recipeCategory).concat(asArray(r.keywords).flatMap(k => String(k).split(','))).map(String),
++      declaredPerServing: declared, source: 'schema.org', externalRef: r['@id'] || r.url || null, sourceUrl: r.url || ''
++    };
++  }
++
++  // ---------- Herkennen ----------
++  function parseAny(text) {
++    const t = String(text || '').trim();
++    if (!t) return { format: 'leeg', recipes: [], errors: ['Geen inhoud gevonden.'] };
++    if (t.length > MAX_TEXT) return { format: 'te-groot', recipes: [], errors: ['Bestand is te groot (maximaal 500 kB).'] };
++    if (/^[\[{]/.test(t)) {
++      let json;
++      try { json = JSON.parse(t); } catch (_) { return { format: 'json', recipes: [], errors: ['Ongeldige JSON.'] }; }
++      if (json && json.format === FORMAT) {
++        if (Number(json.version) > FORMAT_VERSION) return { format: FORMAT, recipes: [], errors: [`Bestand gebruikt versie ${json.version}; deze app ondersteunt t/m versie ${FORMAT_VERSION}. Werk Samen Thuis eerst bij.`] };
++        return { format: FORMAT, recipes: asArray(json.recipes), products: asArray(json.products), errors: [] };
++      }
++      const found = findRecipesInJsonLd(json);
++      if (found.length) return { format: 'schema.org', recipes: found.map(fromSchemaOrg), errors: [] };
++      return { format: 'json', recipes: [], errors: ['Geen recepten gevonden in dit JSON-bestand.'] };
++    }
++    const recipes = parseOstaText(t);
++    return { format: 'osta-tekst', recipes, errors: recipes.length ? [] : ['Geen receptblokken gevonden. Gebruik “# Recept: Naam” met “Ingrediënten:”. Weekmenu-regels en “# Grocery List” blijven via Osta importeren werken.'] };
++  }
++
++  // ---------- Dubbelen herkennen en samenvoegen ----------
++  function fingerprint(recipe) {
++    const ings = (recipe.ingredients || []).map(i => NC.fold(i.name || i.text)).filter(Boolean).sort().join('|');
++    return NC.fold(recipe.title) + '#' + ings;
++  }
++  function checksum(recipe) {
++    // Stabiele, niet-cryptografische controlesom over de inhoud (voor reconciliatie, geen beveiliging).
++    const s = JSON.stringify([recipe.title, recipe.servings, (recipe.ingredients || []).map(i => [i.text, i.grams, i.productId]), recipe.steps, recipe.declaredPerServing]);
++    let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
++    return (h >>> 0).toString(16).padStart(8, '0');
++  }
++  function findDuplicate(existing, incoming) {
++    if (incoming.externalRef) { const hit = existing.find(r => r.externalRef && r.externalRef === incoming.externalRef); if (hit) return { recipe: hit, by: 'bronverwijzing' }; }
++    const byId = existing.find(r => r.id === incoming.id); if (byId) return { recipe: byId, by: 'id' };
++    const fp = fingerprint(incoming); const exact = existing.find(r => fingerprint(r) === fp); if (exact) return { recipe: exact, by: 'titel+ingrediënten' };
++    // Osta-tekst heeft geen vaste id: dezelfde titel uit dezelfde bron is dan de identiteit (precies één kandidaat).
++    // Andere bron of meerdere recepten met die titel → twijfelgeval; de gebruiker kiest.
++    const title = NC.fold(incoming.title); const sameTitle = existing.filter(r => NC.fold(r.title) === title);
++    if (!sameTitle.length) return null;
++    const sameSource = sameTitle.filter(r => r.source === incoming.source);
++    if (sameTitle.length === 1 && sameSource.length === 1) return { recipe: sameSource[0], by: 'titel (zelfde bron)' };
++    return { recipe: sameSource[0] || sameTitle[0], by: 'titel', uncertain: true };
++  }
++
++  // Bijwerken vanuit de bron (Osta is primair, ADR 0001 Samen Thuis):
++  // - receptinhoud (titel, porties, ingrediënten, bereiding, tags, notities, opgegeven voedingswaarden) komt uit de nieuwe import;
++  // - wat de bron niet (meer) levert, blijft behouden in plaats van te verdwijnen (geen verlies van informatie);
++  // - voedingsannotaties van Samen Thuis (productkoppeling, zelf ingevulde grammen, porties voor planning) blijven staan
++  //   zolang het ingrediënt in de bron bestaat; vervallen ingrediënten worden gemeld.
++  function mergeRecipe(existing, incoming, now) {
++    const changes = []; const kept = [];
++    const merged = { ...existing, title: incoming.title, source: incoming.source || existing.source, importedAt: now, updatedAt: now };
++    if (incoming.title !== existing.title) changes.push({ field: 'titel', from: existing.title, to: incoming.title });
++    if (incoming.servingsKnown) {
++      if (incoming.servings !== existing.servings) changes.push({ field: 'porties', from: existing.servings, to: incoming.servings });
++      merged.servings = incoming.servings;
++    } else if (existing.servings > 1) kept.push('porties');
++    for (const f of ['steps', 'tags']) {
++      if ((incoming[f] || []).length) { if (JSON.stringify(incoming[f]) !== JSON.stringify(existing[f])) changes.push({ field: f === 'steps' ? 'bereiding' : 'tags' }); merged[f] = incoming[f]; }
++      else if ((existing[f] || []).length) kept.push(f === 'steps' ? 'bereiding' : 'tags');
++    }
++    for (const f of ['notes', 'sourceUrl', 'externalRef']) {
++      if (incoming[f]) { if (incoming[f] !== existing[f]) changes.push({ field: f }); merged[f] = incoming[f]; }
++      else if (existing[f]) kept.push(f);
++    }
++    // Ingrediënten in de volgorde van de bron; annotaties overnemen op (genormaliseerde) naam.
++    const byName = new Map(existing.ingredients.map(i => [NC.fold(i.name || i.text), i]));
++    const seen = new Set();
++    let addedIngredients = 0;
++    merged.ingredients = incoming.ingredients.map(inc => {
++      const key = NC.fold(inc.name || inc.text); seen.add(key);
++      const prev = byName.get(key);
++      if (!prev) { addedIngredients += 1; return inc; }
++      return { ...inc, id: prev.id, productId: prev.productId, grams: inc.grams != null ? inc.grams : prev.grams, gramsApprox: inc.grams != null ? inc.gramsApprox : prev.gramsApprox };
++    });
++    const removed = existing.ingredients.filter(i => !seen.has(NC.fold(i.name || i.text)));
++    if (!incoming.ingredients.length && existing.ingredients.length) { merged.ingredients = existing.ingredients; kept.push('ingrediënten'); removed.length = 0; }
++    // Opgegeven voedingswaarden: waarde uit de bron wint; ontbreekt die, dan blijft de vorige.
++    const d = { ...(existing.declaredPerServing || NC.emptyNutrients()) };
++    let keptNutrients = 0;
++    for (const k of NC.KEYS) {
++      const a = d[k], b = incoming.declaredPerServing ? incoming.declaredPerServing[k] : null;
++      if (b != null) { if (a != null && Math.abs(a - b) > Math.max(0.5, a * 0.02)) changes.push({ field: k, from: a, to: b }); d[k] = b; }
++      else if (a != null) keptNutrients += 1;
++    }
++    if (keptNutrients) kept.push(`${keptNutrients} opgegeven voedingswaarde(n)`);
++    merged.declaredPerServing = FF.knownCount(d) ? d : null;
++    return { merged, addedIngredients, removedIngredients: removed.map(i => i.name || i.text), changes, kept,
++      lostAnnotations: removed.filter(i => i.productId || i.grams != null).map(i => i.name || i.text) };
++  }
++
++  // Voorbeeld: wat gebeurt er bij importeren? Wijzigt niets.
++  function planImport(store, parsed, now = new Date().toISOString()) {
++    const s = NC.normalizeStore(store);
++    const plan = { format: parsed.format, errors: [...(parsed.errors || [])], items: [] };
++    const batch = [];
++    for (const raw of parsed.recipes || []) {
++      const incoming = NC.normalizeRecipe({ ...raw, id: parsed.format === FORMAT ? raw.id : undefined, importedAt: now }, now);
++      if (!incoming) { plan.items.push({ action: 'skip', title: String(raw && (raw.title || raw.name) || '(zonder titel)'), reason: 'Titel ontbreekt' }); continue; }
++      const dupInBatch = batch.find(r => fingerprint(r) === fingerprint(incoming));
++      if (dupInBatch) { plan.items.push({ action: 'skip', title: incoming.title, reason: 'Komt dubbel voor in het bestand' }); continue; }
++      batch.push(incoming);
++      const dup = findDuplicate(s.recipes, incoming);
++      if (!dup) plan.items.push({ action: 'add', title: incoming.title, recipe: incoming });
++      else {
++        const m = mergeRecipe(structuredCloneSafe(dup.recipe), incoming, now);
++        const changed = checksum(m.merged) !== checksum(dup.recipe) || JSON.stringify(m.merged.tags) !== JSON.stringify(dup.recipe.tags);
++        plan.items.push({ action: changed ? 'merge' : 'same', title: incoming.title, existingId: dup.recipe.id, matchedBy: dup.by, uncertain: Boolean(dup.uncertain),
++          recipe: changed ? m.merged : dup.recipe, incoming, addedIngredients: m.addedIngredients, removedIngredients: m.removedIngredients, lostAnnotations: m.lostAnnotations, changes: m.changes, kept: m.kept });
++      }
++    }
++    plan.products = (parsed.products || []).filter(p => p && p.id && p.name);
++    plan.counts = ['add', 'merge', 'same', 'skip'].reduce((o, a) => (o[a] = plan.items.filter(i => i.action === a).length, o), {});
++    return plan;
++  }
++
++  function structuredCloneSafe(v) { return JSON.parse(JSON.stringify(v)); }
++
++  // Toepassen na bevestiging. Twijfelgevallen (alleen gelijke titel) worden standaard als aparte kopie toegevoegd,
++  // zodat een ander recept met dezelfde naam nooit wordt overschreven. `updateUncertain: true` werkt ze toch bij.
++  function applyImport(store, plan, { updateUncertain = false, skipUncertain } = {}) {
++    if (skipUncertain !== undefined) updateUncertain = !skipUncertain;
++    let s = NC.normalizeStore(store);
++    const result = { added: 0, merged: 0, unchanged: 0, skipped: 0, products: 0 };
++    for (const item of plan.items) {
++      if (item.action === 'add' || (item.action === 'merge' && item.uncertain && !updateUncertain)) {
++        const fresh = item.action === 'add' ? item.recipe : { ...item.incoming, id: undefined };
++        const r = NC.normalizeRecipe(fresh); s.recipes.push(r); result.added += 1;
++      } else if (item.action === 'merge') {
++        const idx = s.recipes.findIndex(r => r.id === item.existingId);
++        if (idx >= 0) { s.recipes[idx] = NC.normalizeRecipe(item.recipe); result.merged += 1; } else result.skipped += 1;
++      } else if (item.action === 'same') result.unchanged += 1;
++      else result.skipped += 1;
++    }
++    for (const p of plan.products || []) { s = NC.upsertProduct(s, p).store; result.products += 1; }
++    return { store: s, result };
++  }
++
++  // ---------- Exporteren ----------
++  function exportBundle(store, { recipeIds = null, now = new Date().toISOString() } = {}) {
++    const s = NC.normalizeStore(store);
++    const recipes = recipeIds ? s.recipes.filter(r => recipeIds.includes(r.id)) : s.recipes;
++    const productIds = new Set(recipes.flatMap(r => r.ingredients.map(i => i.productId).filter(Boolean)));
++    return {
++      format: FORMAT, version: FORMAT_VERSION, exportedAt: now, app: 'Samen Thuis',
++      note: 'Bevat recepten en gekoppelde productgegevens (Open Food Facts: ODbL). Geen persoonlijke gegevens.',
++      recipes: recipes.map(r => ({ ...r, checksum: checksum(r) })),
++      products: s.products.filter(p => productIds.has(p.id))
++    };
++  }
++
++  // schema.org/Recipe (JSON-LD) voor gebruik in andere apps; berekende waarden alleen als ze volledig zijn.
++  function exportSchemaOrg(store) {
++    const s = NC.normalizeStore(store);
++    return s.recipes.map(r => {
++      const calc = NC.recipeNutrition(r, s.products);
++      const per = r.declaredPerServing || (calc.fullyComplete ? calc.perServing : null);
++      const out = {
++        '@context': 'https://schema.org', '@type': 'Recipe', name: r.title, recipeYield: `${r.servings} porties`,
++        recipeIngredient: r.ingredients.map(i => i.text), recipeInstructions: r.steps.map(text => ({ '@type': 'HowToStep', text }))
++      };
++      if (r.sourceUrl) out.url = r.sourceUrl;
++      if (per) {
++        const n = { '@type': 'NutritionInformation' };
++        if (per.energyKcal != null) n.calories = `${Math.round(per.energyKcal)} kcal`;
++        [['proteins', 'proteinContent'], ['fat', 'fatContent'], ['saturatedFat', 'saturatedFatContent'], ['carbohydrates', 'carbohydrateContent'], ['sugars', 'sugarContent'], ['fiber', 'fiberContent']]
++          .forEach(([k, f]) => { if (per[k] != null) n[f] = `${per[k]} g`; });
++        out.nutrition = n;
++      }
++      return out;
++    });
++  }
++
++  return { FORMAT, FORMAT_VERSION, parseNutritionText, parseOstaText, fromSchemaOrg, findRecipesInJsonLd, parseAny, fingerprint, checksum, findDuplicate, mergeRecipe, planImport, applyImport, exportBundle, exportSchemaOrg };
++});
+diff --git a/osta-exchange-core.test.js b/osta-exchange-core.test.js
+new file mode 100644
+index 0000000..f69ead8
+--- /dev/null
++++ b/osta-exchange-core.test.js
+@@ -0,0 +1,139 @@
++// Osta ↔ Samen Thuis: gecontroleerde import/export zonder dubbele recepten en zonder verlies van voedingsinformatie.
++const test = require('node:test');
++const assert = require('node:assert/strict');
++const fs = require('node:fs');
++const X = require('./osta-exchange-core.js');
++const N = require('./nutrition-core.js');
++
++const fixture = f => fs.readFileSync(__dirname + '/test-fixtures/recipes/' + f, 'utf8');
++
++test('Osta-tekst: receptblokken met porties, ingrediënten, stappen, opgegeven voedingswaarden en bron', () => {
++  const parsed = X.parseAny(fixture('osta-gedeeld.txt'));
++  assert.equal(parsed.format, 'osta-tekst'); assert.deepEqual(parsed.errors, []);
++  assert.equal(parsed.recipes.length, 2);
++  const [pasta, curry] = parsed.recipes;
++  assert.equal(pasta.title, 'Pasta pesto'); assert.equal(pasta.servings, 4);
++  assert.deepEqual(pasta.ingredients.map(i => i.text), ['400 g pasta', '1 potje pesto', '100 g Parmezaanse kaas']);
++  assert.deepEqual(pasta.steps, ['Kook de pasta.', 'Meng met pesto.']);
++  assert.equal(pasta.declaredPerServing.energyKcal, 610); assert.equal(pasta.declaredPerServing.salt, 1.4);
++  assert.equal(pasta.declaredPerServing.fiber, null, 'niet opgegeven blijft onbekend');
++  assert.equal(pasta.sourceUrl, 'https://example.org/pasta-pesto');
++  assert.equal(curry.ingredients.length, 2, '“# Grocery List” sluit het recept af');
++});
++
++test('schema.org/Recipe JSON-LD in @graph: titel, porties, stappen (secties), tags, voedingswaarden (natrium → zout)', () => {
++  const parsed = X.parseAny(fixture('schema-org.json'));
++  assert.equal(parsed.format, 'schema.org');
++  const r = parsed.recipes[0];
++  assert.equal(r.title, 'Tomatensoep'); assert.equal(r.servings, 4);
++  assert.deepEqual(r.steps, ['Snijd alles.', 'Kook 20 minuten.']);
++  assert.ok(r.tags.includes('Soep') && r.tags.includes('vega'));
++  assert.equal(r.declaredPerServing.energyKcal, 180); assert.equal(r.declaredPerServing.salt, 1.5);
++  assert.equal(r.externalRef, 'https://example.org/r/soep#recipe');
++});
++
++test('onbekende of te nieuwe formaten geven een duidelijke fout en importeren niets', () => {
++  assert.match(X.parseAny('').errors[0], /Geen inhoud/);
++  assert.match(X.parseAny('{kapot').errors[0], /Ongeldige JSON/);
++  assert.match(X.parseAny('{"a":1}').errors[0], /Geen recepten/);
++  assert.match(X.parseAny(JSON.stringify({ format: X.FORMAT, version: 99, recipes: [] })).errors[0], /versie 99/);
++  assert.match(X.parseAny('Maandag: soep').errors[0], /Geen receptblokken/);
++  assert.match(X.parseAny('x'.repeat(500001)).errors[0], /te groot/);
++});
++
++test('planImport wijzigt niets; applyImport voegt toe na bevestiging', () => {
++  const store = N.normalizeStore({});
++  const plan = X.planImport(store, X.parseAny(fixture('osta-gedeeld.txt')));
++  assert.deepEqual(plan.counts, { add: 2, merge: 0, same: 0, skip: 0 });
++  assert.equal(store.recipes.length, 0, 'voorbeeld schrijft niets');
++  const { store: next, result } = X.applyImport(store, plan);
++  assert.equal(result.added, 2); assert.equal(next.recipes.length, 2);
++  assert.equal(next.recipes[0].source, 'osta');
++});
++
++test('opnieuw importeren maakt geen dubbelen ("same") en dubbel in hetzelfde bestand wordt overgeslagen', () => {
++  let store = X.applyImport({}, X.planImport({}, X.parseAny(fixture('osta-gedeeld.txt')))).store;
++  const again = X.planImport(store, X.parseAny(fixture('osta-gedeeld.txt')));
++  assert.deepEqual(again.counts, { add: 0, merge: 0, same: 2, skip: 0 });
++  const twice = fixture('osta-gedeeld.txt').replace('# Grocery List', '# Recept: Curry\nIngredients:\n- 1 ui\n- 400 ml kokosmelk\n\n# Grocery List');
++  const p = X.planImport({}, X.parseAny(twice));
++  assert.equal(p.counts.skip, 1); assert.equal(p.counts.add, 2);
++});
++
++test('herimport uit Osta: bron wint voor receptinhoud, annotaties van Samen Thuis blijven, niets verdwijnt ongemerkt', () => {
++  let store = X.applyImport({}, X.planImport({}, X.parseAny(fixture('osta-gedeeld.txt')))).store;
++  // Samen Thuis-annotaties: product gekoppeld en gewicht ingevuld bij een ingrediënt zonder gewicht in de bron.
++  const pasta = store.recipes.find(r => r.title === 'Pasta pesto');
++  pasta.ingredients[1].productId = 'p-pesto'; pasta.ingredients[1].grams = 190;
++  pasta.ingredients[2].productId = 'p-kaas';
++  pasta.servingsOverride = 3;
++  const changed = fixture('osta-gedeeld.txt')
++    .replace('Voedingswaarde per portie: 610 kcal, eiwit 22 g, vet 24 g, koolhydraten 75 g, zout 1,4 g', 'Voedingswaarde per portie: 650 kcal, vezels 4 g')
++    .replace('- 100 g Parmezaanse kaas', '- 50 g pijnboompitten')
++    .replace('2. Meng met pesto.', '2. Meng met pesto en pijnboompitten.');
++  const plan = X.planImport(store, X.parseAny(changed));
++  const item = plan.items.find(i => i.title === 'Pasta pesto');
++  assert.equal(item.action, 'merge');
++  assert.equal(item.addedIngredients, 1);
++  assert.deepEqual(item.removedIngredients, ['Parmezaanse kaas']);
++  assert.deepEqual(item.lostAnnotations, ['Parmezaanse kaas'], 'vervallen koppeling wordt gemeld');
++  assert.ok(item.changes.some(c => c.field === 'energyKcal' && c.from === 610 && c.to === 650));
++  assert.ok(item.kept.some(k => /voedingswaarde/.test(k)));
++  store = X.applyImport(store, plan).store;
++  const merged = store.recipes.find(r => r.title === 'Pasta pesto');
++  assert.equal(merged.declaredPerServing.energyKcal, 650, 'waarde uit Osta wint');
++  assert.equal(merged.declaredPerServing.fiber, 4, 'nieuwe waarde uit Osta');
++  assert.equal(merged.declaredPerServing.proteins, 22, 'niet meer opgegeven waarde blijft behouden');
++  assert.deepEqual(merged.ingredients.map(i => i.name), ['pasta', 'potje pesto', 'pijnboompitten'], 'ingrediëntenlijst volgt de bron');
++  assert.equal(merged.ingredients[1].productId, 'p-pesto'); assert.equal(merged.ingredients[1].grams, 190, 'eigen gewicht blijft bij bron zonder gewicht');
++  assert.equal(merged.steps[1], 'Meng met pesto en pijnboompitten.');
++  assert.equal(merged.servings, 4); assert.equal(merged.servingsOverride, 3, 'planningsporties blijven');
++  assert.equal(store.recipes.length, 2, 'geen dubbel recept');
++});
++
++test('bron zonder porties of ingrediënten wist bestaande waarden niet', () => {
++  let store = X.applyImport({}, X.planImport({}, X.parseAny(fixture('osta-gedeeld.txt')))).store;
++  const plan = X.planImport(store, X.parseAny('# Recept: Pasta pesto\nBereiding:\n1. Nieuwe stap.'));
++  store = X.applyImport(store, plan).store;
++  const r = store.recipes.find(x => x.title === 'Pasta pesto');
++  assert.equal(r.servings, 4); assert.equal(r.ingredients.length, 3); assert.deepEqual(r.steps, ['Nieuwe stap.']);
++  assert.ok(plan.items[0].kept.includes('porties') && plan.items[0].kept.includes('ingrediënten'));
++});
++
++test('twijfelgeval (alleen gelijke titel) wordt standaard als aparte kopie toegevoegd; bijwerken alleen als gekozen', () => {
++  const store = N.normalizeStore({ recipes: [{ title: 'Curry', ingredients: ['1 kip', '1 pot saus'] }] });
++  const plan = X.planImport(store, X.parseAny('# Recept: Curry\nIngrediënten:\n- 1 bloemkool'));
++  assert.equal(plan.items[0].action, 'merge'); assert.equal(plan.items[0].uncertain, true); assert.equal(plan.items[0].matchedBy, 'titel');
++  const safe = X.applyImport(store, plan);
++  assert.equal(safe.result.added, 1); assert.equal(safe.store.recipes.length, 2);
++  assert.deepEqual(safe.store.recipes[0].ingredients.map(i => i.name), ['kip', 'pot saus'], 'bestaande kopie onaangetast');
++  const upd = X.applyImport(store, plan, { updateUncertain: true });
++  assert.equal(upd.result.merged, 1); assert.equal(upd.store.recipes.length, 1);
++});
++
++test('export → import van het eigen formaat is verliesvrij en herkent alles als bestaand', () => {
++  const FFc = require('./food-facts-core.js');
++  const product = FFc.manualProduct({ id: 'p1', name: 'Pasta', per100g: { energyKcal: 350 } });
++  let store = N.normalizeStore({ products: [product], recipes: [{ id: 'r1', title: 'Pasta', servings: 2, ingredients: [{ name: 'pasta', grams: 200, productId: 'p1' }], declaredPerServing: { energyKcal: 400 } }] });
++  const bundle = X.exportBundle(store, { now: '2026-11-08T00:00:00Z' });
++  assert.equal(bundle.format, X.FORMAT); assert.equal(bundle.version, 1);
++  assert.equal(bundle.products.length, 1, 'alleen gekoppelde producten');
++  assert.match(bundle.recipes[0].checksum, /^[0-9a-f]{8}$/);
++  const roundTrip = X.parseAny(JSON.stringify(bundle));
++  const fresh = X.applyImport({}, X.planImport({}, roundTrip)).store;
++  assert.equal(fresh.recipes[0].id, 'r1'); assert.equal(fresh.recipes[0].ingredients[0].productId, 'p1');
++  assert.equal(fresh.recipes[0].declaredPerServing.energyKcal, 400);
++  assert.equal(fresh.products[0].per100g.energyKcal, 350);
++  assert.deepEqual(X.planImport(store, roundTrip).counts, { add: 0, merge: 0, same: 1, skip: 0 });
++});
++
++test('schema.org-export: alleen volledige berekende waarden of opgegeven waarden', () => {
++  const FFc = require('./food-facts-core.js');
++  const full = FFc.manualProduct({ id: 'p1', name: 'X', per100g: { energyKcal: 100, fat: 1, saturatedFat: 0, carbohydrates: 20, sugars: 1, fiber: 2, proteins: 3, salt: 0 } });
++  const store = N.normalizeStore({ products: [full], recipes: [
++    { title: 'Volledig', servings: 2, ingredients: [{ name: 'x', grams: 200, productId: 'p1' }] },
++    { title: 'Onvolledig', ingredients: [{ name: 'x', grams: 100, productId: 'p1' }, '1 ui'] }] });
++  const out = X.exportSchemaOrg(store);
++  assert.equal(out[0]['@type'], 'Recipe'); assert.equal(out[0].nutrition.calories, '100 kcal');
++  assert.equal(out[1].nutrition, undefined, 'onvolledige berekening wordt niet als feit geëxporteerd');
++});
+diff --git a/search-core.js b/search-core.js
+index 407ac21..4686f33 100644
+--- a/search-core.js
++++ b/search-core.js
+@@ -38,6 +38,8 @@
+       { key: 'planning', label: 'Agenda', icon: 'calendar', page: 'planning', items: list(d.planning) },
+       { key: 'tasks', label: 'Taken', icon: 'check', page: 'tasks', items: list(d.tasks) },
+       { key: 'meals', label: 'Weekmenu', icon: 'utensils', page: 'meals', items: list(d.meals) },
++      { key: 'voeding-recepten', label: 'Voeding · Recepten', icon: 'book', page: 'voeding', sub: 'recepten', items: list(d.nutrition && d.nutrition.recipes).map(r => ({ id: r.id, title: r.title, tags: r.tags, ingredients: list(r.ingredients).map(i => i.name || i.text).filter(Boolean) })) },
++      { key: 'voeding-producten', label: 'Voeding · Producten', icon: 'box', page: 'voeding', sub: 'producten', items: list(d.nutrition && d.nutrition.products).map(p => ({ id: p.id, title: p.name, brand: p.brand, barcode: p.barcode })) },
+       { key: 'groceries', label: 'Boodschappen', icon: 'cart', page: 'groceries', items: [...list(d.groceries), ...list(d.priceReferences)] },
+       { key: 'stock', label: 'Voorraad & vriezer', icon: 'box', page: 'stock', items: [...list(d.stock), ...list(d.freezer)] },
+       { key: 'chores', label: 'Routines', icon: 'repeat', page: 'chores', items: list(d.chores) },
+diff --git a/sw.js b/sw.js
+index 2b5f946..862e32a 100644
+--- a/sw.js
++++ b/sw.js
+@@ -1,7 +1,7 @@
+ // Service worker Samen Thuis. Versiebeheer: verhoog CACHE bij elke wijziging in index.html of een asset-versie (?v=).
+ // sw-assets.test.js controleert dat elke stylesheet en elk script uit index.html hier voorkomt (offline volledig).
+-const CACHE='samen-thuis-v42-sync';
+-const ASSETS=['./','./index.html','./css/tokens.css?v=249','./css/base.css?v=249','./css/layout.css?v=252','./css/components.css?v=249','./styles.css?v=256','./sportcoach.css?v=2','./shell.css?v=3','./css/personalization.css?v=5','./css/finance.css?v=1','./cdn-libs.js?v=1','./data-core.js?v=249','./savings-core.js?v=1','./offers-core.js?v=5','./dashboard-core.js?v=3','./chalkboard-core.js?v=1','./household-sync-core.js?v=2','./personal-preferences-core.js?v=4','./budget-ledger-core.js?v=3','./finance-plan-core.js?v=1','./finance-ui.js?v=1','./quotes-core.js?v=2','./rewards-core.js?v=1','./freezer-core.js?v=1','./weather-advice-core.js?v=1','./sportcoach-core.js?v=2','./nav-core.js?v=2','./search-core.js?v=1','./import-core.js?v=1','./import-readers.js?v=1','./app.js?v=275','./samen-thuis-update-v26-challenges.js?v=260','./account-sync.js?v=3','./inbox-core.js?v=1','./inbox.js?v=1','./weather-extras.js?v=1','./sportcoach.js?v=6','./nav-groups.js?v=3','./search.js?v=1','./manifest.webmanifest','./icon.svg'];
++const CACHE='samen-thuis-v43-voeding';
++const ASSETS=['./','./index.html','./css/tokens.css?v=249','./css/base.css?v=249','./css/layout.css?v=252','./css/components.css?v=249','./styles.css?v=256','./sportcoach.css?v=2','./shell.css?v=3','./css/personalization.css?v=5','./css/finance.css?v=1','./css/nutrition.css?v=1','./cdn-libs.js?v=1','./data-core.js?v=249','./savings-core.js?v=1','./offers-core.js?v=5','./dashboard-core.js?v=3','./chalkboard-core.js?v=1','./household-sync-core.js?v=2','./personal-preferences-core.js?v=4','./budget-ledger-core.js?v=3','./finance-plan-core.js?v=1','./finance-ui.js?v=1','./quotes-core.js?v=2','./rewards-core.js?v=1','./freezer-core.js?v=1','./weather-advice-core.js?v=1','./sportcoach-core.js?v=2','./nav-core.js?v=3','./search-core.js?v=2','./import-core.js?v=1','./import-readers.js?v=1','./food-facts-core.js?v=1','./nutrition-core.js?v=1','./osta-exchange-core.js?v=1','./app.js?v=275','./samen-thuis-update-v26-challenges.js?v=260','./account-sync.js?v=3','./inbox-core.js?v=1','./inbox.js?v=1','./weather-extras.js?v=1','./sportcoach.js?v=6','./nutrition.js?v=1','./nav-groups.js?v=3','./search.js?v=1','./manifest.webmanifest','./icon.svg'];
+ 
+ self.addEventListener('install',event=>{
+   event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(ASSETS)).then(()=>self.skipWaiting()));
+diff --git a/test-fixtures/recipes/osta-gedeeld.txt b/test-fixtures/recipes/osta-gedeeld.txt
+new file mode 100644
+index 0000000..991eb5d
+--- /dev/null
++++ b/test-fixtures/recipes/osta-gedeeld.txt
+@@ -0,0 +1,22 @@
++Maandag: Pasta pesto
++Dinsdag: Curry
++
++# Recept: Pasta pesto
++Porties: 4
++Ingrediënten:
++- 400 g pasta
++- 1 potje pesto
++- 100 g Parmezaanse kaas
++Bereiding:
++1. Kook de pasta.
++2. Meng met pesto.
++Voedingswaarde per portie: 610 kcal, eiwit 22 g, vet 24 g, koolhydraten 75 g, zout 1,4 g
++https://example.org/pasta-pesto
++
++# Recept: Curry
++Ingredients:
++- 1 ui
++- 400 ml kokosmelk
++
++# Grocery List
++250 g spinazie
+diff --git a/test-fixtures/recipes/schema-org.json b/test-fixtures/recipes/schema-org.json
+new file mode 100644
+index 0000000..5980696
+--- /dev/null
++++ b/test-fixtures/recipes/schema-org.json
+@@ -0,0 +1 @@
++{"@context":"https://schema.org","@graph":[{"@type":"WebPage","name":"x"},{"@type":"Recipe","@id":"https://example.org/r/soep#recipe","name":"Tomatensoep","url":"https://example.org/r/soep","recipeYield":["4","4 porties"],"recipeIngredient":["1 kg tomaten","1 ui","1 l bouillon"],"recipeInstructions":[{"@type":"HowToSection","itemListElement":[{"@type":"HowToStep","text":"Snijd alles."},{"@type":"HowToStep","text":"Kook 20 minuten."}]}],"recipeCategory":"Soep","keywords":"vega, snel","nutrition":{"@type":"NutritionInformation","calories":"180 calories","proteinContent":"5 g","fatContent":"7 g","sodiumContent":"600 mg"}}]}
+-- 
+2.43.0
+

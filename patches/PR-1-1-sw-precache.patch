@@ -1,0 +1,139 @@
+From 2ebe7f2be88d0e07c51c1b76ddbc764eb9f3d36c Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 8 Nov 2026 15:13:32 +0100
+Subject: [PATCH] sw: precache volledig (o.a. rewards-core.js) en versiebeheer
+ via scripts/sync-sw-assets.mjs
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01DXboTXW7c38F7h8Qy7T4q3
+---
+ scripts/sync-sw-assets.mjs | 21 ++++++++++++++
+ sw-assets.test.js          | 59 ++++++++++++++++++++++++++++++++++++++
+ sw.js                      |  9 ++++--
+ 3 files changed, 86 insertions(+), 3 deletions(-)
+ create mode 100644 scripts/sync-sw-assets.mjs
+ create mode 100644 sw-assets.test.js
+
+diff --git a/scripts/sync-sw-assets.mjs b/scripts/sync-sw-assets.mjs
+new file mode 100644
+index 0000000..1ce26e3
+--- /dev/null
++++ b/scripts/sync-sw-assets.mjs
+@@ -0,0 +1,21 @@
++// Werkt de precache-lijst in sw.js bij op basis van index.html en zet een nieuwe cachenaam.
++// Gebruik: node scripts/sync-sw-assets.mjs samen-thuis-v38-onderwerp
++// Draai dit bij elke wijziging aan een asset of ?v=-versie; sw-assets.test.js controleert het resultaat.
++import fs from 'node:fs';
++import path from 'node:path';
++import { fileURLToPath } from 'node:url';
++
++const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
++const cache = process.argv[2];
++if (!/^samen-thuis-v\d+-[a-z0-9-]+$/.test(cache || '')) { console.error('Geef een cachenaam als samen-thuis-v38-onderwerp'); process.exit(1); }
++const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
++const assets = ['./', './index.html',
++  // Alleen eigen bestanden; externe scripts (http/https) worden nooit gecachet.
++  ...[...html.matchAll(/<link rel="stylesheet" href="(?!https?:)([^"]+)"/g)].map(m => './' + m[1]),
++  ...[...html.matchAll(/<script src="(?!https?:)([^"]+)"/g)].map(m => './' + m[1]),
++  './manifest.webmanifest', './icon.svg'];
++const swPath = path.join(root, 'sw.js');
++let sw = fs.readFileSync(swPath, 'utf8');
++sw = sw.replace(/const CACHE='[^']*';/, `const CACHE='${cache}';`).replace(/const ASSETS=\[[^\]]*\];/, `const ASSETS=[${assets.map(a => `'${a}'`).join(',')}];`);
++fs.writeFileSync(swPath, sw);
++console.log(`sw.js: ${assets.length} assets, cache ${cache}`);
+diff --git a/sw-assets.test.js b/sw-assets.test.js
+new file mode 100644
+index 0000000..77abe37
+--- /dev/null
++++ b/sw-assets.test.js
+@@ -0,0 +1,59 @@
++// PWA/offline: de service worker cachet exact wat index.html laadt, met een nieuwe cacheversie.
++const test = require('node:test');
++const assert = require('node:assert/strict');
++const fs = require('node:fs');
++const vm = require('node:vm');
++
++const html = fs.readFileSync(__dirname + '/index.html', 'utf8');
++const sw = fs.readFileSync(__dirname + '/sw.js', 'utf8');
++
++function swContext() {
++  const listeners = {};
++  const ctx = { self: { addEventListener: (t, f) => { listeners[t] = f; }, skipWaiting: () => {}, clients: { claim: () => {} } }, location: { origin: 'https://app.example' }, URL, Response, caches: null, fetch: null };
++  vm.runInNewContext(sw + '\nthis.__ASSETS=ASSETS;this.__CACHE=CACHE;', ctx);
++  return { ctx, listeners };
++}
++
++test('elke lokale stylesheet en elk script uit index.html staat in de precache (incl. versie)', () => {
++  const { ctx } = swContext();
++  const assets = new Set(ctx.__ASSETS);
++  const refs = [...html.matchAll(/<link rel="stylesheet" href="(?!https?:)([^"]+)"/g), ...html.matchAll(/<script src="(?!https?:)([^"]+)"/g)].map(m => './' + m[1]);
++  assert.ok(refs.length > 30);
++  for (const ref of refs) assert.ok(assets.has(ref), 'ontbreekt in sw.js: ' + ref);
++  for (const a of ['./', './index.html', './manifest.webmanifest', './icon.svg']) assert.ok(assets.has(a), a);
++  assert.ok(assets.has('./rewards-core.js?v=1'), 'eerder ontbrekende rewards-core.js nu offline beschikbaar');
++});
++
++test('precache bevat alleen bestanden die bestaan; cacheversie is verhoogd', () => {
++  const { ctx } = swContext();
++  for (const a of ctx.__ASSETS) {
++    if (a === './') continue;
++    assert.ok(fs.existsSync(__dirname + '/' + a.replace(/^\.\//, '').replace(/\?.*$/, '')), 'bestaat niet: ' + a);
++  }
++  assert.notEqual(ctx.__CACHE, 'samen-thuis-v36-finance');
++  assert.match(ctx.__CACHE, /^samen-thuis-v\d+-/);
++});
++
++test('offline: bij netwerkfout komt het antwoord uit de cache; navigatie valt terug op index.html', async () => {
++  const { ctx, listeners } = swContext();
++  const store = new Map([['https://app.example/app.js', 'cached-app'], ['./index.html', 'cached-index']]);
++  ctx.caches = { open: async () => ({ put: async () => {} }), match: async req => store.get(typeof req === 'string' ? req : req.url) || undefined };
++  ctx.fetch = async () => { throw new TypeError('offline'); };
++  const respond = async (url, mode = 'no-cors') => {
++    let p; listeners.fetch({ request: { method: 'GET', url, mode }, respondWith: x => { p = x; }, waitUntil: () => {} });
++    return p;
++  };
++  assert.equal(await respond('https://app.example/app.js'), 'cached-app');
++  assert.equal(await respond('https://app.example/onbekend', 'navigate'), 'cached-index');
++  let called = false;
++  listeners.fetch({ request: { method: 'POST', url: 'https://app.example/x' }, respondWith: () => { called = true; } });
++  assert.equal(called, false, 'POST wordt nooit door de service worker afgehandeld');
++});
++
++test('activate verwijdert oude caches (geen verouderde bestanden na update)', async () => {
++  const { ctx, listeners } = swContext();
++  const deleted = [];
++  ctx.caches = { keys: async () => ['samen-thuis-v36-finance', ctx.__CACHE], delete: async k => { deleted.push(k); return true; } };
++  let p; listeners.activate({ waitUntil: x => { p = x; } }); await p;
++  assert.deepEqual(deleted, ['samen-thuis-v36-finance']);
++});
+diff --git a/sw.js b/sw.js
+index 9a8a0cd..f18f6b9 100644
+--- a/sw.js
++++ b/sw.js
+@@ -1,5 +1,7 @@
+-const CACHE='samen-thuis-v36-finance';
+-const ASSETS=['./','./index.html','./css/tokens.css?v=249','./css/base.css?v=249','./css/layout.css?v=252','./css/components.css?v=249','./css/personalization.css?v=5','./styles.css?v=256','./sportcoach.css?v=2','./data-core.js?v=249','./savings-core.js?v=1','./offers-core.js?v=5','./dashboard-core.js?v=3','./chalkboard-core.js?v=1','./personal-preferences-core.js?v=4','./budget-ledger-core.js?v=3','./finance-plan-core.js?v=1','./finance-ui.js?v=1','./css/finance.css?v=1','./quotes-core.js?v=1','./freezer-core.js?v=1','./nav-core.js?v=2','./search-core.js?v=1','./search.js?v=1','./shell.css?v=3','./household-sync-core.js?v=1','./account-sync.js?v=2','./inbox-core.js?v=1','./inbox.js?v=1','./weather-advice-core.js?v=1','./weather-extras.js?v=1','./nav-groups.js?v=3','./sportcoach-core.js?v=2','./sportcoach.js?v=6','./import-core.js?v=1','./import-readers.js?v=1','./app.js?v=270','./samen-thuis-update-v26-challenges.js?v=260','./manifest.webmanifest','./icon.svg'];
++// Service worker Samen Thuis. Versiebeheer: verhoog CACHE bij elke wijziging in index.html of een asset-versie (?v=).
++// sw-assets.test.js controleert dat elke stylesheet en elk script uit index.html hier voorkomt (offline volledig).
++const CACHE='samen-thuis-v37-precache';
++const ASSETS=['./','./index.html','./css/tokens.css?v=249','./css/base.css?v=249','./css/layout.css?v=252','./css/components.css?v=249','./styles.css?v=256','./sportcoach.css?v=2','./shell.css?v=3','./css/personalization.css?v=5','./css/finance.css?v=1','./data-core.js?v=249','./savings-core.js?v=1','./offers-core.js?v=5','./dashboard-core.js?v=3','./chalkboard-core.js?v=1','./household-sync-core.js?v=1','./personal-preferences-core.js?v=4','./budget-ledger-core.js?v=3','./finance-plan-core.js?v=1','./finance-ui.js?v=1','./quotes-core.js?v=1','./rewards-core.js?v=1','./freezer-core.js?v=1','./weather-advice-core.js?v=1','./sportcoach-core.js?v=2','./nav-core.js?v=2','./search-core.js?v=1','./import-core.js?v=1','./import-readers.js?v=1','./app.js?v=270','./samen-thuis-update-v26-challenges.js?v=260','./account-sync.js?v=2','./inbox-core.js?v=1','./inbox.js?v=1','./weather-extras.js?v=1','./sportcoach.js?v=6','./nav-groups.js?v=3','./search.js?v=1','./manifest.webmanifest','./icon.svg'];
+ 
+ self.addEventListener('install',event=>{
+   event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(ASSETS)).then(()=>self.skipWaiting()));
+@@ -10,6 +12,7 @@ self.addEventListener('activate',event=>{
+ self.addEventListener('fetch',event=>{
+   if(event.request.method!=='GET') return;
+   const url=new URL(event.request.url);
++  // Externe bronnen (Supabase, Open-Meteo, Open Food Facts, CDN) gaan rechtstreeks; die hebben eigen caches in de app.
+   if(url.origin!==location.origin){ event.respondWith(fetch(event.request)); return; }
+   event.respondWith(fetch(event.request,{cache:'no-store'}).then(response=>{
+     if(response.ok){const copy=response.clone();event.waitUntil(caches.open(CACHE).then(cache=>cache.put(event.request,copy)));}
+@@ -17,4 +20,4 @@ self.addEventListener('fetch',event=>{
+   }).catch(()=>caches.match(event.request).then(cached=>cached||(event.request.mode==='navigate'?caches.match('./index.html'):Response.error()))));
+ });
+ 
+-// Samen Thuis v25.5
++// Samen Thuis v26.0
+-- 
+2.43.0
+

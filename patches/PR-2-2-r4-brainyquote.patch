@@ -1,0 +1,179 @@
+From f51182de8c1f97fb3567aa0dcdc1fcce721af2e4 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 8 Nov 2026 15:13:37 +0100
+Subject: [PATCH] R4: extern BrainyQuote-script verwijderd; lokale gedachte van
+ de dag (roadmap PR-7)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01DXboTXW7c38F7h8Qy7T4q3
+---
+ app.js              | 11 ++++++++---
+ index.html          |  9 ++-------
+ quotes-core.js      | 44 +++++++++++++++++++++++++++++++++++++++++++-
+ quotes-core.test.js | 23 +++++++++++++++++++++++
+ sw.js               |  4 ++--
+ 5 files changed, 78 insertions(+), 13 deletions(-)
+
+diff --git a/app.js b/app.js
+index 177ca45..3a07171 100644
+--- a/app.js
++++ b/app.js
+@@ -480,10 +480,15 @@ async function refreshBrainyQuoteRSS() {
+ function renderQuote() {
+   let cache;
+   try { cache = JSON.parse(localStorage.getItem(QUOTE_KEY) || 'null'); } catch { cache = null; }
+-  const quote = cache?.markup
+-    ? `<div class="quote-content">${cache.markup}</div>`
++  // R4: geen extern script meer. RSS-tekst (alleen als tekst, ge-escaped) blijft optioneel; anders een lokale gedachte van de dag.
++  if (cache?.markup && cache.date === todayISO()) {
++    return `<section class="card quote-card"><div><p class="eyebrow">Quote of the day</p><div class="quote-content">${cache.markup}</div></div><a href="https://www.brainyquote.com/link/quotebr.rss" target="_blank" rel="noopener">Bron: BrainyQuote RSS</a></section>`;
++  }
++  const local = window.SamenThuisQuotes?.localQuoteFor ? window.SamenThuisQuotes.localQuoteFor(todayISO()) : null;
++  const quote = local
++    ? `<div class="quote-content"><blockquote>${esc(local.text)}</blockquote></div>`
+     : '<p class="quote-offline">De quote wordt opgehaald zodra er verbinding is.</p>';
+-  return `<section class="card quote-card"><div><p class="eyebrow">Quote of the day</p>${quote}</div><a href="https://www.brainyquote.com/link/quotebr.rss" target="_blank" rel="noopener">Bron: BrainyQuote RSS</a></section>`;
++  return `<section class="card quote-card"><div><p class="eyebrow">Gedachte van de dag</p>${quote}</div><small class="muted">Bron: Samen Thuis (lokaal)</small></section>`;
+ }
+ 
+ function tripFolderById(folderId) {
+diff --git a/index.html b/index.html
+index 21fa4cf..b7c356c 100644
+--- a/index.html
++++ b/index.html
+@@ -91,11 +91,6 @@
+ 
+   <div id="toast" class="toast" role="status"></div>
+ 
+-  <div id="brainyQuoteSource" class="brainy-source" aria-hidden="true">
+-    <script src="https://www.brainyquote.com/link/quotebr.js"></script>
+-    <a href="https://www.brainyquote.com/quote_of_the_day" target="_blank" rel="nofollow noopener">more Quotes</a>
+-  </div>
+-
+   <script src="data-core.js?v=249"></script>
+   <script src="savings-core.js?v=1"></script>
+   <script src="offers-core.js?v=5"></script>
+@@ -106,7 +101,7 @@
+   <script src="budget-ledger-core.js?v=3"></script>
+   <script src="finance-plan-core.js?v=1"></script>
+   <script src="finance-ui.js?v=1"></script>
+-  <script src="quotes-core.js?v=1"></script>
++  <script src="quotes-core.js?v=2"></script>
+   <script src="rewards-core.js?v=1"></script>
+   <script src="freezer-core.js?v=1"></script>
+   <script src="weather-advice-core.js?v=1"></script>
+@@ -115,7 +110,7 @@
+   <script src="search-core.js?v=1"></script>
+   <script src="import-core.js?v=1"></script>
+   <script src="import-readers.js?v=1"></script>
+-  <script src="app.js?v=270"></script>
++  <script src="app.js?v=271"></script>
+   <script src="samen-thuis-update-v26-challenges.js?v=260"></script>
+   <script src="account-sync.js?v=2"></script>
+   <script src="inbox-core.js?v=1"></script>
+diff --git a/quotes-core.js b/quotes-core.js
+index dd933d6..4a912aa 100644
+--- a/quotes-core.js
++++ b/quotes-core.js
+@@ -5,10 +5,52 @@
+ })(globalThis, function () {
+   const ROTATION_INTERVAL = 24 * 60 * 60 * 1000;
+ 
++  // Lokale gedachten van de dag (eigen teksten van Samen Thuis, geen citaten van derden).
++  // Vervangt het externe BrainyQuote-script (beveiligingsrisico R4): er draait geen code van derden meer in de pagina.
++  const LOCAL_QUOTES = [
++    'Een opgeruimd aanrecht begint met één bord in de vaatwasser.',
++    'Samen plannen is de helft van het werk delen.',
++    'Kleine gewoontes maken een groot verschil in huis.',
++    'Een goed weekmenu bespaart tijd, geld en discussie.',
++    'Vraag vandaag wat de ander nodig heeft, en luister naar het antwoord.',
++    'Rust is ook een taak op de planning.',
++    'Wat je vandaag afvinkt, hoef je morgen niet te onthouden.',
++    'Een gezamenlijk doel maakt sparen lichter.',
++    'Koken voor twee is ook samen tijd maken.',
++    'Een lege boodschappenlijst is een kleine overwinning.',
++    'Vier de kleine dingen: een schone vloer telt ook.',
++    'Wie eerlijk verdeelt, hoeft minder te onderhandelen.',
++    'Een wandeling na het eten maakt de avond langer.',
++    'Thuis is waar je samen de dag afsluit.',
++    'Vandaag één klusje, deze maand een opgeruimd huis.',
++    'Goed voorbereid boodschappen doen voorkomt verspilling.',
++    'Een compliment kost niets en levert veel op.',
++    'Plan ook iets leuks, niet alleen wat moet.',
++    'Overzicht in geld geeft ruimte in je hoofd.',
++    'Samen lachen is het beste huishoudmiddel.',
++    'Een vaste plek voor de sleutels scheelt elke dag zoeken.',
++    'Wat restjes zijn voor de één, is een lunch voor de ander.',
++    'Begin de week met een blik op de agenda, dan verrast niets je.',
++    'Een goed gesprek is beter dan een perfecte planning.',
++    'Ook een rustige zondag is productief.',
++    'Groente in het weekmenu, groente in de boodschappentas.',
++    'Delen wat goed ging is net zo belangrijk als bespreken wat beter kan.',
++    'Een herhaalde taak wordt een gewoonte; een gewoonte wordt makkelijk.',
++    'Neem vandaag even de tijd voor elkaar.',
++    'Een huis wordt een thuis door wat je er samen doet.'
++  ];
++
+   function shouldRefresh(lastCheckedAt, now = Date.now()) {
+     const checked = Date.parse(lastCheckedAt || '');
+     return !Number.isFinite(checked) || checked > now || now - checked >= ROTATION_INTERVAL;
+   }
+ 
+-  return { ROTATION_INTERVAL, shouldRefresh };
++  // Deterministisch per kalenderdag (YYYY-MM-DD): beide huishoudleden zien dezelfde tekst, ook offline.
++  function localQuoteFor(dateISO) {
++    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateISO || ''));
++    const day = match ? Math.floor(Date.UTC(+match[1], +match[2] - 1, +match[3]) / 86400000) : 0;
++    return { text: LOCAL_QUOTES[Math.abs(day) % LOCAL_QUOTES.length], source: 'Samen Thuis' };
++  }
++
++  return { ROTATION_INTERVAL, LOCAL_QUOTES, shouldRefresh, localQuoteFor };
+ });
+diff --git a/quotes-core.test.js b/quotes-core.test.js
+index f880aac..6812e28 100644
+--- a/quotes-core.test.js
++++ b/quotes-core.test.js
+@@ -10,3 +10,26 @@ test('quote feed refreshes on first load and no more than daily afterward', () =
+   assert.equal(Q.shouldRefresh('2026-10-11T12:00:01Z', now), false);
+   assert.equal(Q.shouldRefresh('2026-10-13T12:00:00Z', now), true);
+ });
++
++test('lokale gedachte van de dag: deterministisch per datum, altijd tekst, ook bij ongeldige datum (R4-vervanging)', () => {
++  const a = Q.localQuoteFor('2026-11-08');
++  assert.equal(a.text, Q.localQuoteFor('2026-11-08').text);
++  assert.notEqual(a.text, Q.localQuoteFor('2026-11-09').text);
++  assert.ok(Q.LOCAL_QUOTES.includes(a.text));
++  assert.equal(a.source, 'Samen Thuis');
++  assert.ok(Q.localQuoteFor('onzin').text.length > 10);
++  assert.equal(new Set(Q.LOCAL_QUOTES).size, Q.LOCAL_QUOTES.length, 'geen dubbele teksten');
++});
++
++test('renderQuote toont een lokale gedachte zonder netwerk en verwijst niet meer naar het externe script', () => {
++  const src = require('node:fs').readFileSync(__dirname + '/app.js', 'utf8');
++  const body = src.slice(src.indexOf('function renderQuote()'), src.indexOf('function tripFolderById'));
++  assert.match(body, /localQuoteFor\(todayISO\(\)\)/);
++  assert.match(body, /esc\(local\.text\)/);
++});
++
++test('index.html laadt geen extern script meer (R4: BrainyQuote-script verwijderd)', () => {
++  const html = require('node:fs').readFileSync(__dirname + '/index.html', 'utf8');
++  assert.doesNotMatch(html, /<script[^>]+src="https?:/i);
++  assert.doesNotMatch(html, /brainyquote\.com\/link\/quotebr\.js|brainyQuoteSource/);
++});
+diff --git a/sw.js b/sw.js
+index f18f6b9..f8915f3 100644
+--- a/sw.js
++++ b/sw.js
+@@ -1,7 +1,7 @@
+ // Service worker Samen Thuis. Versiebeheer: verhoog CACHE bij elke wijziging in index.html of een asset-versie (?v=).
+ // sw-assets.test.js controleert dat elke stylesheet en elk script uit index.html hier voorkomt (offline volledig).
+-const CACHE='samen-thuis-v37-precache';
+-const ASSETS=['./','./index.html','./css/tokens.css?v=249','./css/base.css?v=249','./css/layout.css?v=252','./css/components.css?v=249','./styles.css?v=256','./sportcoach.css?v=2','./shell.css?v=3','./css/personalization.css?v=5','./css/finance.css?v=1','./data-core.js?v=249','./savings-core.js?v=1','./offers-core.js?v=5','./dashboard-core.js?v=3','./chalkboard-core.js?v=1','./household-sync-core.js?v=1','./personal-preferences-core.js?v=4','./budget-ledger-core.js?v=3','./finance-plan-core.js?v=1','./finance-ui.js?v=1','./quotes-core.js?v=1','./rewards-core.js?v=1','./freezer-core.js?v=1','./weather-advice-core.js?v=1','./sportcoach-core.js?v=2','./nav-core.js?v=2','./search-core.js?v=1','./import-core.js?v=1','./import-readers.js?v=1','./app.js?v=270','./samen-thuis-update-v26-challenges.js?v=260','./account-sync.js?v=2','./inbox-core.js?v=1','./inbox.js?v=1','./weather-extras.js?v=1','./sportcoach.js?v=6','./nav-groups.js?v=3','./search.js?v=1','./manifest.webmanifest','./icon.svg'];
++const CACHE='samen-thuis-v38-r4';
++const ASSETS=['./','./index.html','./css/tokens.css?v=249','./css/base.css?v=249','./css/layout.css?v=252','./css/components.css?v=249','./styles.css?v=256','./sportcoach.css?v=2','./shell.css?v=3','./css/personalization.css?v=5','./css/finance.css?v=1','./data-core.js?v=249','./savings-core.js?v=1','./offers-core.js?v=5','./dashboard-core.js?v=3','./chalkboard-core.js?v=1','./household-sync-core.js?v=1','./personal-preferences-core.js?v=4','./budget-ledger-core.js?v=3','./finance-plan-core.js?v=1','./finance-ui.js?v=1','./quotes-core.js?v=2','./rewards-core.js?v=1','./freezer-core.js?v=1','./weather-advice-core.js?v=1','./sportcoach-core.js?v=2','./nav-core.js?v=2','./search-core.js?v=1','./import-core.js?v=1','./import-readers.js?v=1','./app.js?v=271','./samen-thuis-update-v26-challenges.js?v=260','./account-sync.js?v=2','./inbox-core.js?v=1','./inbox.js?v=1','./weather-extras.js?v=1','./sportcoach.js?v=6','./nav-groups.js?v=3','./search.js?v=1','./manifest.webmanifest','./icon.svg'];
+ 
+ self.addEventListener('install',event=>{
+   event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(ASSETS)).then(()=>self.skipWaiting()));
+-- 
+2.43.0
+
