@@ -1,0 +1,460 @@
+From 699399812f3c51ab571805cc1e94cba1f1b41a67 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 8 Nov 2026 15:13:43 +0100
+Subject: [PATCH] R5: externe bibliotheken exact gepind met SRI; pdf.js via
+ geverifieerde import (roadmap PR-6, zonder SheetJS-upgrade)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01DXboTXW7c38F7h8Qy7T4q3
+---
+ app.js                 |  19 ++++---
+ cdn-libs.js            | 111 +++++++++++++++++++++++++++++++++++++++++
+ cdn-libs.test.js       |  65 ++++++++++++++++++++++++
+ e2e/import-browser.mjs | 111 +++++++++++++++++++++++++++++++++++++++++
+ index.html             |   3 +-
+ scripts/verify-sri.mjs |  23 +++++++++
+ sw.js                  |   4 +-
+ 7 files changed, 326 insertions(+), 10 deletions(-)
+ create mode 100644 cdn-libs.js
+ create mode 100644 cdn-libs.test.js
+ create mode 100644 e2e/import-browser.mjs
+ create mode 100644 scripts/verify-sri.mjs
+
+diff --git a/app.js b/app.js
+index 3a07171..3f257e0 100644
+--- a/app.js
++++ b/app.js
+@@ -1316,9 +1316,14 @@ function importTravelPlan(text, folderId) {
+   toast(`${added} onderdelen verdeeld · ${checkableCount} om af te vinken${skipped ? ` · ${skipped} overgeslagen` : ''}`);
+ }
+ 
++// R5: pdf.js wordt alleen geladen na SHA-384-controle (cdn-libs.js); zonder register faalt het veilig.
++async function loadVerifiedPdfjs() {
++  if (!window.SamenThuisCdn?.loadPdfjs) throw Object.assign(new Error('Bibliotheekregister ontbreekt; PDF lezen is niet mogelijk.'), { libraryLoad: true });
++  return window.SamenThuisCdn.loadPdfjs();
++}
++
+ async function extractPdfText(file) {
+-  const pdfjs = await import(PDFJS_URL);
+-  pdfjs.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
++  const pdfjs = await loadVerifiedPdfjs();
+   const loadingTask = pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) });
+   const pdf = await loadingTask.promise;
+   const pages = [];
+@@ -2548,6 +2553,7 @@ console.info('Samen Thuis update 12.0 geladen');
+     await new Promise((resolve,reject) => {
+       const script = document.createElement('script');
+       script.src = src;
++      window.SamenThuisCdn?.applyIntegrity(script, src);
+       script.onload = resolve;
+       script.onerror = reject;
+       document.head.appendChild(script);
+@@ -3417,7 +3423,7 @@ console.info('Samen Thuis update 13.1 geladen');
+     if(test()) return;
+     await new Promise((resolve,reject)=>{
+       const s=document.createElement('script');
+-      s.src=src;s.onload=resolve;s.onerror=reject;document.head.appendChild(s);
++      s.src=src;window.SamenThuisCdn?.applyIntegrity(s,src);s.onload=resolve;s.onerror=reject;document.head.appendChild(s);
+     });
+   }
+ 
+@@ -3993,7 +3999,7 @@ console.info('Samen Thuis update 14.1 geladen');
+     if(test()) return;
+     await new Promise((resolve,reject)=>{
+       const s=document.createElement('script');
+-      s.src=src; s.onload=resolve;
++      s.src=src; window.SamenThuisCdn?.applyIntegrity(s,src); s.onload=resolve;
+       s.onerror=()=>{ s.remove(); reject(libError14()); };
+       document.head.appendChild(s);
+     });
+@@ -4002,7 +4008,7 @@ console.info('Samen Thuis update 14.1 geladen');
+   let ocrWorker14 = null;
+   async function ocrWorker() {
+     if(!ocrWorker14) {
+-      await loadScript14('https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js',()=>Boolean(window.Tesseract));
++      await loadScript14('https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js',()=>Boolean(window.Tesseract));
+       ocrWorker14 = Promise.resolve(window.Tesseract.createWorker('nld+eng')).catch(err=>{ ocrWorker14=null; throw libError14('OCR-taaldata kon niet worden geladen'); });
+     }
+     return ocrWorker14;
+@@ -4011,8 +4017,7 @@ console.info('Samen Thuis update 14.1 geladen');
+   const READ_ENV14 = {
+     async loadPdfjs() {
+       let pdfjs;
+-      try { pdfjs = await import(PDFJS_URL); } catch(err) { throw libError14(); }
+-      pdfjs.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
++      try { pdfjs = await loadVerifiedPdfjs(); } catch(err) { throw err && err.integrity ? err : libError14(); }
+       return pdfjs;
+     },
+     async loadMammoth() {
+diff --git a/cdn-libs.js b/cdn-libs.js
+new file mode 100644
+index 0000000..d2a2178
+--- /dev/null
++++ b/cdn-libs.js
+@@ -0,0 +1,111 @@
++(function (root, factory) {
++  const core = factory();
++  if (typeof module === 'object' && module.exports) module.exports = core;
++  root.SamenThuisCdn = core;
++})(globalThis, function () {
++  'use strict';
++  // Centraal register van externe bibliotheken (R5): exacte versie + Subresource Integrity (SHA-384).
++  // Hashes berekend uit de npm-pakketbestanden die jsDelivr ongewijzigd serveert (zie scripts/verify-sri.mjs).
++  // Een gewijzigd of gemanipuleerd bestand wordt door de browser geweigerd: de functie faalt veilig met een duidelijke melding.
++  const LIBS = {
++    mammoth: {
++      url: 'https://cdn.jsdelivr.net/npm/mammoth@1.12.2/mammoth.browser.min.js',
++      integrity: 'sha384-DYoASd6UI7j/h+Qtb74PSAmuACrSKT3zuAFTlrgfDUHIR2vT0pHrg8EtI95fBv/G',
++      license: 'BSD-2-Clause'
++    },
++    // Bekende kwetsbaarheden in 0.18.5 (o.a. CVE-2024-22363). Upgrade kan alleen via cdn.sheetjs.com;
++    // dat bestand kon in deze omgeving niet worden opgehaald om een hash te berekenen. Open punt R3.
++    xlsx: {
++      url: 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',
++      integrity: 'sha384-vtjasyidUo0kW94K5MXDXntzOJpQgBKXmE7e2Ga4LG0skTTLeBi97eFAXsqewJjw',
++      license: 'Apache-2.0'
++    },
++    // Was `tesseract.js@5` (zwevende versie). Nu exact 5.1.1. Worker en taaldata laadt tesseract zelf (zonder SRI): restrisico.
++    tesseract: {
++      url: 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js',
++      integrity: 'sha384-GJqSu7vueQ9qN0E9yLPb3Wtpd7OrgK8KmYzC8T1IysG1bcvxvIO4qtYR/D3A991F',
++      license: 'Apache-2.0'
++    },
++    pdfjs: {
++      url: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.min.mjs',
++      integrity: 'sha384-+0ti2moQlmLN7WZHE2RHIf5lV8hHxhxEalN0il3YZceG26fUPyOkR0hp9daxk1i7',
++      license: 'Apache-2.0'
++    },
++    pdfjsWorker: {
++      url: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.min.mjs',
++      integrity: 'sha384-ToeVvShCxKc6CEvhHeMt0Q8A06pSPDbAlngO9nokrDmh914gk/pYd0N7D0a4Lz2o',
++      license: 'Apache-2.0'
++    }
++  };
++
++  // Oude, zwevende URL's die nog in oudere code kunnen voorkomen → exacte, gepinde URL.
++  const ALIASES = {
++    'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js': 'tesseract'
++  };
++
++  function entryForUrl(src) {
++    const s = String(src || '');
++    if (ALIASES[s]) return LIBS[ALIASES[s]];
++    return Object.values(LIBS).find(lib => lib.url === s) || null;
++  }
++
++  // Zet exacte URL + integrity + crossorigin op een <script>-element. Onbekende bronnen blijven ongemoeid (geen stille wijziging).
++  function applyIntegrity(script, src) {
++    const lib = entryForUrl(src);
++    if (!script || !lib) return false;
++    script.src = lib.url;
++    script.integrity = lib.integrity;
++    script.crossOrigin = 'anonymous';
++    script.referrerPolicy = 'no-referrer';
++    return true;
++  }
++
++  function bytesToBase64(bytes) {
++    if (typeof Buffer !== 'undefined') return Buffer.from(bytes).toString('base64');
++    let binary = '';
++    for (let i = 0; i < bytes.length; i += 1) binary += String.fromCharCode(bytes[i]);
++    return btoa(binary);
++  }
++
++  async function sriOf(buffer, subtle = globalThis.crypto && globalThis.crypto.subtle) {
++    const digest = await subtle.digest('SHA-384', buffer);
++    return 'sha384-' + bytesToBase64(new Uint8Array(digest));
++  }
++
++  const integrityError = name => Object.assign(new Error(`Bibliotheek ${name} is niet vertrouwd (integriteitscontrole mislukt); er is niets geladen.`), { libraryLoad: true, integrity: true });
++  const loadError = name => Object.assign(new Error(`Bibliotheek ${name} kon niet worden geladen (geen internetverbinding?)`), { libraryLoad: true });
++
++  // Haalt een bestand op en controleert de SHA-384 vóór gebruik. Geeft de bytes terug.
++  async function fetchVerified(name, { fetchImpl = globalThis.fetch, subtle } = {}) {
++    const lib = LIBS[name];
++    if (!lib) throw new Error('Onbekende bibliotheek: ' + name);
++    let response;
++    try { response = await fetchImpl(lib.url, { mode: 'cors', credentials: 'omit', referrerPolicy: 'no-referrer' }); }
++    catch (_) { throw loadError(name); }
++    if (!response || !response.ok) throw loadError(name);
++    const buffer = await response.arrayBuffer();
++    if (await sriOf(buffer, subtle) !== lib.integrity) throw integrityError(name);
++    return buffer;
++  }
++
++  // ES-module (pdf.js) laden met integriteitscontrole: dynamische import() kent geen integrity-attribuut,
++  // daarom eerst controleren en daarna uit een blob-URL importeren.
++  const blobUrls = {};
++  async function verifiedBlobUrl(name, deps = {}) {
++    if (blobUrls[name]) return blobUrls[name];
++    const buffer = await fetchVerified(name, deps);
++    blobUrls[name] = URL.createObjectURL(new Blob([buffer], { type: 'text/javascript' }));
++    return blobUrls[name];
++  }
++  async function importVerified(name, deps = {}) {
++    const url = await verifiedBlobUrl(name, deps);
++    return import(url);
++  }
++  async function loadPdfjs() {
++    const pdfjs = await importVerified('pdfjs');
++    pdfjs.GlobalWorkerOptions.workerSrc = await verifiedBlobUrl('pdfjsWorker');
++    return pdfjs;
++  }
++
++  return { LIBS, ALIASES, entryForUrl, applyIntegrity, sriOf, fetchVerified, importVerified, verifiedBlobUrl, loadPdfjs };
++});
+diff --git a/cdn-libs.test.js b/cdn-libs.test.js
+new file mode 100644
+index 0000000..a671a94
+--- /dev/null
++++ b/cdn-libs.test.js
+@@ -0,0 +1,65 @@
++// R5: externe bibliotheken alleen exact gepind en met SHA-384-integriteitscontrole.
++const test = require('node:test');
++const assert = require('node:assert/strict');
++const fs = require('node:fs');
++const { webcrypto } = require('node:crypto');
++const CDN = require('./cdn-libs.js');
++
++const read = f => fs.readFileSync(__dirname + '/' + f, 'utf8');
++
++test('elke bibliotheek heeft een exacte versie, https-URL en sha384-integrity', () => {
++  for (const [name, lib] of Object.entries(CDN.LIBS)) {
++    assert.match(lib.url, /^https:\/\/cdn\.jsdelivr\.net\/npm\/[a-z.-]+@\d+\.\d+\.\d+\//, name);
++    assert.match(lib.integrity, /^sha384-[A-Za-z0-9+/]{64}$/, name);
++  }
++});
++
++test('elke CDN-URL in de app staat in het register (geen ongepinde of onbekende externe code)', () => {
++  const urls = new Set();
++  for (const f of ['app.js', 'index.html', 'import-readers.js']) {
++    for (const m of read(f).matchAll(/https:\/\/(?:cdn\.jsdelivr\.net|unpkg\.com|cdnjs\.cloudflare\.com|cdn\.sheetjs\.com)[^'"`\s)]*/g)) urls.add(m[0]);
++  }
++  assert.ok(urls.size >= 4);
++  for (const url of urls) assert.ok(CDN.entryForUrl(url), 'niet geregistreerd: ' + url);
++  assert.doesNotMatch(read('app.js'), /tesseract\.js@5\//, 'tesseract moet exact gepind zijn');
++});
++
++test('index.html laadt geen externe scripts meer (BrainyQuote verwijderd, R4)', () => {
++  const html = read('index.html');
++  assert.doesNotMatch(html, /<script[^>]+src="https?:/i);
++  assert.doesNotMatch(html, /brainyquote\.com\/link\/quotebr\.js/);
++  assert.match(html, /<script src="cdn-libs\.js\?v=\d+"><\/script>[\s\S]*<script src="app\.js/);
++});
++
++test('alle scriptladers in app.js zetten integrity via het register', () => {
++  const src = read('app.js');
++  const loaders = src.match(/createElement\('script'\)[\s\S]{0,160}/g) || [];
++  assert.ok(loaders.length >= 3);
++  for (const l of loaders) assert.match(l, /SamenThuisCdn\?\.applyIntegrity/);
++  assert.doesNotMatch(src, /import\(PDFJS_URL\)/, 'pdf.js alleen via geverifieerde import');
++});
++
++test('applyIntegrity: bekende bron krijgt integrity/crossorigin; onbekende bron blijft ongemoeid', () => {
++  const s = {};
++  assert.equal(CDN.applyIntegrity(s, 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js'), true);
++  assert.equal(s.src, CDN.LIBS.tesseract.url);
++  assert.equal(s.integrity, CDN.LIBS.tesseract.integrity);
++  assert.equal(s.crossOrigin, 'anonymous');
++  const other = { src: 'x' };
++  assert.equal(CDN.applyIntegrity(other, 'https://example.org/a.js'), false);
++  assert.deepEqual(other, { src: 'x' });
++});
++
++test('fetchVerified: juiste bytes worden geaccepteerd, gewijzigde bytes geweigerd, netwerkfout duidelijk', async () => {
++  const good = new TextEncoder().encode('console.log(1)');
++  CDN.LIBS.__test = { url: 'https://cdn.jsdelivr.net/npm/x@1.0.0/x.js', integrity: await CDN.sriOf(good, webcrypto.subtle) };
++  try {
++    const ok = { ok: true, arrayBuffer: async () => good.buffer };
++    const buf = await CDN.fetchVerified('__test', { fetchImpl: async () => ok, subtle: webcrypto.subtle });
++    assert.equal(new TextDecoder().decode(buf), 'console.log(1)');
++    const evil = { ok: true, arrayBuffer: async () => new TextEncoder().encode('steal()').buffer };
++    await assert.rejects(CDN.fetchVerified('__test', { fetchImpl: async () => evil, subtle: webcrypto.subtle }), e => e.integrity === true);
++    await assert.rejects(CDN.fetchVerified('__test', { fetchImpl: async () => { throw new TypeError('Failed to fetch'); }, subtle: webcrypto.subtle }), e => e.libraryLoad && !e.integrity);
++    await assert.rejects(CDN.fetchVerified('__test', { fetchImpl: async () => ({ ok: false, status: 404 }), subtle: webcrypto.subtle }), /kon niet worden geladen/);
++  } finally { delete CDN.LIBS.__test; }
++});
+diff --git a/e2e/import-browser.mjs b/e2e/import-browser.mjs
+new file mode 100644
+index 0000000..55b982e
+--- /dev/null
++++ b/e2e/import-browser.mjs
+@@ -0,0 +1,111 @@
++// Browsertest documentimport en scanverwerking (vult de 4 in Node overgeslagen importtests aan).
++// Draait de echte app-laders in Chromium: <script integrity> voor mammoth/SheetJS/tesseract en de geverifieerde
++// blob-import van pdf.js. Twee standen:
++//   E2E_LIVE_CDN=1 node e2e/import-browser.mjs           → echte jsDelivr (vereist internet; test ook de live SRI-hashes)
++//   E2E_NPM_DIR=/pad node e2e/import-browser.mjs         → jsDelivr-URL's worden lokaal beantwoord uit uitgepakte npm-pakketten
++//        (map met o.a. mammoth-1.12.2/package, xlsx-0.18.5/package, pdfjs-dist-4.10.38/package, tesseract.js-5.1.1/package,
++//         tesseract.js-core-5.1.1/package, tesseract.js-data-nld-1.0.0/package, tesseract.js-data-eng-1.0.0/package)
++import { createRequire } from 'node:module';
++import http from 'node:http';
++import fs from 'node:fs';
++import path from 'node:path';
++import { fileURLToPath } from 'node:url';
++
++const require = createRequire(import.meta.url);
++let chromium;
++try { ({ chromium } = require('playwright')); } catch { console.log('SKIP: playwright niet geïnstalleerd'); process.exit(0); }
++const live = process.env.E2E_LIVE_CDN === '1', npmDir = process.env.E2E_NPM_DIR || '';
++if (!live && !npmDir) { console.log('SKIP: zet E2E_LIVE_CDN=1 of E2E_NPM_DIR'); process.exit(0); }
++
++const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
++const types = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.wasm': 'application/wasm', '.gz': 'application/gzip' };
++const server = http.createServer((req, res) => {
++  const p = path.join(root, decodeURIComponent(new URL(req.url, 'http://x').pathname));
++  const file = p.endsWith('/') ? path.join(p, 'index.html') : p;
++  if (!file.startsWith(root) || !fs.existsSync(file)) { res.writeHead(404); res.end(); return; }
++  res.writeHead(200, { 'Content-Type': types[path.extname(file)] || 'application/octet-stream' }); fs.createReadStream(file).pipe(res);
++}).listen(0);
++const base = `http://localhost:${server.address().port}/`;
++const served = [];
++// https://cdn.jsdelivr.net/npm/<pakket>@<versie>/<pad> → <npmDir>/<pakket-zonder-scope>-<versie>/package/<pad>
++function localFor(url) {
++  // Ook zonder versie (tesseract-taaldata: /npm/@tesseract.js-data/nld/4.0.0_best_int/nld.traineddata.gz).
++  const m = /^https:\/\/cdn\.jsdelivr\.net\/npm\/((?:@[^/]+\/)?[^@/]+)(?:@v?([^/]+))?\/(.+)$/.exec(url.split('?')[0]);
++  if (!m) return null;
++  const name = m[1].replace(/^@/, '').replace('/', '-');
++  const dirs = fs.readdirSync(npmDir).filter(d => d.startsWith(name + '-') && fs.existsSync(path.join(npmDir, d, 'package')));
++  const exact = (m[2] && dirs.find(d => d === `${name}-${m[2]}`)) || dirs[0];
++  const file = exact && path.join(npmDir, exact, 'package', m[3]);
++  return file && fs.existsSync(file) ? file : null;
++}
++
++const results = []; let failed = 0;
++const check = (name, ok, detail = '') => { console.error((ok ? 'OK  ' : 'FOUT') + ' ' + name + ' ' + detail); results.push(`${ok ? 'OK  ' : 'FOUT'} ${name}${detail ? ' — ' + detail : ''}`); if (!ok) failed++; };
++const browser = await chromium.launch();
++const context = await browser.newContext();
++await context.route(u => !u.href.startsWith(base), async route => {
++  const url = route.request().url();
++  if (/^https:\/\/cdn\.jsdelivr\.net\//.test(url)) {
++    if (live) return route.continue();
++    const file = localFor(url);
++    if (!file) { console.error('niet lokaal beschikbaar: ' + url); return route.fulfill({ status: 404, body: 'niet lokaal: ' + url }); }
++    served.push(url);
++    return route.fulfill({ status: 200, path: file, headers: { 'content-type': types[path.extname(file)] || 'application/octet-stream', 'access-control-allow-origin': '*' } });
++  }
++  return route.abort();
++});
++const page = await context.newPage();
++const errors = []; page.on('pageerror', e => errors.push(e.message));
++await page.goto(base, { waitUntil: 'load' }); await page.waitForTimeout(800);
++
++async function read(name) {
++  return page.evaluate(async n => {
++    const buf = await (await fetch('test-fixtures/import/' + n)).arrayBuffer();
++    const file = new File([buf], n);
++    const r = await window.SamenThuisImportReaders.readFile(file, window.__samenThuisUniversalImport.env);
++    const a = await window.SamenThuisImport.analyse([r], { today: '2026-10-01' });
++    return { status: r.status, message: r.message, titles: a.entries.map(e => e.rec.title), where: a.entries.map(e => e.source.where), count: a.reports[0] && a.reports[0].count };
++  }, name);
++}
++
++let r = await read('reisplan.pdf');
++check('PDF via geverifieerde pdf.js-import (blob + SHA-384)', r.status === 'ok' && r.titles.length > 0, `${r.status}, ${r.titles.length} items ${r.message || ''}`);
++r = await read('klus.docx');
++check('DOCX via mammoth met integrity-attribuut', r.status === 'ok' && r.titles.includes('Rookmelder controleren'), `${r.status} ${r.message || ''}`);
++r = await read('multi.xlsx');
++const sheets = [...new Set(r.where.map(w => (w.match(/werkblad '([^']+)'/) || [])[1]).filter(Boolean))].sort();
++check('XLSX via SheetJS: alle werkbladen in de bronvermelding', r.status === 'ok' && sheets.join(',') === 'Agenda,Boodschappen,Voorraad', `${r.status} ${sheets.join(',')}`);
++r = await read('multi.xls');
++check('XLS (oud Excel-formaat) via SheetJS', r.status === 'ok' && r.titles.length > 0, `${r.status} ${r.titles.length}`);
++r = await read('boodschappen.png');
++check('OCR van een afbeelding (tesseract.js 5.1.1, nld+eng)', ['ok', 'partial'].includes(r.status) && r.titles.some(t => /appel/i.test(t)), `${r.status} ${r.titles.slice(0, 4).join(', ')} ${r.message || ''}`);
++r = await read('scan.pdf');
++check('Gescande PDF via OCR', ['ok', 'partial'].includes(r.status) && r.titles.length > 0, `${r.status} ${r.titles.slice(0, 3).join(', ')} ${r.message || ''}`);
++
++// Integriteit: een gemanipuleerd bestand moet worden geweigerd (alleen in lokale stand te simuleren).
++if (!live) {
++  const ctx2 = await browser.newContext();
++  await ctx2.route(u => !u.href.startsWith(base), route => /mammoth/.test(route.request().url())
++    ? route.fulfill({ status: 200, body: 'window.mammoth={extractRawText:()=>({value:"gemanipuleerd"})}', headers: { 'content-type': 'text/javascript', 'access-control-allow-origin': '*' } })
++    : /pdf\.min\.mjs/.test(route.request().url()) ? route.fulfill({ status: 200, body: 'export const x=1', headers: { 'content-type': 'text/javascript', 'access-control-allow-origin': '*' } })
++    : route.abort());
++  const p2 = await ctx2.newPage(); await p2.goto(base, { waitUntil: 'load' }); await p2.waitForTimeout(500);
++  const tamper = await p2.evaluate(async () => {
++    const out = {};
++    for (const n of ['klus.docx', 'reisplan.pdf']) {
++      const file = new File([await (await fetch('test-fixtures/import/' + n)).arrayBuffer()], n);
++      const r = await window.SamenThuisImportReaders.readFile(file, window.__samenThuisUniversalImport.env);
++      out[n] = { status: r.status, message: r.message, mammoth: typeof window.mammoth };
++    }
++    return out;
++  });
++  check('gemanipuleerde mammoth wordt door de browser geweigerd (SRI)', tamper['klus.docx'].status === 'unreadable' && tamper['klus.docx'].mammoth === 'undefined', JSON.stringify(tamper['klus.docx']));
++  check('gemanipuleerde pdf.js wordt geweigerd vóór uitvoering', tamper['reisplan.pdf'].status === 'unreadable', tamper['reisplan.pdf'].message);
++  await ctx2.close();
++}
++check('geen JavaScript-fouten', errors.length === 0, errors.slice(0, 2).join(' | '));
++await browser.close(); server.close();
++console.log(results.join('\n'));
++console.log(`\nStand: ${live ? 'live jsDelivr' : 'lokale npm-bestanden (' + new Set(served.map(u => u.split('/npm/')[1].split('/')[0])).size + ' pakketten)'}`);
++console.log(`${results.length - failed} geslaagd, ${failed} mislukt`);
++process.exit(failed ? 1 : 0);
+diff --git a/index.html b/index.html
+index b7c356c..917846d 100644
+--- a/index.html
++++ b/index.html
+@@ -91,6 +91,7 @@
+ 
+   <div id="toast" class="toast" role="status"></div>
+ 
++  <script src="cdn-libs.js?v=1"></script>
+   <script src="data-core.js?v=249"></script>
+   <script src="savings-core.js?v=1"></script>
+   <script src="offers-core.js?v=5"></script>
+@@ -110,7 +111,7 @@
+   <script src="search-core.js?v=1"></script>
+   <script src="import-core.js?v=1"></script>
+   <script src="import-readers.js?v=1"></script>
+-  <script src="app.js?v=271"></script>
++  <script src="app.js?v=272"></script>
+   <script src="samen-thuis-update-v26-challenges.js?v=260"></script>
+   <script src="account-sync.js?v=2"></script>
+   <script src="inbox-core.js?v=1"></script>
+diff --git a/scripts/verify-sri.mjs b/scripts/verify-sri.mjs
+new file mode 100644
+index 0000000..013b34e
+--- /dev/null
++++ b/scripts/verify-sri.mjs
+@@ -0,0 +1,23 @@
++// Controleert of de SRI-hashes in cdn-libs.js overeenkomen met de bestanden die jsDelivr nu serveert.
++// Gebruik (met internet): node scripts/verify-sri.mjs   → exitcode 0 bij volledige overeenstemming.
++// Draai dit vóór het mergen of wijzigen van een bibliotheekversie.
++import { createRequire } from 'node:module';
++import { webcrypto } from 'node:crypto';
++const require = createRequire(import.meta.url);
++const { LIBS, sriOf } = require('../cdn-libs.js');
++
++let failed = 0;
++for (const [name, lib] of Object.entries(LIBS)) {
++  try {
++    const res = await fetch(lib.url);
++    if (!res.ok) throw new Error('HTTP ' + res.status);
++    const actual = await sriOf(await res.arrayBuffer(), webcrypto.subtle);
++    const ok = actual === lib.integrity;
++    if (!ok) failed += 1;
++    console.log(`${ok ? 'OK  ' : 'FOUT'} ${name} ${lib.url}${ok ? '' : `\n     verwacht ${lib.integrity}\n     gekregen ${actual}`}`);
++  } catch (error) {
++    failed += 1;
++    console.log(`FOUT ${name} ${lib.url}: ${error.message}`);
++  }
++}
++process.exit(failed ? 1 : 0);
+diff --git a/sw.js b/sw.js
+index f8915f3..8fd824d 100644
+--- a/sw.js
++++ b/sw.js
+@@ -1,7 +1,7 @@
+ // Service worker Samen Thuis. Versiebeheer: verhoog CACHE bij elke wijziging in index.html of een asset-versie (?v=).
+ // sw-assets.test.js controleert dat elke stylesheet en elk script uit index.html hier voorkomt (offline volledig).
+-const CACHE='samen-thuis-v38-r4';
+-const ASSETS=['./','./index.html','./css/tokens.css?v=249','./css/base.css?v=249','./css/layout.css?v=252','./css/components.css?v=249','./styles.css?v=256','./sportcoach.css?v=2','./shell.css?v=3','./css/personalization.css?v=5','./css/finance.css?v=1','./data-core.js?v=249','./savings-core.js?v=1','./offers-core.js?v=5','./dashboard-core.js?v=3','./chalkboard-core.js?v=1','./household-sync-core.js?v=1','./personal-preferences-core.js?v=4','./budget-ledger-core.js?v=3','./finance-plan-core.js?v=1','./finance-ui.js?v=1','./quotes-core.js?v=2','./rewards-core.js?v=1','./freezer-core.js?v=1','./weather-advice-core.js?v=1','./sportcoach-core.js?v=2','./nav-core.js?v=2','./search-core.js?v=1','./import-core.js?v=1','./import-readers.js?v=1','./app.js?v=271','./samen-thuis-update-v26-challenges.js?v=260','./account-sync.js?v=2','./inbox-core.js?v=1','./inbox.js?v=1','./weather-extras.js?v=1','./sportcoach.js?v=6','./nav-groups.js?v=3','./search.js?v=1','./manifest.webmanifest','./icon.svg'];
++const CACHE='samen-thuis-v39-sri';
++const ASSETS=['./','./index.html','./css/tokens.css?v=249','./css/base.css?v=249','./css/layout.css?v=252','./css/components.css?v=249','./styles.css?v=256','./sportcoach.css?v=2','./shell.css?v=3','./css/personalization.css?v=5','./css/finance.css?v=1','./cdn-libs.js?v=1','./data-core.js?v=249','./savings-core.js?v=1','./offers-core.js?v=5','./dashboard-core.js?v=3','./chalkboard-core.js?v=1','./household-sync-core.js?v=1','./personal-preferences-core.js?v=4','./budget-ledger-core.js?v=3','./finance-plan-core.js?v=1','./finance-ui.js?v=1','./quotes-core.js?v=2','./rewards-core.js?v=1','./freezer-core.js?v=1','./weather-advice-core.js?v=1','./sportcoach-core.js?v=2','./nav-core.js?v=2','./search-core.js?v=1','./import-core.js?v=1','./import-readers.js?v=1','./app.js?v=272','./samen-thuis-update-v26-challenges.js?v=260','./account-sync.js?v=2','./inbox-core.js?v=1','./inbox.js?v=1','./weather-extras.js?v=1','./sportcoach.js?v=6','./nav-groups.js?v=3','./search.js?v=1','./manifest.webmanifest','./icon.svg'];
+ 
+ self.addEventListener('install',event=>{
+   event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(ASSETS)).then(()=>self.skipWaiting()));
+-- 
+2.43.0
+
