@@ -38,6 +38,8 @@
       { key: 'planning', label: 'Agenda', icon: 'calendar', page: 'planning', items: list(d.planning) },
       { key: 'tasks', label: 'Taken', icon: 'check', page: 'tasks', items: list(d.tasks) },
       { key: 'meals', label: 'Weekmenu', icon: 'utensils', page: 'meals', items: list(d.meals) },
+      { key: 'voeding-recepten', label: 'Voeding · Recepten', icon: 'book', page: 'voeding', sub: 'recepten', items: list(d.nutrition && d.nutrition.recipes).map(r => ({ id: r.id, title: r.title, tags: r.tags, ingredients: list(r.ingredients).map(i => i.name || i.text).filter(Boolean) })) },
+      { key: 'voeding-producten', label: 'Voeding · Producten', icon: 'box', page: 'voeding', sub: 'producten', items: list(d.nutrition && d.nutrition.products).map(p => ({ id: p.id, title: p.name, brand: p.brand, barcode: p.barcode })) },
       { key: 'groceries', label: 'Boodschappen', icon: 'cart', page: 'groceries', items: [...list(d.groceries), ...list(d.priceReferences)] },
       { key: 'stock', label: 'Voorraad & vriezer', icon: 'box', page: 'stock', items: [...list(d.stock), ...list(d.freezer)] },
       { key: 'chores', label: 'Routines', icon: 'repeat', page: 'chores', items: list(d.chores) },

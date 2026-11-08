@@ -1,5 +1,7 @@
 # Integratie- en API-status Samen Thuis
 
+> **Historisch document.** De actuele stand staat in [docs/API_INTEGRATIONS.md](docs/API_INTEGRATIONS.md) (2026-11-08). De melding hieronder dat `data-core.test.js` faalt is achterhaald: de test slaagt.
+
 De primaire applicatie blijft leidend: de aanvullende repository gebruikt ES-modules, terwijl de hoofdapp een klassieke JavaScript-entrypoint met bestaande lokale opslag en synchronisatie gebruikt. De aanvullende functies zijn daarom in de bestaande appstructuur aangesloten; bestaande pagina's, gegevens en vormgeving blijven behouden.
 
 ## Aangetroffen externe integraties
