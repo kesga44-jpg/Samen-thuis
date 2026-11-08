@@ -6,6 +6,16 @@
   if (window.__ST_ACCOUNT_SYNC__ || !HS || !AUTH) return;
   window.__ST_ACCOUNT_SYNC__ = true;
   const KEY = 'samenThuisAccountSyncV1', PRE_KEY = 'samenThuisPreAccountSyncBackup';
+  // Laatst gesynchroniseerde waarde per onderdeel (per account + huishouden): basis voor automatisch samenvoegen.
+  // Alleen op dit apparaat. Past het niet in de opslag, dan valt de app terug op "kies per onderdeel" (geen dataverlies).
+  const BASE_VALUES_KEY = 'samenThuisAccountSyncBaseValuesV1';
+  const loadBaseValues = () => { try { const all = JSON.parse(localStorage.getItem(BASE_VALUES_KEY) || '{}'); return (all && all[slot()]) || {}; } catch (_) { return {}; } };
+  const storeBaseValues = values => {
+    try { localStorage.setItem(BASE_VALUES_KEY, JSON.stringify({ [slot()]: values })); return true; }
+    catch (_) { try { localStorage.removeItem(BASE_VALUES_KEY); } catch (__) {} console.warn('Basis voor samenvoegen past niet in de opslag; bij gelijktijdige wijzigingen wordt om een keuze gevraagd.'); return false; }
+  };
+  const SECTION_LABELS = { groceries: 'boodschappen', meals: 'weekmenu', planning: 'agenda', chores: 'routines', tasks: 'taken', stock: 'voorraad', freezer: 'vriezer', ideas: 'date-ideeën', home: 'woning', trips: 'reizen', tripFolders: 'reizen', tripSections: 'reizen', budgetV23: 'financiën', nutrition: 'voeding', challengeDataV26: 'challenges', sportCoach: 'sport', dailyAnswers: 'vraag van de dag' };
+  const label = s => SECTION_LABELS[s] || s;
   const st = { household: null, conflicts: [], message: '', busy: false, uid: AUTH.session()?.user?.id || '' };
   // Accountwissel: nooit huishouden/conflicten van het vorige account blijven gebruiken.
   function syncIdentity() {
@@ -38,7 +48,7 @@
       if (!st.household) throw new Error('Dit account is nog geen lid van een huishouden.');
       const cfg = load(), mine = (cfg.bases || {})[slot()] || {};
       const result = await HS.runAccountSync({
-        cloud: c, householdId: st.household.id, local: data, base: mine.base || {},
+        cloud: c, householdId: st.household.id, local: data, base: mine.base || {}, baseValues: loadBaseValues(),
         hold: !!localStorage.getItem(RESTORE_HOLD_KEY), resolutions,
         encrypt: v => encryptData(v, code()), decrypt: p => decryptData(p, code())
       });
@@ -51,8 +61,9 @@
         data = migrateData({ ...data, ...result.pulls });
         if (save({ touch: false, sync: false }) === false) { data = previous; throw new Error('Lokaal opslaan is geblokkeerd; synchronisatie niet afgerond'); }
         const now = HS.sectionsOf(data);
-        pulled.forEach(k => { base[k] = { version: base[k].version, hash: HS.hashValue(now[k]) }; });
+        pulled.forEach(k => { base[k] = { version: base[k].version, hash: HS.hashValue(now[k]) }; result.baseValues[k] = now[k]; });
       }
+      storeBaseValues({ ...loadBaseValues(), ...result.baseValues });
       const next = load(); next.bases = { ...(next.bases || {}), [slot()]: { base, lastSyncedAt: new Date().toISOString() } };
       next.householdId = st.household.id; store(next);
       st.conflicts = result.conflicts;
@@ -61,6 +72,11 @@
         syncConfig.lastSyncedAt = new Date().toISOString(); localStorage.setItem(SYNC_KEY, JSON.stringify(syncConfig));
         try { localStorage.removeItem(RESTORE_HOLD_KEY); } catch (_) {}
         st.message = result.pushed.length || pulled.length ? `Bijgewerkt: ${result.pushed.length} verstuurd, ${pulled.length} ontvangen.` : 'Apparaten zijn gelijk.';
+        if (result.merged && result.merged.length) {
+          const names = [...new Set(result.merged.map(label))].join(', ');
+          st.message = `Wijzigingen van beide apparaten samengevoegd (${names}).`;
+          toast(`Samengevoegd met de wijzigingen van je huisgenoot: ${names}`);
+        }
         if (manual) toast('Apparaten zijn bijgewerkt');
       } else if (result.status === 'conflict') {
         syncError = 'Wijzigingen op beide apparaten; kies per onderdeel welke versie je bewaart.';
@@ -201,7 +217,7 @@
 
   function card() {
     const signed = !!AUTH.session()?.user?.id, on = accountMode();
-    const conflicts = st.conflicts.map(c => `<li class="list-item"><div class="item-main"><strong>${esc2(c.section)}</strong><small>Lokaal en cloud verschillen</small></div><button class="secondary" data-acct-resolve="${esc2(c.section)}:local">Mijn versie</button><button class="secondary" data-acct-resolve="${esc2(c.section)}:remote">Cloudversie</button></li>`).join('');
+    const conflicts = st.conflicts.map(c => `<li class="list-item"><div class="item-main"><strong>${esc2(label(c.section))}</strong><small>${c.fields && c.fields.length ? `Op beide apparaten anders gewijzigd: ${esc2(c.fields.slice(0, 3).join(', '))}${c.fields.length > 3 ? ' …' : ''}` : 'Lokaal en cloud verschillen'}</small></div><button class="primary" data-acct-resolve="${esc2(c.section)}:merge" title="Toevoegingen van beide blijven; is hetzelfde item op beide apparaten anders gewijzigd, dan wint de cloudversie">Beide samenvoegen</button><button class="secondary" data-acct-resolve="${esc2(c.section)}:local">Mijn versie</button><button class="secondary" data-acct-resolve="${esc2(c.section)}:remote">Cloudversie</button></li>`).join('');
     const hh = st.household ? `<p class="muted">Huishouden <strong>${esc2(st.household.name)}</strong> · uitnodigingscode voor je partner: <code>${esc2(st.household.join_code)}</code> (maximaal 2 accounts)</p>` : '';
     const body = (!signed && !on) ? '<p class="muted">Meld je hierboven aan met je persoonlijke account om over te stappen.</p>'
       : on ? `${hh}<div class="button-row"><button class="primary" data-acct-sync>Nu synchroniseren</button><button class="secondary" data-acct-off>Terug naar oude code-sync</button></div>`

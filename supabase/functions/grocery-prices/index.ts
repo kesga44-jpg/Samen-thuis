@@ -1,10 +1,19 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
+import { guard, createRateLimiter, cleanText } from "../_shared/guard.ts";
 
-const cors = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS"
+// R7/PR-8: geen open CORS meer en een gebruikers-JWT is verplicht (zie ../_shared/guard.ts).
+// CORS-headers worden per verzoek toegevoegd door withHeaders().
+const limiter = createRateLimiter(30, 60_000);
+const env = {
+  url: Deno.env.get("SUPABASE_URL") || "",
+  apikey: Deno.env.get("SUPABASE_ANON_KEY") || "",
+  allowedOrigins: Deno.env.get("ALLOWED_ORIGINS") || ""
 };
+function withHeaders(res: Response, headers: Record<string,string>) {
+  const merged = new Headers(res.headers);
+  Object.entries(headers).forEach(([k, v]) => merged.set(k, v));
+  return new Response(res.body, { status: res.status, headers: merged });
+}
 // Provider access is server-side; an API key is optional and must be stored as a Supabase secret.
 const API = "https://www.prijsprofeet.nl/api/v1/search";
 const CATEGORIES_API = "https://www.prijsprofeet.nl/api/v1/categories";
@@ -12,7 +21,7 @@ const PAGE_SIZE = 20;
 const key = Deno.env.get("PRIJS_PROFEET_API_KEY") || "";
 
 function json(body: unknown, status=200) {
-  return new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
+  return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 }
 
 function numberOrNull(value: unknown) {
@@ -169,20 +178,25 @@ async function lookup(item: {id:string;query:string;preferredRetailer?:string}) 
 }
 
 serve(async req => {
-  if (req.method === "OPTIONS") return new Response("ok", { headers:cors });
-  if (req.method !== "POST") return json({error:"Gebruik POST"},405);
+  const gate = await guard(req, { env, limiter });
+  if ("response" in gate) return gate.response;
+  return withHeaders(await handle(gate.body), gate.headers);
+});
+
+async function handle(body: any): Promise<Response> {
   try {
-    const body = await req.json();
     if (body?.categories === true) return await listCategories();
     if (body?.search != null) {
-      const query = String(body.search).trim().slice(0, 100);
+      const query = cleanText(body.search, 100);
       if (!query) return json({error:"Vul een productnaam of merk in"},400);
       const category = String(body.category || "").trim().slice(0, 60);
       if (category && !/^[a-z0-9-]+$/.test(category)) return json({error:"Ongeldige categorie"},400);
       const page = Math.min(20, Math.max(1, Math.floor(Number(body.page)) || 1));
       return await searchOffers(query, category, page);
     }
-    const queries = Array.isArray(body?.queries) ? body.queries.slice(0,25) : [];
+    const queries = (Array.isArray(body?.queries) ? body.queries.slice(0,25) : [])
+      .filter((q: any) => q && typeof q === "object")
+      .map((q: any) => ({ id: cleanText(q.id, 80), query: cleanText(q.query, 100), preferredRetailer: cleanText(q.preferredRetailer, 40) }));
     if (!queries.length) return json({results:[]});
     const results=[];
     // Kleine batches beperken de druk op de publieke API.
@@ -192,7 +206,7 @@ serve(async req => {
     }
     return json({results,source:"PrijsProfeet",checkedAt:new Date().toISOString()});
   } catch (error) {
-    console.error(error);
-    return json({error:error instanceof Error?error.message:"Onbekende fout"},500);
+    console.error("grocery-prices mislukt:", error instanceof Error ? error.name : "onbekend");
+    return json({error:"Aanbiedingen ophalen mislukt"},500);
   }
-});
+}
