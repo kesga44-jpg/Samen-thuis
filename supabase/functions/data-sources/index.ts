@@ -1,12 +1,16 @@
-const cors={
-  "Access-Control-Allow-Origin":"*",
-  "Access-Control-Allow-Headers":"authorization, x-client-info, apikey, content-type"
-};
+import { guard, createRateLimiter, cleanText } from "../_shared/guard.ts";
+
+// R7/PR-8: gebruikers-JWT verplicht, CORS alleen voor ALLOWED_ORIGINS, groottelimiet en limiet per gebruiker.
+const limiter=createRateLimiter(20,60_000);
+const env={url:Deno.env.get("SUPABASE_URL")||"",apikey:Deno.env.get("SUPABASE_ANON_KEY")||"",allowedOrigins:Deno.env.get("ALLOWED_ORIGINS")||""};
 
 Deno.serve(async(req)=>{
-  if(req.method==="OPTIONS") return new Response("ok",{headers:cors});
+  const gate=await guard(req,{env,limiter});
+  if("response" in gate) return gate.response;
+  const headers=gate.headers;
+  const j=(v:any,status=200)=>new Response(JSON.stringify(v),{status,headers:{...headers,"Content-Type":"application/json"}});
   try{
-    const b=await req.json();
+    const b=gate.body as any;
 
     if(b.action==="ned-energy"){
       const key=Deno.env.get("NED_API_KEY");
@@ -37,14 +41,14 @@ Deno.serve(async(req)=>{
       const r=await fetch(u);
       const x=await r.json().catch(()=>({}));
       if(!r.ok||x.ok===false)throw new Error(x.message||`Tankerkönig ${r.status}`);
-      return j({place:b.place||"",fuel,radius:rad,stations:(x.stations||[]).slice(0,12),license:x.license||"CC BY 4.0",updated:new Date().toISOString()});
+      return j({place:cleanText(b.place,80),fuel,radius:rad,stations:(x.stations||[]).slice(0,12),license:x.license||"CC BY 4.0",updated:new Date().toISOString()});
     }
 
     return j({error:"Onbekende actie"},400);
   }catch(e){
-    return j({error:e?.message||String(e)},500);
+    console.error("data-sources mislukt:",e instanceof Error?e.name:"onbekend");
+    return j({error:"Bron tijdelijk niet beschikbaar"},502);
   }
 });
 
 function f(x:any){if(!x)return null;const k=Number(x.capacity);return Number.isFinite(k)?`${Math.round(k/1000).toLocaleString("nl-NL")} MW`:null}
-function j(v:any,status=200){return new Response(JSON.stringify(v),{status,headers:{...cors,"Content-Type":"application/json"}})}

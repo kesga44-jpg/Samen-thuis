@@ -1,0 +1,22 @@
+Maandag: Pasta pesto
+Dinsdag: Curry
+
+# Recept: Pasta pesto
+Porties: 4
+Ingrediënten:
+- 400 g pasta
+- 1 potje pesto
+- 100 g Parmezaanse kaas
+Bereiding:
+1. Kook de pasta.
+2. Meng met pesto.
+Voedingswaarde per portie: 610 kcal, eiwit 22 g, vet 24 g, koolhydraten 75 g, zout 1,4 g
+https://example.org/pasta-pesto
+
+# Recept: Curry
+Ingredients:
+- 1 ui
+- 400 ml kokosmelk
+
+# Grocery List
+250 g spinazie

@@ -1,0 +1,59 @@
+/* Voeding: weekmenu-voeding, recepten, producten en uitwisselen. Mobiel eerst (375 px), daarna tablet en desktop. */
+.nutrition-page { display: grid; gap: 14px; }
+.nut-disclaimer { margin: 0; padding: 10px 12px; border-radius: 12px; background: var(--orange-soft, #fff0e8); }
+.nut-pane { display: grid; gap: 12px; min-width: 0; }
+.nut-pane h3 { margin: 6px 0 0; }
+.nut-week { display: grid; gap: 10px; grid-template-columns: 1fr; }
+.nut-day { border: 1px solid var(--line, #d8dce6); border-radius: 14px; padding: 10px 12px; min-width: 0; }
+.nut-day h3 { margin: 0 0 6px; font-size: 1rem; text-transform: capitalize; }
+.nut-day ul, .nut-list, .nut-results { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.nut-day li { display: grid; gap: 6px; padding: 8px 0; border-top: 1px solid var(--line, #e3e6ee); }
+.nut-day li:first-child { border-top: 0; }
+.nut-day small, .nut-results small { display: block; color: var(--muted, #667); }
+.nut-meal-values { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: .92rem; }
+.nut-link { display: grid; gap: 4px; font-size: .85rem; font-weight: 600; }
+.nut-link select, .nut-inline input, .nut-ing-table input, .nut-ing-table select, .nut-servings input { min-height: 44px; font-size: 16px; max-width: 100%; }
+.nut-badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: .78rem; font-weight: 650; white-space: nowrap; }
+.nut-ok { background: #e6f5ec; color: #124d2a; }
+.nut-warn { background: #fff0e0; color: #6b3a08; }
+.nut-muted { background: #eef0f4; color: #4a5160; }
+.nut-unknown { color: var(--muted, #667); font-style: italic; }
+.nut-row { width: 100%; display: grid; grid-template-columns: 1fr; gap: 4px; text-align: left; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line, #d8dce6); background: var(--card, #fff); color: inherit; min-height: 44px; cursor: pointer; }
+.nut-row span { font-size: .88rem; color: var(--muted, #556); }
+.nut-recipe-detail, .nut-product-detail { padding: 10px 4px 4px; display: grid; gap: 10px; }
+.nut-two { display: grid; gap: 12px; grid-template-columns: 1fr; }
+.nut-table { width: 100%; border-collapse: collapse; font-size: .92rem; }
+.nut-table caption { text-align: left; font-weight: 700; padding-bottom: 4px; }
+.nut-table th, .nut-table td { padding: 6px 4px; border-bottom: 1px solid var(--line, #e3e6ee); text-align: left; }
+.nut-table td { text-align: right; white-space: nowrap; }
+.nut-ing-table { width: 100%; border-collapse: collapse; display: block; overflow-x: auto; }
+.nut-ing-table th, .nut-ing-table td { padding: 6px 4px; text-align: left; vertical-align: middle; border-bottom: 1px solid var(--line, #e3e6ee); }
+.nut-ing-table input { width: 6.5rem; }
+.nut-inline { display: grid; gap: 8px; grid-template-columns: 1fr; align-items: end; }
+.nut-results li { display: flex; justify-content: space-between; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line, #e3e6ee); }
+.nut-message { margin: 0; padding: 8px 12px; border-radius: 10px; background: #eef3fb; }
+.nut-checks ul { margin: 6px 0 0; padding-left: 18px; }
+.nut-check-let-op { color: #6b3a08; }
+.nut-check { display: flex; gap: 8px; align-items: center; }
+.nut-plan { border: 1px solid var(--line, #d8dce6); border-radius: 14px; padding: 10px 12px; }
+.nut-plan ul { padding-left: 0; list-style: none; display: grid; gap: 6px; }
+.nut-pre { white-space: pre-wrap; background: #f4f6f9; padding: 8px; border-radius: 8px; font-size: .85rem; }
+.nut-source { font-size: .8rem; color: var(--muted, #667); margin: 0; }
+#nutImportText { width: 100%; font-size: 16px; }
+.nut-wide { grid-column: 1 / -1; }
+.nut-weeknav { display: flex; gap: 6px; flex-wrap: nowrap; }
+.nut-weeknav button { min-height: 44px; min-width: 44px; width: auto; flex: 0 0 auto; padding: 0 12px; }
+.nut-day strong { overflow-wrap: anywhere; }
+
+@media (min-width: 700px) {
+  .nut-week { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .nut-two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .nut-inline { grid-template-columns: 1fr auto; }
+  .nut-row { grid-template-columns: 1.4fr 1fr auto; align-items: center; }
+}
+@media (min-width: 1100px) {
+  .nut-week { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .nut-pre, :root:not([data-theme="light"]) .nut-message { background: rgba(255,255,255,.06); }
+}

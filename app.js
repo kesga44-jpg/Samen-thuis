@@ -10,6 +10,14 @@ const DEFAULT_PUBLISHABLE_KEY = 'sb_publishable_Xa1oLeM64F-jog1vVjJbkQ_BE3UV6mR'
 const PDFJS_URL = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.min.mjs';
 const PDFJS_WORKER_URL = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.min.mjs';
 
+// PR-8: Edge Functions vereisen een gebruikers-JWT. Met sessie: eigen token; zonder sessie: publishable key
+// (de functie weigert dan met een duidelijke melding "Aanmelden vereist"). Nooit een service-role key.
+async function edgeFunctionHeaders() {
+  let token = '';
+  try { token = (await window.SamenThuisAuth25?.ready?.())?.access_token || ''; } catch (_) { token = ''; }
+  return { apikey: DEFAULT_PUBLISHABLE_KEY, Authorization: 'Bearer ' + (token || DEFAULT_PUBLISHABLE_KEY) };
+}
+
 const pad = value => String(value).padStart(2, '0');
 const toLocalISO = date => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 const todayISO = () => toLocalISO(new Date());
@@ -367,7 +375,13 @@ function save({ touch = true, sync = true } = {}) {
     return false;
   }
   if (touch) data.meta.updatedAt = new Date().toISOString();
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  } catch (error) {
+    // Opslag vol: eerst de (herbouwbare) basiskopieën voor automatisch samenvoegen opruimen en opnieuw proberen.
+    ['samenThuisSyncBaseV1', 'samenThuisAccountSyncBaseValuesV1', 'samenThuisPreMergeBackup'].forEach(key => { try { localStorage.removeItem(key); } catch (_) {} });
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  }
   const saveState = document.querySelector('#saveState');
   if (saveState) {
     saveState.textContent = 'Zojuist bewaard';
@@ -480,10 +494,15 @@ async function refreshBrainyQuoteRSS() {
 function renderQuote() {
   let cache;
   try { cache = JSON.parse(localStorage.getItem(QUOTE_KEY) || 'null'); } catch { cache = null; }
-  const quote = cache?.markup
-    ? `<div class="quote-content">${cache.markup}</div>`
+  // R4: geen extern script meer. RSS-tekst (alleen als tekst, ge-escaped) blijft optioneel; anders een lokale gedachte van de dag.
+  if (cache?.markup && cache.date === todayISO()) {
+    return `<section class="card quote-card"><div><p class="eyebrow">Quote of the day</p><div class="quote-content">${cache.markup}</div></div><a href="https://www.brainyquote.com/link/quotebr.rss" target="_blank" rel="noopener">Bron: BrainyQuote RSS</a></section>`;
+  }
+  const local = window.SamenThuisQuotes?.localQuoteFor ? window.SamenThuisQuotes.localQuoteFor(todayISO()) : null;
+  const quote = local
+    ? `<div class="quote-content"><blockquote>${esc(local.text)}</blockquote></div>`
     : '<p class="quote-offline">De quote wordt opgehaald zodra er verbinding is.</p>';
-  return `<section class="card quote-card"><div><p class="eyebrow">Quote of the day</p>${quote}</div><a href="https://www.brainyquote.com/link/quotebr.rss" target="_blank" rel="noopener">Bron: BrainyQuote RSS</a></section>`;
+  return `<section class="card quote-card"><div><p class="eyebrow">Gedachte van de dag</p>${quote}</div><small class="muted">Bron: Samen Thuis (lokaal)</small></section>`;
 }
 
 function tripFolderById(folderId) {
@@ -1311,9 +1330,14 @@ function importTravelPlan(text, folderId) {
   toast(`${added} onderdelen verdeeld · ${checkableCount} om af te vinken${skipped ? ` · ${skipped} overgeslagen` : ''}`);
 }
 
+// R5: pdf.js wordt alleen geladen na SHA-384-controle (cdn-libs.js); zonder register faalt het veilig.
+async function loadVerifiedPdfjs() {
+  if (!window.SamenThuisCdn?.loadPdfjs) throw Object.assign(new Error('Bibliotheekregister ontbreekt; PDF lezen is niet mogelijk.'), { libraryLoad: true });
+  return window.SamenThuisCdn.loadPdfjs();
+}
+
 async function extractPdfText(file) {
-  const pdfjs = await import(PDFJS_URL);
-  pdfjs.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
+  const pdfjs = await loadVerifiedPdfjs();
   const loadingTask = pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) });
   const pdf = await loadingTask.promise;
   const pages = [];
@@ -2261,7 +2285,25 @@ if (syncConfigured()) syncNow();
         local: data, remote: remoteData, hold: !!localStorage.getItem(RESTORE_HOLD_KEY),
         resolution: syncConflictResolution, lastSyncedAt: syncConfig.lastSyncedAt
       });
-      if (!remoteData) {
+      // Wijzigingen op beide apparaten: eerst automatisch samenvoegen ten opzichte van de laatst gesynchroniseerde versie.
+      // Lukt dat zonder dat hetzelfde veld aan beide kanten anders is gewijzigd, dan is er geen keuze nodig.
+      let autoMerged = null;
+      if (remoteData && plan === 'conflict' && !syncConflictResolution && !localStorage.getItem(RESTORE_HOLD_KEY)) {
+        const syncBase = loadLegacySyncBase(householdId);
+        if (syncBase && window.SamenThuisHouseholdSync?.mergeData) {
+          const merged = window.SamenThuisHouseholdSync.mergeData(syncBase, data, remoteData);
+          if (merged.ok) autoMerged = merged.value;
+        }
+      }
+      if (autoMerged) {
+        try { localStorage.setItem('samenThuisPreMergeBackup', JSON.stringify({ at: nowIso(), data })); } catch (_) { /* geen ruimte: samenvoegen gaat door, cloudversie blijft herstelbaar */ }
+        data = migrateData({ ...autoMerged, meta: { ...(data.meta || {}), updatedAt: nowIso() } });
+        normaliseTravelData();
+        if (save({ touch: false, sync: false }) === false) throw new Error('Lokaal opslaan is geblokkeerd; synchronisatie niet afgerond');
+        await uploadSyncData(baseUrl, householdId, rows[0]);
+        remoteLoaded = true;
+        toast('Wijzigingen van beide apparaten zijn samengevoegd');
+      } else if (!remoteData) {
         await uploadSyncData(baseUrl, householdId, rows[0]);
       } else if (plan === 'conflict') {
         const conflict = {
@@ -2300,6 +2342,7 @@ if (syncConfigured()) syncNow();
 
       syncConfig.lastSyncedAt = nowIso();
       localStorage.setItem(SYNC_KEY, JSON.stringify(syncConfig));
+      storeLegacySyncBase(householdId, data);
       try { localStorage.removeItem(RESTORE_HOLD_KEY); } catch {}
       if (syncConflictResolution) {
         if (syncConflictStore.clear()) syncConflictResolution = '';
@@ -2543,6 +2586,7 @@ console.info('Samen Thuis update 12.0 geladen');
     await new Promise((resolve,reject) => {
       const script = document.createElement('script');
       script.src = src;
+      window.SamenThuisCdn?.applyIntegrity(script, src);
       script.onload = resolve;
       script.onerror = reject;
       document.head.appendChild(script);
@@ -3412,7 +3456,7 @@ console.info('Samen Thuis update 13.1 geladen');
     if(test()) return;
     await new Promise((resolve,reject)=>{
       const s=document.createElement('script');
-      s.src=src;s.onload=resolve;s.onerror=reject;document.head.appendChild(s);
+      s.src=src;window.SamenThuisCdn?.applyIntegrity(s,src);s.onload=resolve;s.onerror=reject;document.head.appendChild(s);
     });
   }
 
@@ -3988,7 +4032,7 @@ console.info('Samen Thuis update 14.1 geladen');
     if(test()) return;
     await new Promise((resolve,reject)=>{
       const s=document.createElement('script');
-      s.src=src; s.onload=resolve;
+      s.src=src; window.SamenThuisCdn?.applyIntegrity(s,src); s.onload=resolve;
       s.onerror=()=>{ s.remove(); reject(libError14()); };
       document.head.appendChild(s);
     });
@@ -3997,7 +4041,7 @@ console.info('Samen Thuis update 14.1 geladen');
   let ocrWorker14 = null;
   async function ocrWorker() {
     if(!ocrWorker14) {
-      await loadScript14('https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js',()=>Boolean(window.Tesseract));
+      await loadScript14('https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js',()=>Boolean(window.Tesseract));
       ocrWorker14 = Promise.resolve(window.Tesseract.createWorker('nld+eng')).catch(err=>{ ocrWorker14=null; throw libError14('OCR-taaldata kon niet worden geladen'); });
     }
     return ocrWorker14;
@@ -4006,8 +4050,7 @@ console.info('Samen Thuis update 14.1 geladen');
   const READ_ENV14 = {
     async loadPdfjs() {
       let pdfjs;
-      try { pdfjs = await import(PDFJS_URL); } catch(err) { throw libError14(); }
-      pdfjs.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
+      try { pdfjs = await loadVerifiedPdfjs(); } catch(err) { throw err && err.integrity ? err : libError14(); }
       return pdfjs;
     },
     async loadMammoth() {
@@ -5005,6 +5048,7 @@ async function weather18(force=false){
  if(!w){let q=new URLSearchParams({latitude:loc.lat,longitude:loc.lon,current:'temperature_2m,apparent_temperature,weather_code,precipitation,wind_speed_10m',hourly:'temperature_2m,weather_code,precipitation_probability',daily:'temperature_2m_max,temperature_2m_min,precipitation_probability_max',timezone:'Europe/Amsterdam',forecast_days:'5'});let r=await fetch('https://api.open-meteo.com/v1/forecast?'+q,{cache:'no-store'});if(!r.ok)throw 0;w=await r.json();localStorage.setItem(WC,JSON.stringify({t:Date.now(),key,w}))}
  let c=w.current,d=w.daily,h=w.hourly,n=new Date(),i=h.time.findIndex(t=>new Date(t)>=new Date(n.getFullYear(),n.getMonth(),n.getDate(),n.getHours()));if(i<0)i=0;let ids=Array.from({length:6},(_,k)=>i+k).filter(k=>k<h.time.length);
  box.innerHTML=`<div class="wm18"><div><small>⌖ ${esc(loc.name)}</small><div class="temp18"><span>${wi(c.weather_code)}</span><strong>${Math.round(c.temperature_2m)}°</strong></div><p>${wt(c.weather_code)} · voelt als ${Math.round(c.apparent_temperature)}°</p></div><div class="wf18"><b>${Math.round(d.temperature_2m_max[0])}° / ${Math.round(d.temperature_2m_min[0])}°</b><span>☂ ${Math.round(d.precipitation_probability_max[0]||0)}%</span><span>↗ ${Math.round(c.wind_speed_10m||0)} km/u</span></div></div><div class="hours18">${ids.map(k=>`<div><small>${h.time[k].slice(11,16)}</small><b>${wi(h.weather_code[k])}</b><strong>${Math.round(h.temperature_2m[k])}°</strong><small>${Math.round(h.precipitation_probability[k]||0)}%</small></div>`).join('')}</div><button class="wr18" data-wr18>↻</button>`;
+ box.insertAdjacentHTML('beforeend','<small class="weather-attribution">Weerdata: <a href="https://open-meteo.com/" target="_blank" rel="noopener noreferrer">Open-Meteo</a> (CC BY 4.0)</small>');
  let o=document.querySelector('[data-outfit18]');if(o)o.innerHTML=`<span>👕</span><div><strong>Wat trek je aan?</strong><p>${outfit(w).map(esc).join(' · ')}</p><small>Gebaseerd op temperatuur, regen en wind.</small></div>`
  }catch(_){box.innerHTML='<strong>Weer tijdelijk niet beschikbaar</strong><p><button class="text-btn" data-wr18>Opnieuw proberen</button></p>'}
 }
@@ -5980,7 +6024,7 @@ function nav24(){const desktop=document.querySelector('.sidebar nav');if(desktop
 const AQ24='stAirQualityV24';
 function level24(v){v=num24(v);return v>=50?'Hoog':v>=10?'Verhoogd':v>0?'Laag':'Zeer laag'}
 function aqiText24(v){v=num24(v);return v<=20?'Goed':v<=40?'Redelijk':v<=60?'Matig':v<=80?'Slecht':'Zeer slecht'}
-async function air24(force=false){if(current!=='today')return;const dash=document.querySelector('[data-dash18]');if(!dash)return;let card=dash.querySelector('[data-air24]');if(!card){card=document.createElement('section');card.className='air24';card.dataset.air24='';card.dataset.widget18='air';const grid=dash.querySelector('.dg18');grid?.append(card)}if(!card)return;card.innerHTML='<strong>Pollen & luchtkwaliteit</strong><p class="muted">Open-Meteo ophalen…</p>';try{const loc=window.SamenThuisWeatherLocation25?.()||{place:'Rotterdam',lat:51.9225,lon:4.47917},key=`${loc.lat},${loc.lon}`;let q=null;if(!force)try{const c=JSON.parse(localStorage.getItem(AQ24)||'null');if(c&&c.key===key&&Date.now()-c.t<1800000)q=c.q}catch(_){}if(!q){const u=new URL('https://air-quality-api.open-meteo.com/v1/air-quality');u.searchParams.set('latitude',String(loc.lat));u.searchParams.set('longitude',String(loc.lon));u.searchParams.set('current','european_aqi,pm2_5,pm10,nitrogen_dioxide,ozone,alder_pollen,birch_pollen,grass_pollen,mugwort_pollen,ragweed_pollen');u.searchParams.set('timezone','Europe/Amsterdam');const r=await fetch(u,{cache:'no-store'});if(!r.ok)throw 0;q=await r.json();localStorage.setItem(AQ24,JSON.stringify({t:Date.now(),key,q}))}const c=q.current||{};const pol=[['Gras',c.grass_pollen],['Berk',c.birch_pollen],['Els',c.alder_pollen],['Bijvoet',c.mugwort_pollen],['Ambrosia',c.ragweed_pollen]].sort((a,b)=>num24(b[1])-num24(a[1]));card.innerHTML=`<div class="air-head24"><div><small>OPEN-METEO · ${esc(loc.place.toUpperCase())}</small><h3>Pollen & luchtkwaliteit</h3></div><button data-air24-refresh>↻</button></div><div class="aqi24"><span class="aqi-badge24">AQI ${Math.round(num24(c.european_aqi))}</span><div><strong>${aqiText24(c.european_aqi)}</strong><small>PM2.5 ${num24(c.pm2_5).toFixed(1)} · PM10 ${num24(c.pm10).toFixed(1)} µg/m³</small></div></div><div class="pollen-grid24">${pol.map(([n,v])=>`<div><span>${n}</span><b>${level24(v)}</b><small>${num24(v).toFixed(1)} gr/m³</small></div>`).join('')}</div><p class="air-note24">Indicatie van omgevingswaarden; geen persoonlijk medisch advies.</p>`}catch(_){card.innerHTML='<strong>Pollen & luchtkwaliteit</strong><p>Gegevens tijdelijk niet beschikbaar. <button class="text-btn" data-air24-refresh>Opnieuw</button></p>'}}
+async function air24(force=false){if(current!=='today')return;const dash=document.querySelector('[data-dash18]');if(!dash)return;let card=dash.querySelector('[data-air24]');if(!card){card=document.createElement('section');card.className='air24';card.dataset.air24='';card.dataset.widget18='air';const grid=dash.querySelector('.dg18');grid?.append(card)}if(!card)return;card.innerHTML='<strong>Pollen & luchtkwaliteit</strong><p class="muted">Open-Meteo ophalen…</p>';try{const loc=window.SamenThuisWeatherLocation25?.()||{place:'Rotterdam',lat:51.9225,lon:4.47917},key=`${loc.lat},${loc.lon}`;let q=null;if(!force)try{const c=JSON.parse(localStorage.getItem(AQ24)||'null');if(c&&c.key===key&&Date.now()-c.t<1800000)q=c.q}catch(_){}if(!q){const u=new URL('https://air-quality-api.open-meteo.com/v1/air-quality');u.searchParams.set('latitude',String(loc.lat));u.searchParams.set('longitude',String(loc.lon));u.searchParams.set('current','european_aqi,pm2_5,pm10,nitrogen_dioxide,ozone,alder_pollen,birch_pollen,grass_pollen,mugwort_pollen,ragweed_pollen');u.searchParams.set('timezone','Europe/Amsterdam');const r=await fetch(u,{cache:'no-store'});if(!r.ok)throw 0;q=await r.json();localStorage.setItem(AQ24,JSON.stringify({t:Date.now(),key,q}))}const c=q.current||{};const pol=[['Gras',c.grass_pollen],['Berk',c.birch_pollen],['Els',c.alder_pollen],['Bijvoet',c.mugwort_pollen],['Ambrosia',c.ragweed_pollen]].sort((a,b)=>num24(b[1])-num24(a[1]));card.innerHTML=`<div class="air-head24"><div><small>OPEN-METEO · ${esc(loc.place.toUpperCase())}</small><h3>Pollen & luchtkwaliteit</h3></div><button data-air24-refresh>↻</button></div><div class="aqi24"><span class="aqi-badge24">AQI ${Math.round(num24(c.european_aqi))}</span><div><strong>${aqiText24(c.european_aqi)}</strong><small>PM2.5 ${num24(c.pm2_5).toFixed(1)} · PM10 ${num24(c.pm10).toFixed(1)} µg/m³</small></div></div><div class="pollen-grid24">${pol.map(([n,v])=>`<div><span>${n}</span><b>${level24(v)}</b><small>${num24(v).toFixed(1)} gr/m³</small></div>`).join('')}</div><p class="air-note24">Indicatie van omgevingswaarden; geen persoonlijk medisch advies. Bron: <a href="https://open-meteo.com/" target="_blank" rel="noopener noreferrer">Open-Meteo</a> (CC BY 4.0).</p>`}catch(_){card.innerHTML='<strong>Pollen & luchtkwaliteit</strong><p>Gegevens tijdelijk niet beschikbaar. <button class="text-btn" data-air24-refresh>Opnieuw</button></p>'}}
 const baseRender24=render;render=function(...args){if(current==='auto24'){document.querySelector('#view').innerHTML=autoPage24();updateSyncBadge();requestAnimationFrame(nav24);return}const r=baseRender24(...args);requestAnimationFrame(()=>{nav24();air24()});return r};
 document.addEventListener('click',e=>{if(e.target.closest('[data-v24-auto]')){current='auto24';render();return}const t=e.target.closest('[data-auto24-tab]');if(t){autoTab24=t.dataset.auto24Tab;render();return}const ed=e.target.closest('[data-auto24-edit]');if(ed){autoTab24='add';document.querySelector('#view').innerHTML=`<div class="auto24"><header class="auto-head24"><div><p class="eyebrow">AUTO & BRANDSTOF</p><h1>Tankbeurt bewerken</h1></div></header>${tabs24()}<section class="auto-body24">${fillForm24(data.fuelEntries.find(x=>x.id===ed.dataset.auto24Edit))}</section></div>`;return}const del=e.target.closest('[data-auto24-delete]');if(del&&confirm('Tankbeurt verwijderen?')){data.fuelEntries=data.fuelEntries.filter(x=>x.id!==del.dataset.auto24Delete);save();autoTab24='fills';render();return}const ca=e.target.closest('[data-auto24-car]');if(ca){editCar24(ca.dataset.auto24Car);return}if(e.target.closest('[data-auto24-newcar]')){editCar24();return}const dc=e.target.closest('[data-auto24-deletecar]');if(dc){deleteCar24(dc.dataset.auto24Deletecar);return}const p=e.target.closest('[data-auto24-period]');if(p){statsPeriod24=p.dataset.auto24Period;render();return}if(e.target.closest('[data-auto24-allcars]')){statsCars24=[];render();return}const sc=e.target.closest('[data-auto24-statcar]');if(sc){const id=sc.dataset.auto24Statcar;const currentIds=selectedCars24();if(sc.checked){statsCars24=[...new Set([...currentIds,id])]}else{statsCars24=currentIds.filter(x=>x!==id);if(!statsCars24.length){sc.checked=true;toast('Selecteer minimaal één auto');return}}render();return}if(e.target.closest('[data-air24-refresh]'))air24(true)});
 document.addEventListener('submit',e=>{const f=e.target.closest('[data-fuel24-form]');if(!f)return;e.preventDefault();const fd=new FormData(f),lit=num24(fd.get('liters'));let total=num24(fd.get('total')),price=num24(fd.get('pricePerLiter'));if(!total&&price&&lit)total=price*lit;if(!price&&total&&lit)price=total/lit;const old=data.fuelEntries.find(x=>x.id===f.dataset.editId)||{};const item={...old,id:old.id||id24(),carId:String(fd.get('carId')),date:String(fd.get('date')),odometer:num24(fd.get('odometer')),liters:lit,total,pricePerLiter:price,fuelGrade:String(fd.get('fuelGrade')),station:String(fd.get('station')||''),partialFill:fd.has('partialFill'),missedPrevious:fd.has('missedPrevious'),note:String(fd.get('note')||'')};if(old.id)Object.assign(old,item);else data.fuelEntries.push(item);save();autoTab24='fills';render();toast('Tankbeurt opgeslagen')});
@@ -6167,7 +6211,23 @@ function renderSyncConflictCard() {
     const parsed = new Date(value);
     return Number.isNaN(parsed.getTime()) ? 'onbekend' : parsed.toLocaleString('nl-NL');
   };
-  return `<section class="card settings-card sync-conflict"><div class="card-head"><div><p class="eyebrow">SYNCHRONISATIECONFLICT</p><h2>Beide apparaten zijn gewijzigd</h2></div><span class="tag red">Actie nodig</span></div><p>Er zijn sinds de vorige synchronisatie wijzigingen op beide apparaten. Kies welke volledige versie leidend wordt. De andere versie blijft bewaard in de conflictback-up op dit apparaat totdat de keuze succesvol is gesynchroniseerd.</p><p><strong>Dit apparaat:</strong> ${esc(date(conflict.localUpdatedAt))}<br><strong>Andere apparaat:</strong> ${esc(date(conflict.remoteUpdatedAt))}</p><div class="button-row"><button class="primary" data-sync-conflict-choice="local">Deze apparaatversie gebruiken</button><button class="secondary" data-sync-conflict-choice="remote">Andere apparaatversie gebruiken</button></div></section>`;
+  return `<section class="card settings-card sync-conflict"><div class="card-head"><div><p class="eyebrow">SYNCHRONISATIECONFLICT</p><h2>Beide apparaten zijn gewijzigd</h2></div><span class="tag red">Actie nodig</span></div><p>Er zijn sinds de vorige synchronisatie wijzigingen op beide apparaten. Kies welke volledige versie leidend wordt. De andere versie blijft bewaard in de conflictback-up op dit apparaat totdat de keuze succesvol is gesynchroniseerd.</p><p><strong>Dit apparaat:</strong> ${esc(date(conflict.localUpdatedAt))}<br><strong>Andere apparaat:</strong> ${esc(date(conflict.remoteUpdatedAt))}</p><p class="muted">Kies bij voorkeur <strong>Beide samenvoegen</strong>: toevoegingen van beide apparaten blijven bewaard. Is hetzelfde item op beide apparaten anders gewijzigd, dan wint de versie van het andere apparaat (de laatst opgeslagen cloudversie).</p><div class="button-row"><button class="primary" data-sync-conflict-choice="merge">Beide samenvoegen</button><button class="secondary" data-sync-conflict-choice="local">Deze apparaatversie gebruiken</button><button class="secondary" data-sync-conflict-choice="remote">Andere apparaatversie gebruiken</button></div></section>`;
+}
+
+// Basis voor automatisch samenvoegen in de oude code-sync: de gegevens zoals ze na de laatste geslaagde synchronisatie
+// waren (alleen op dit apparaat, gekoppeld aan het huishouden). Past dit niet in de opslag, dan blijft het oude gedrag.
+const LEGACY_SYNC_BASE_KEY = 'samenThuisSyncBaseV1';
+function loadLegacySyncBase(householdId) {
+  try { const v = JSON.parse(localStorage.getItem(LEGACY_SYNC_BASE_KEY) || 'null'); return v && v.householdId === householdId ? v.data : null; }
+  catch { return null; }
+}
+function loadLegacySyncBaseAny() {
+  try { const v = JSON.parse(localStorage.getItem(LEGACY_SYNC_BASE_KEY) || 'null'); return v ? v.data : undefined; }
+  catch { return undefined; }
+}
+function storeLegacySyncBase(householdId, value) {
+  try { localStorage.setItem(LEGACY_SYNC_BASE_KEY, JSON.stringify({ householdId, at: new Date().toISOString(), data: value })); }
+  catch { try { localStorage.removeItem(LEGACY_SYNC_BASE_KEY); } catch {} }
 }
 
 async function uploadSyncData(baseUrl, householdId, expectedRemoteRow = null) {
@@ -6202,15 +6262,25 @@ document.addEventListener('click', event => {
   if (syncing) return;
   const conflict = getSyncConflict();
   if (!conflict) return;
-  if (!conflict.resolution && !['local', 'remote'].includes(choice.dataset.syncConflictChoice)) {
+  if (!conflict.resolution && !['local', 'remote', 'merge'].includes(choice.dataset.syncConflictChoice)) {
     toast('Kies een geldige versie om de synchronisatie te hervatten.');
     return;
   }
   let selection;
   try {
-    selection = SamenThuisCore.resolveSyncConflict(
-      conflict, choice.dataset.syncConflictChoice, clone, new Date().toISOString()
-    );
+    if (choice.dataset.syncConflictChoice === 'merge') {
+      // Samenvoegen = de samengevoegde versie wordt "deze apparaatversie" en gaat naar de cloud (zelfde veilige route als 'local').
+      const HS = window.SamenThuisHouseholdSync;
+      if (!HS?.mergeData) throw new Error('Samenvoegen is niet beschikbaar; kies een versie.');
+      const base = loadLegacySyncBaseAny();
+      const merged = HS.mergeData(base, conflict.localData, conflict.remoteData, { onConflict: 'remote' }).value;
+      merged.meta = { ...(conflict.localData.meta || {}), updatedAt: new Date().toISOString() };
+      selection = { choice: 'local', data: migrateData(merged) };
+    } else {
+      selection = SamenThuisCore.resolveSyncConflict(
+        conflict, choice.dataset.syncConflictChoice, clone, new Date().toISOString()
+      );
+    }
   } catch (error) {
     toast(error.message);
     return;
@@ -7176,7 +7246,7 @@ document.addEventListener('click', event => {
       const base = String(syncConfig.projectUrl || DEFAULT_PROJECT_URL).replace(/\/$/, '');
       const result = await offerCore25().fetchCategories({
         url: `${base}/functions/v1/grocery-prices`,
-        headers: { apikey: DEFAULT_PUBLISHABLE_KEY, Authorization: 'Bearer ' + DEFAULT_PUBLISHABLE_KEY },
+        headers: await edgeFunctionHeaders(),
         signal: controller?.signal
       });
       data.offerCategoryCache25 = { categories: result.categories, checkedAt: result.checkedAt };
@@ -7384,7 +7454,7 @@ document.addEventListener('click', event => {
         category: categorySlug,
         page,
         url: `${base}/functions/v1/grocery-prices`,
-        headers: { apikey: DEFAULT_PUBLISHABLE_KEY, Authorization: 'Bearer ' + DEFAULT_PUBLISHABLE_KEY },
+        headers: await edgeFunctionHeaders(),
         signal: controller?.signal
       });
       if (!offerRequestGuard25.isCurrent(requestToken)) return;
@@ -7567,7 +7637,8 @@ document.addEventListener('click', event => {
       ${chart25('Komende 24 uur', hourlyLabels, hourlyTemps, [], hourlyRain, 'Uurlijkse temperatuur en neerslag.')}
       <section class="card weather-days25"><div class="card-head"><h2>7-daagse verwachting</h2></div><ul class="weather-list25">${days}</ul></section>
       <section class="card settings-card"><div class="card-head"><div><p class="eyebrow">LOCATIE</p><h2>Weerlocatie aanpassen</h2></div></div><form class="form-grid weather-location25" data-weather-location><label class="field">Plaats<input name="place" maxlength="80" value="${esc(location.place)}" required></label><label class="field">Breedtegraad<input name="lat" type="number" step="any" min="-90" max="90" value="${location.lat}" required></label><label class="field">Lengtegraad<input name="lon" type="number" step="any" min="-180" max="180" value="${location.lon}" required></label><div class="button-row"><button class="primary" type="submit">Locatie opslaan</button><button class="secondary" type="button" data-weather-geolocate>Mijn locatie</button></div></form><p class="small-note">Weergegevens worden lokaal 30 minuten gecachet. Locatie-instellingen worden met de bestaande appgegevens gesynchroniseerd.</p></section>
-      <p class="small-note weather-cache-note25" data-weather-cache-note></p>`;
+      <p class="small-note weather-cache-note25" data-weather-cache-note></p>
+      <p class="small-note weather-attribution">Weerdata: <a href="https://open-meteo.com/" target="_blank" rel="noopener noreferrer">Open-Meteo</a> (CC BY 4.0).</p>`;
   }
 
   async function loadWeatherPage25(force = false) {
