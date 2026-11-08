@@ -25,12 +25,95 @@
     if (typeof v === 'object') return Object.keys(v).length === 0;
     return false;
   }
+  const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o || {}, k);
   const RESERVED = ['meta', 'settings', 'legacy_full', '__proto__', 'constructor', 'prototype'];
   const validSection = n => typeof n === 'string' && /^[\w.-]{1,60}$/.test(n) && !RESERVED.includes(n);
   function sectionsOf(data) {
     const out = {};
     Object.keys(data || {}).forEach(k => { if (validSection(k)) out[k] = data[k]; });
     return out;
+  }
+
+
+  // ---------- Automatisch samenvoegen (3-wegs) ----------
+  // Doel: wijzigingen van beide huisgenoten in hetzelfde onderdeel (bijv. allebei een boodschap toevoegen)
+  // samenvoegen in plaats van een conflict te tonen. Werkt met de laatst gesynchroniseerde versie als basis.
+  // - Lijsten met objecten met `id`: per id samenvoegen (toegevoegd, gewijzigd, verwijderd per kant).
+  // - Objecten: per sleutel. Lijsten met tekst/getallen: als verzameling (toevoegen/verwijderen per kant).
+  // - Hetzelfde veld aan beide kanten verschillend gewijzigd = echt conflict. Standaard wordt dat gemeld
+  //   (nooit stil overschrijven); alleen met onConflict 'remote' of 'local' (expliciete keuze van de gebruiker) wint één kant.
+  const MISSING = undefined;
+  const same = (a, b) => stable(a) === stable(b);
+  const isObj = v => v && typeof v === 'object' && !Array.isArray(v);
+  const hasId = v => isObj(v) && (typeof v.id === 'string' || typeof v.id === 'number') && v.id !== '';
+  const idList = a => Array.isArray(a) && a.length > 0 && a.every(hasId) && new Set(a.map(x => String(x.id))).size === a.length;
+  const primList = a => Array.isArray(a) && a.every(x => x === null || ['string', 'number', 'boolean'].includes(typeof x));
+
+  function merge3(base, local, remote, opts = {}, path = '') {
+    const conflicts = opts.conflicts || (opts.conflicts = []);
+    if (same(local, remote)) return local;
+    if (base !== MISSING && same(base, local)) return remote;
+    if (base !== MISSING && same(base, remote)) return local;
+    if (local === MISSING) return remote;          // toegevoegd aan de andere kant (zonder basis)
+    if (remote === MISSING) return local;
+    const listsOk = Array.isArray(local) && Array.isArray(remote) && (base === MISSING || Array.isArray(base));
+    if (listsOk && (local.length === 0 || idList(local)) && (remote.length === 0 || idList(remote)) && (base === MISSING || base.length === 0 || idList(base)) && (local.length || remote.length)) {
+      const key = x => String(x.id);
+      const B = new Map((base || []).map(x => [key(x), x])), L = new Map(local.map(x => [key(x), x])), R = new Map(remote.map(x => [key(x), x]));
+      const order = [...remote.map(key), ...local.map(key).filter(k => !R.has(k))];
+      const out = [];
+      for (const k of order) {
+        const b = B.get(k), l = L.get(k), r = R.get(k), p = `${path}[${k}]`;
+        if (l && r) { out.push(merge3(b, l, r, opts, p)); continue; }
+        const only = l || r;
+        if (!b) { out.push(only); continue; }                       // nieuw aan één kant
+        if (same(b, only)) continue;                                // ongewijzigd aan de ene kant, verwijderd aan de andere
+        // Gewijzigd aan de ene kant, verwijderd aan de andere: het gewijzigde item blijft bestaan (niets gaat verloren).
+        out.push(only);
+      }
+      return out;
+    }
+    if (listsOk && primList(local) && primList(remote) && (base === MISSING || primList(base))) {
+      const bs = new Set((base || []).map(x => stable(x)));
+      const ls = new Set(local.map(x => stable(x))), rs = new Set(remote.map(x => stable(x)));
+      const out = [];
+      const seen = new Set();
+      for (const v of [...remote, ...local]) {
+        const k = stable(v); if (seen.has(k)) continue; seen.add(k);
+        const inL = ls.has(k), inR = rs.has(k), inB = bs.has(k);
+        if (inL && inR) out.push(v);
+        else if (!inB) out.push(v);                                 // toegevoegd aan één kant
+        // in basis en aan één kant verwijderd → weg
+      }
+      return out;
+    }
+    if (isObj(local) && isObj(remote) && (base === MISSING || isObj(base))) {
+      const out = {};
+      const keys = [...new Set([...Object.keys(remote), ...Object.keys(local)])];
+      for (const k of keys) {
+        const b = base === MISSING ? MISSING : base[k];
+        const v = merge3(b === undefined && base !== MISSING && !(k in base) ? MISSING : b, k in local ? local[k] : MISSING, k in remote ? remote[k] : MISSING, opts, path ? `${path}.${k}` : k);
+        if (v !== MISSING) out[k] = v;
+      }
+      // Verwijderd aan de ene kant en ongewijzigd aan de andere: niet meenemen.
+      if (base !== MISSING) for (const k of Object.keys(base)) {
+        if (!(k in local) && k in remote && same(base[k], remote[k])) delete out[k];
+        if (!(k in remote) && k in local && same(base[k], local[k])) delete out[k];
+      }
+      return out;
+    }
+    // Scalars of onvergelijkbare structuren die aan beide kanten anders zijn gewijzigd.
+    if (opts.onConflict === 'remote') return remote;
+    if (opts.onConflict === 'local') return local;
+    conflicts.push(path || '(onderdeel)');
+    return local;
+  }
+
+  // Voegt één onderdeel samen. Geeft { ok, value, conflicts } terug; ok=false betekent: gebruiker moet kiezen.
+  function mergeSection(base, local, remote, { onConflict = 'report' } = {}) {
+    const opts = { onConflict, conflicts: [] };
+    const value = merge3(base, local, remote, opts);
+    return { ok: opts.conflicts.length === 0, value, conflicts: opts.conflicts };
   }
 
   // remote: {section:{version, value}} ; base: {section:{version, hash}} ; resolutions: {section:'local'|'remote'}
@@ -106,7 +189,10 @@
   }
 
   // Volledige synchronisatieronde. Schrijft nooit lokaal; geeft pulls/base terug zodat de app veilig kan opslaan.
-  async function runAccountSync({ cloud, householdId, local, base = {}, hold = false, resolutions = {}, encrypt, decrypt }) {
+  // baseValues: {section: waarde bij de laatste geslaagde synchronisatie} (lokaal bewaard). Daarmee worden gelijktijdige
+  // wijzigingen automatisch samengevoegd. Ontbreekt de basis, dan blijft het oude gedrag (conflict → gebruiker kiest).
+  // resolutions[s] === 'merge': door de gebruiker gekozen samenvoegen; bij echte veldconflicten wint de cloudversie.
+  async function runAccountSync({ cloud, householdId, local, base = {}, baseValues = {}, hold = false, resolutions = {}, encrypt, decrypt }) {
     const rows = await cloud.readState(householdId);
     const remote = {}; let legacy = null;
     for (const row of rows || []) {
@@ -119,16 +205,41 @@
       for (const [k, v] of Object.entries(sectionsOf(legacy))) if (!(k in remote)) remote[k] = { version: 0, value: v };
     }
     const actions = planSections({ local, remote, base, hold, resolutions });
-    const L = sectionsOf(local), newBase = { ...base }, pulls = {}, conflicts = [], pushed = [], failed = [];
+    const L = sectionsOf(local), newBase = { ...base }, pulls = {}, conflicts = [], pushed = [], failed = [], merged = [];
+    const newBaseValues = {};
     for (const a of actions) {
       const s = a.section;
-      if (a.action === 'adopt') newBase[s] = { version: a.expectedVersion, hash: a.localHash };
-      else if (a.action === 'pull') { pulls[s] = remote[s].value; newBase[s] = { version: remote[s].version, hash: a.remoteHash }; }
+      // Conflict of gekozen samenvoegen: probeer 3-wegs samenvoegen; lukt dat zonder veldconflict, dan versturen we het resultaat.
+      if ((a.action === 'conflict' && !hold) || resolutions[s] === 'merge') {
+        const forced = resolutions[s] === 'merge';
+        const hasBase = Object.prototype.hasOwnProperty.call(baseValues, s) && base[s] && hashValue(baseValues[s]) === base[s].hash;
+        if (remote[s] && (hasBase || forced)) {
+          const m = mergeSection(hasBase ? baseValues[s] : undefined, L[s], remote[s].value, { onConflict: forced ? 'remote' : 'report' });
+          if (m.ok) {
+            try {
+              const version = await cloud.putState(householdId, s, await encrypt(m.value), remote[s].version);
+              const h = hashValue(m.value);
+              newBase[s] = { version: Number(version), hash: h }; newBaseValues[s] = m.value;
+              pulls[s] = m.value; pushed.push(s); merged.push(s);
+            } catch (e) {
+              const c = classifyError(e);
+              if (c.kind === 'conflict') conflicts.push({ section: s, local: L[s], remote: remote[s].value, remoteVersion: remote[s].version, raced: true });
+              else failed.push({ section: s, error: c });
+            }
+            continue;
+          }
+          conflicts.push({ section: s, local: L[s], remote: remote[s].value, remoteVersion: remote[s].version, fields: m.conflicts.slice(0, 20) });
+          continue;
+        }
+      }
+      if (a.action === 'adopt') { newBase[s] = { version: a.expectedVersion, hash: a.localHash }; newBaseValues[s] = L[s]; }
+      else if (a.action === 'none' && hasOwn(L, s) && base[s] && base[s].hash === a.localHash) newBaseValues[s] = L[s];
+      else if (a.action === 'pull') { pulls[s] = remote[s].value; newBase[s] = { version: remote[s].version, hash: a.remoteHash }; newBaseValues[s] = remote[s].value; }
       else if (a.action === 'conflict') conflicts.push({ section: s, local: L[s], remote: remote[s].value, remoteVersion: remote[s].version });
       else if (a.action === 'push') {
         try {
           const version = await cloud.putState(householdId, s, await encrypt(L[s]), a.expectedVersion);
-          newBase[s] = { version: Number(version), hash: a.localHash }; pushed.push(s);
+          newBase[s] = { version: Number(version), hash: a.localHash }; newBaseValues[s] = L[s]; pushed.push(s);
         } catch (e) {
           const c = classifyError(e);
           if (c.kind === 'conflict') conflicts.push({ section: s, local: L[s], remote: remote[s] ? remote[s].value : undefined, remoteVersion: a.expectedVersion, raced: true });
@@ -136,8 +247,20 @@
         }
       }
     }
-    return { status: failed.length ? 'partial' : conflicts.length ? 'conflict' : 'ok', pulls, base: newBase, pushed, conflicts, failed, hadLegacy: !!legacy };
+    return { status: failed.length ? 'partial' : conflicts.length ? 'conflict' : 'ok', pulls, base: newBase, baseValues: newBaseValues, pushed, merged, conflicts, failed, hadLegacy: !!legacy };
   }
 
-  return { syncRoute, shouldEnable, validSection, SKIP_KEYS, LEGACY_SECTION, hashValue, isEmptyValue, sectionsOf, planSections, classifyError, createCloud, runAccountSync, CloudError };
+  // Legacy-route (één payload): alle onderdelen samenvoegen; meta/settings blijven lokaal.
+  function mergeData(base, local, remote, { onConflict = 'report' } = {}) {
+    const L = sectionsOf(local), R = sectionsOf(remote), B = base ? sectionsOf(base) : null;
+    const out = { ...local }; const conflicts = [];
+    for (const s of [...new Set([...Object.keys(L), ...Object.keys(R)])]) {
+      const m = mergeSection(B ? (hasOwn(B, s) ? B[s] : undefined) : undefined, hasOwn(L, s) ? L[s] : undefined, hasOwn(R, s) ? R[s] : undefined, { onConflict });
+      if (m.value === undefined) delete out[s]; else out[s] = m.value;
+      m.conflicts.forEach(c => conflicts.push(`${s}${c && c !== '(onderdeel)' ? (c.startsWith('[') ? '' : '.') + c : ''}`));
+    }
+    return { ok: conflicts.length === 0, value: out, conflicts };
+  }
+
+  return { syncRoute, shouldEnable, validSection, SKIP_KEYS, LEGACY_SECTION, hashValue, isEmptyValue, sectionsOf, planSections, classifyError, createCloud, runAccountSync, CloudError, merge3, mergeSection, mergeData };
 });

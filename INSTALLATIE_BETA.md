@@ -48,8 +48,12 @@ Met de Supabase CLI:
 ```bash
 npx supabase login
 npx supabase link --project-ref vwfuetxgapzfivydzhxc
-npx supabase functions deploy grocery-prices --no-verify-jwt
+npx supabase secrets set ALLOWED_ORIGINS=https://kesga44-jpg.github.io
+npx supabase functions deploy grocery-prices
 ```
+
+Sinds PR-8 vereist de functie een aangemelde gebruiker (persoonlijk account) en accepteert ze alleen verzoeken van de
+origins in `ALLOWED_ORIGINS`. Zie `docs/SECURITY.md` en `OPEN_DATA_BRONNEN.md`. Deploy alleen na akkoord van de eigenaar.
 
 De beta gebruikt daarna automatisch:
 

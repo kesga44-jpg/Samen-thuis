@@ -13,7 +13,7 @@
     {
       key: 'meer', icon: 'grid', label: 'Meer',
       pages: [['meer', 'Meer'], ['planning', 'Agenda'], ['tasks', 'Taken'], ['ideas', 'Date ideeën'], ['trips', 'Reizen'],
-        ['meals', 'Weekmenu'], ['groceries', 'Boodschappen'], ['offers', 'Aanbiedingen'], ['stock', 'Voorraad & vriezer'], ['chores', 'Routines'], ['home', 'Woning'],
+        ['meals', 'Weekmenu'], ['voeding', 'Voeding'], ['groceries', 'Boodschappen'], ['offers', 'Aanbiedingen'], ['stock', 'Voorraad & vriezer'], ['chores', 'Routines'], ['home', 'Woning'],
         ['programs', "Programma's"], ['auto24', 'Auto'], ['imports243', 'Importeren'], ['extra19', 'Extra'], ['settings', 'Instellingen']]
     }
   ];
@@ -21,7 +21,7 @@
   // Blokken op de pagina 'Meer'. Alleen pagina's die niet al in de onderbalk staan, zodat niets dubbel wordt aangeboden.
   const MORE_GROUPS = [
     { title: 'Plannen', tiles: [['planning', 'calendar', 'Agenda', 'Afspraken en agenda’s'], ['tasks', 'check', 'Taken', 'Wat moet er gebeuren'], ['ideas', 'heart', 'Date ideeën', 'Samen leuke dingen doen'], ['trips', 'plane', 'Reizen', 'Reismappen en boekingen']] },
-    { title: 'Huishouden', tiles: [['meals', 'utensils', 'Weekmenu', 'Wat eten we'], ['groceries', 'cart', 'Boodschappen', 'Lijst en prijsreferentie'], ['offers', 'tag', 'Aanbiedingen', 'Actuele supermarktprijzen'], ['stock', 'box', 'Voorraad & vriezer', 'Wat is er in huis'], ['chores', 'repeat', 'Routines', 'Huishoudtaken en herhalingen'], ['home', 'house', 'Woning', 'Onderhoud en woninginfo']] },
+    { title: 'Huishouden', tiles: [['meals', 'utensils', 'Weekmenu', 'Wat eten we'], ['voeding', 'book', 'Voeding', 'Voedingsplanning en productinformatie'], ['groceries', 'cart', 'Boodschappen', 'Lijst en prijsreferentie'], ['offers', 'tag', 'Aanbiedingen', 'Actuele supermarktprijzen'], ['stock', 'box', 'Voorraad & vriezer', 'Wat is er in huis'], ['chores', 'repeat', 'Routines', 'Huishoudtaken en herhalingen'], ['home', 'house', 'Woning', 'Onderhoud en woninginfo']] },
     { title: 'Overig', tiles: [['programs', 'tv', "Programma's", 'Series, films en uitjes'], ['auto24', 'car', 'Auto', 'Tankbeurten en voertuigen'], ['imports243', 'upload', 'Importeren', 'Gegevens inlezen'], ['extra19', 'sparkles', 'Extra', 'Handige snelkoppelingen'], ['settings', 'gear', 'Instellingen', 'Profiel, sync en back-ups']] }
   ];
 
@@ -29,6 +29,16 @@
   // `parts` = [CSS-selector, optionele kopregex]. `catchAll` toont ook alles wat geen andere subpagina claimt,
   // zodat er nooit een onderdeel verdwijnt. `always` blijft op elke subpagina zichtbaar.
   const HUBS = {
+    voeding: {
+      title: 'Voeding',
+      always: ['.nut-disclaimer'],
+      subs: [
+        { key: 'weekmenu', icon: 'calendar', label: 'Voeding bij het weekmenu', desc: 'Voedingswaarde per maaltijd en controle', parts: [['.nut-pane[data-nut="weekmenu"]']] },
+        { key: 'recepten', icon: 'book', label: 'Receptkopieën uit Osta', desc: 'Voedingswaarde en productkoppelingen', parts: [['.nut-pane[data-nut="recepten"]']] },
+        { key: 'producten', icon: 'box', label: 'Productinformatie', desc: 'Barcode, voedingswaarden en allergenen', parts: [['.nut-pane[data-nut="producten"]']] },
+        { key: 'uitwisselen', icon: 'sync', label: 'Osta en recepten uitwisselen', desc: 'Importeren met voorbeeld en exporteren', parts: [['.nut-pane[data-nut="uitwisselen"]']] }
+      ]
+    },
     settings: {
       title: 'Instellingen',
       subs: [
