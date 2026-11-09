@@ -1,0 +1,91 @@
+/* Screenshot-driven contrast fixes. Keep every override inside the affected modules. */
+
+/* The price-reference card has a green floor badge and an accent good-price badge.
+   Do not recolor generic .tag/.tag.green elements elsewhere in the application. */
+body.st-glass20 [data-v15-price-card] .tag.green {
+  color: #fff !important;
+  -webkit-text-fill-color: #fff !important;
+  background-color: #216b4a !important;
+  border-color: #216b4a !important;
+  opacity: 1 !important;
+  font-weight: 750;
+}
+
+body.st-glass20 [data-v15-price-card] .v13-card,
+body.st-glass20 [data-v15-price-card] .v13-card strong,
+body.st-glass20 [data-v15-price-card] .v13-card small,
+body.st-glass20 [data-v15-price-card] .v13-card .muted {
+  color: var(--user-primary-text, var(--ink)) !important;
+  -webkit-text-fill-color: var(--user-primary-text, var(--ink)) !important;
+  opacity: 1 !important;
+}
+
+body.st-glass20 [data-v15-price-card] .v13-card .tag:not(.green) {
+  color: #fff !important;
+  -webkit-text-fill-color: #fff !important;
+  background-color: #3b2b70 !important;
+  border-color: #3b2b70 !important;
+  opacity: 1 !important;
+}
+
+/* Auto tab controls only: explicit readable states, keyboard focus, and touch targets. */
+body.st-glass20 .auto24 .auto-tabs24 button[data-auto24-tab] {
+  min-height: 48px;
+  color: var(--user-primary-text, var(--ink)) !important;
+  -webkit-text-fill-color: var(--user-primary-text, var(--ink)) !important;
+  background: color-mix(in srgb, var(--paper, #17263a) 86%, #fff 14%) !important;
+  border: 1px solid var(--line, #53677d) !important;
+  opacity: 1 !important;
+  font-weight: 700;
+}
+
+body.st-glass20 .auto24 .auto-tabs24 button[data-auto24-tab] :is(span, b, small, strong) {
+  color: inherit !important;
+  -webkit-text-fill-color: currentColor !important;
+  opacity: 1 !important;
+}
+
+body.st-glass20 .auto24 .auto-tabs24 button[data-auto24-tab].active,
+body.st-glass20 .auto24 .auto-tabs24 button[data-auto24-tab][aria-selected="true"] {
+  color: #fff !important;
+  -webkit-text-fill-color: #fff !important;
+  background: #315f86 !important;
+  border-color: #315f86 !important;
+}
+
+body.st-glass20 .auto24 .auto-tabs24 button[data-auto24-tab]:focus-visible,
+body.st-glass20 .auto24 button:focus-visible,
+body.st-glass20 .auto24 a:focus-visible {
+  outline: 3px solid #f3b27e !important;
+  outline-offset: 3px !important;
+}
+
+/* Readable supporting copy in Auto cards; keep status badges and values' own colors intact. */
+body.st-glass20 .auto24 :is(.auto-head24, .auto-body24, .stats-hero24, .stats-card24, .stats-filter24) {
+  color: var(--user-primary-text, var(--ink)) !important;
+}
+
+body.st-glass20 .auto24 :is(.auto-head24, .auto-body24, .stats-hero24, .stats-card24, .stats-filter24) :is(h1, h2, h3, p, label, small):not(.tag) {
+  color: var(--user-primary-text, var(--ink)) !important;
+  -webkit-text-fill-color: var(--user-primary-text, var(--ink)) !important;
+  opacity: 1 !important;
+}
+
+body.st-glass20 .auto24 .auto-tabs24 button[data-auto24-tab]:disabled,
+body.st-glass20 .auto24 button:disabled {
+  color: #e5eaf0 !important;
+  -webkit-text-fill-color: #e5eaf0 !important;
+  background: #46566a !important;
+  opacity: 1 !important;
+}
+
+@media (max-width: 560px) {
+  body.st-glass20 .auto24 .auto-tabs24 button[data-auto24-tab] {
+    min-height: 52px;
+    padding: 10px 8px !important;
+  }
+  body.st-glass20 [data-v15-price-card] .v13-card {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+}
