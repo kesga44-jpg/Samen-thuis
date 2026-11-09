@@ -8,29 +8,34 @@ const read = file => fs.readFileSync(path.join(__dirname, file), 'utf8');
 const css = read('css/ui-contrast-fixes.css');
 const html = read('index.html');
 const sw = read('sw.js');
+const app = read('app.js');
 
 test('contrast stylesheet is loaded after user-theme styles and included in offline cache', () => {
+  assert.ok(html.indexOf('css/personalization.css') < html.indexOf('css/ui-contrast-fixes.css'));
   assert.match(html, /css\/ui-contrast-fixes\.css\?v=1/);
   assert.match(sw, /samen-thuis-v44-ui-contrast/);
   assert.match(sw, /\.\/css\/ui-contrast-fixes\.css\?v=1/);
 });
 
-test('grocery deal badges have an explicit readable foreground and background', () => {
-  assert.match(css, /\.tag\.green[\s\S]*?color:\s*#fff\s*!important/);
-  assert.match(css, /\.tag\.green[\s\S]*?background-color:\s*#216b4a\s*!important/);
-  assert.match(css, /\[data-v15-price-card\]/);
+test('grocery badge overrides are restricted to the existing price-reference markup', () => {
+  assert.match(app, /data-v15-price-card/);
+  assert.match(css, /body\.st-glass20 \[data-v15-price-card\] \.tag\.green/);
+  assert.match(css, /body\.st-glass20 \[data-v15-price-card\] \.v13-card \.tag:not\(\.green\)/);
+  assert.doesNotMatch(css, /body\.st-glass20\s+\.tag\.green\s*[,\{]/);
+  assert.doesNotMatch(css, /\.price-reference-card/);
 });
 
-test('Auto tab labels have explicit normal and selected contrast, and touch targets', () => {
-  assert.match(css, /\.auto-tabs24 button[\s\S]*?min-height:\s*48px/);
-  assert.match(css, /\.auto-tabs24 button[\s\S]*?color:\s*var\(--user-primary-text, var\(--ink\)\) !important/);
-  assert.match(css, /\.auto-tabs24 button\.active[\s\S]*?color:\s*#fff !important/);
-  assert.match(css, /\.auto-tabs24 button:focus-visible/);
+test('Auto tab overrides use existing Auto module and tab markup only', () => {
+  assert.match(app, /auto-tabs24/);
+  assert.match(css, /\.auto24 \.auto-tabs24 button\[data-auto24-tab\][\s\S]*?min-height:\s*48px/);
+  assert.match(css, /\.auto24 \.auto-tabs24 button\[data-auto24-tab\]\.active/);
+  assert.match(css, /\.auto24 \.auto-tabs24 button\[data-auto24-tab\]:focus-visible/);
+  assert.match(css, /@media \(max-width: 560px\)[\s\S]*?min-height:\s*52px/);
 });
 
-test('fixes are scoped to grocery price references and Auto, not global text colors', () => {
+test('fixes do not introduce global color, button, or tag overrides', () => {
   assert.doesNotMatch(css, /^\s*\*\s*\{/m);
   assert.doesNotMatch(css, /^\s*body\.st-glass20\s*\{/m);
-  assert.match(css, /\[data-v15-price-card\]/);
-  assert.match(css, /\.auto24/);
+  assert.doesNotMatch(css, /^\s*body\.st-glass20\s+\.tag(?:\s|\{|\.)/m);
+  assert.doesNotMatch(css, /^\s*body\.st-glass20\s+button(?:\s|\{|\.)/m);
 });

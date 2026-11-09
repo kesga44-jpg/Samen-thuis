@@ -1,9 +1,7 @@
-/* Targeted readability fixes for grocery price badges and Auto & Fuel controls.
-   Keep the selectors scoped to these modules so personal themes and other pages remain unchanged. */
+/* Screenshot-driven contrast fixes. Keep every override inside the affected modules. */
 
-/* Price reference and offer badges must not inherit low-contrast text colors from theme overrides. */
-body.st-glass20 .tag.green,
-body.st-glass20 .price-reference-card .tag.green,
+/* The price-reference card has a green floor badge and an accent good-price badge.
+   Do not recolor generic .tag/.tag.green elements elsewhere in the application. */
 body.st-glass20 [data-v15-price-card] .tag.green {
   color: #fff !important;
   -webkit-text-fill-color: #fff !important;
@@ -13,11 +11,7 @@ body.st-glass20 [data-v15-price-card] .tag.green {
   font-weight: 750;
 }
 
-/* Ensure the price reference's amounts and labels remain visible on dark glass cards. */
-body.st-glass20 [data-v15-price-card],
-body.st-glass20 [data-v15-price-card] .v13-card {
-  color: var(--user-primary-text, var(--ink)) !important;
-}
+body.st-glass20 [data-v15-price-card] .v13-card,
 body.st-glass20 [data-v15-price-card] .v13-card strong,
 body.st-glass20 [data-v15-price-card] .v13-card small,
 body.st-glass20 [data-v15-price-card] .v13-card .muted {
@@ -25,14 +19,17 @@ body.st-glass20 [data-v15-price-card] .v13-card .muted {
   -webkit-text-fill-color: var(--user-primary-text, var(--ink)) !important;
   opacity: 1 !important;
 }
-body.st-glass20 [data-v15-price-card] .tag.green,
-body.st-glass20 [data-v15-price-card] .tag:not(.green) {
+
+body.st-glass20 [data-v15-price-card] .v13-card .tag:not(.green) {
   color: #fff !important;
   -webkit-text-fill-color: #fff !important;
+  background-color: #3b2b70 !important;
+  border-color: #3b2b70 !important;
+  opacity: 1 !important;
 }
 
-/* Auto tabs: keep all labels/icons legible, with a clear selected state and accessible touch targets. */
-body.st-glass20 .auto24 .auto-tabs24 button {
+/* Auto tab controls only: explicit readable states, keyboard focus, and touch targets. */
+body.st-glass20 .auto24 .auto-tabs24 button[data-auto24-tab] {
   min-height: 48px;
   color: var(--user-primary-text, var(--ink)) !important;
   -webkit-text-fill-color: var(--user-primary-text, var(--ink)) !important;
@@ -41,44 +38,40 @@ body.st-glass20 .auto24 .auto-tabs24 button {
   opacity: 1 !important;
   font-weight: 700;
 }
-body.st-glass20 .auto24 .auto-tabs24 button :is(span, b, small, strong) {
+
+body.st-glass20 .auto24 .auto-tabs24 button[data-auto24-tab] :is(span, b, small, strong) {
   color: inherit !important;
   -webkit-text-fill-color: currentColor !important;
   opacity: 1 !important;
 }
-body.st-glass20 .auto24 .auto-tabs24 button.active,
-body.st-glass20 .auto24 .auto-tabs24 button[aria-selected="true"] {
+
+body.st-glass20 .auto24 .auto-tabs24 button[data-auto24-tab].active,
+body.st-glass20 .auto24 .auto-tabs24 button[data-auto24-tab][aria-selected="true"] {
   color: #fff !important;
   -webkit-text-fill-color: #fff !important;
   background: #315f86 !important;
   border-color: #315f86 !important;
 }
-body.st-glass20 .auto24 .auto-tabs24 button:focus-visible,
+
+body.st-glass20 .auto24 .auto-tabs24 button[data-auto24-tab]:focus-visible,
 body.st-glass20 .auto24 button:focus-visible,
 body.st-glass20 .auto24 a:focus-visible {
   outline: 3px solid #f3b27e !important;
   outline-offset: 3px !important;
 }
 
-/* Auto content and stats inherit readable foregrounds in both color schemes. */
-body.st-glass20 .auto24 .auto-head24,
-body.st-glass20 .auto24 .auto-body24,
-body.st-glass20 .auto24 .card,
-body.st-glass20 .auto24 .stats-hero24,
-body.st-glass20 .auto24 .stats-card24,
-body.st-glass20 .auto24 .stats-filter24,
-body.st-glass20 .auto24 .fill-row24 {
+/* Readable supporting copy in Auto cards; keep status badges and values' own colors intact. */
+body.st-glass20 .auto24 :is(.auto-head24, .auto-body24, .stats-hero24, .stats-card24, .stats-filter24) {
   color: var(--user-primary-text, var(--ink)) !important;
 }
-body.st-glass20 .auto24 .card :is(h1, h2, h3, p, strong, b, label, small, span):not(.tag),
-body.st-glass20 .auto24 .stats-hero24 :is(h1, h2, h3, p, strong, b, label, small, span),
-body.st-glass20 .auto24 .stats-card24 :is(h1, h2, h3, p, strong, b, label, small, span),
-body.st-glass20 .auto24 .fill-row24 :is(h1, h2, h3, p, strong, b, label, small, span) {
-  color: inherit !important;
-  -webkit-text-fill-color: currentColor !important;
+
+body.st-glass20 .auto24 :is(.auto-head24, .auto-body24, .stats-hero24, .stats-card24, .stats-filter24) :is(h1, h2, h3, p, label, small):not(.tag) {
+  color: var(--user-primary-text, var(--ink)) !important;
+  -webkit-text-fill-color: var(--user-primary-text, var(--ink)) !important;
   opacity: 1 !important;
 }
-body.st-glass20 .auto24 .auto-tabs24 button:disabled,
+
+body.st-glass20 .auto24 .auto-tabs24 button[data-auto24-tab]:disabled,
 body.st-glass20 .auto24 button:disabled {
   color: #e5eaf0 !important;
   -webkit-text-fill-color: #e5eaf0 !important;
@@ -87,7 +80,7 @@ body.st-glass20 .auto24 button:disabled {
 }
 
 @media (max-width: 560px) {
-  body.st-glass20 .auto24 .auto-tabs24 button {
+  body.st-glass20 .auto24 .auto-tabs24 button[data-auto24-tab] {
     min-height: 52px;
     padding: 10px 8px !important;
   }
