@@ -8,6 +8,7 @@
 | SQL-semantiek (RLS, RPC's) | onderdeel van `migrations-pg.test.js` | Lokaal en CI | PostgreSQL 14–16, **niet-root**-gebruiker (`initdb` weigert root) |
 | Syntax | `node --check app.js` (+ nieuwe modules in CI) | CI | — |
 | Browser (mobiel/desktop, offline, Voeding) | `node e2e/smoke.mjs` | Lokaal (optioneel, niet in CI) | `npm i -g playwright && npx playwright install chromium` |
+| Auto-contrast (Bewerk, statistiekfilters en -kaart) | `node e2e/auto-contrast.mjs` | Lokaal (optioneel, niet in CI) | Playwright + Chromium; `E2E_SHOTS` voor screenshots |
 | Browser: synchronisatie tussen twee apparaten | `node e2e/sync-merge.mjs` | Lokaal | Playwright (Supabase wordt nagebootst) |
 | Browser: documentimport en scan (PDF, DOCX, XLSX, XLS, OCR) | `E2E_LIVE_CDN=1 node e2e/import-browser.mjs` of `E2E_NPM_DIR=… node e2e/import-browser.mjs` | Lokaal | Playwright; live: internet; lokaal: uitgepakte npm-pakketten |
 | Precache bijwerken | `node scripts/sync-sw-assets.mjs samen-thuis-vNN-onderwerp` | Bij elke asset-wijziging | — |

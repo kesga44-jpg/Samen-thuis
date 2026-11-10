@@ -61,14 +61,44 @@ body.st-glass20 .auto24 a:focus-visible {
 }
 
 /* Readable supporting copy in Auto cards; keep status badges and values' own colors intact. */
-body.st-glass20 .auto24 :is(.auto-head24, .auto-body24, .stats-hero24, .stats-card24, .stats-filter24) {
+body.st-glass20 .auto24 :is(.auto-head24, .auto-body24, .stats-card24, .stats-filter24) {
   color: var(--user-primary-text, var(--ink)) !important;
 }
 
-body.st-glass20 .auto24 :is(.auto-head24, .auto-body24, .stats-hero24, .stats-card24, .stats-filter24) :is(h1, h2, h3, p, label, small):not(.tag) {
+body.st-glass20 .auto24 :is(.auto-head24, .auto-body24, .stats-card24, .stats-filter24) :is(h1, h2, h3, p, label, small):not(.tag) {
   color: var(--user-primary-text, var(--ink)) !important;
   -webkit-text-fill-color: var(--user-primary-text, var(--ink)) !important;
   opacity: 1 !important;
+}
+
+/* Auto controls use an opaque, paired foreground and background. */
+html[data-theme20] body.st-glass20 .auto24 :is([data-auto24-edit], .period24 button, [data-auto24-allcars]) {
+  min-height: 44px;
+  padding: 9px 14px;
+  border: 1px solid currentColor;
+  border-radius: 11px;
+  background: var(--paper) !important;
+  color: var(--user-primary-text) !important;
+  -webkit-text-fill-color: var(--user-primary-text) !important;
+  opacity: 1;
+}
+
+html[data-theme20] body.st-glass20 .auto24 :is([data-auto24-edit], .period24 button.active, [data-auto24-allcars].active) {
+  background: #315f86 !important;
+  border-color: #315f86;
+  color: #fff !important;
+  -webkit-text-fill-color: #fff !important;
+}
+
+/* The gradient is dark enough for the same light text at both ends. */
+html[data-theme20] body.st-glass20 .auto24 .stats-hero24 {
+  background: linear-gradient(135deg, #17647a, #104858);
+}
+
+html[data-theme20] body.st-glass20 .auto24 .stats-hero24 :is(small, strong) {
+  color: #fff !important;
+  -webkit-text-fill-color: #fff !important;
+  opacity: 1;
 }
 
 body.st-glass20 .auto24 .auto-tabs24 button[data-auto24-tab]:disabled,
