@@ -98,7 +98,7 @@ test('retries through the authenticated existing Edge Function after direct fetc
   assert.equal(result.status, 'updated');
   assert.equal(result.viaFallback, true);
   assert.deepEqual(client.current(), {
-    quote: 'Stay curious & kind.', author: 'Jane Doe', date: '2026-11-10', checkedDate: '2026-11-10'
+    quote: 'Stay curious & kind.', author: 'Jane Doe', date: '2026-11-10', checkedDate: '2026-11-10', checkedAt: '2026-11-10T09:00:00.000Z'
   });
   assert.equal(JSON.parse(storage.raw(RSS.CACHE_KEY)).markup, undefined);
 });
@@ -120,9 +120,9 @@ test('retains the last successful quote after a network failure and does not ret
   });
   await assert.rejects(client.refresh(), /offline/);
   assert.deepEqual(client.current(), {
-    quote: 'Stay curious & kind.', author: 'Jane Doe', date: '2026-11-09', checkedDate: '2026-11-10'
+    quote: 'Stay curious & kind.', author: 'Jane Doe', date: '2026-11-09', checkedDate: '2026-11-10', checkedAt: '2026-11-10T09:00:00.000Z'
   });
-  assert.equal((await client.refresh()).status, 'checked-today');
+  assert.equal((await client.refresh()).status, 'retry-later');
   assert.equal(requests, 1);
 });
 
@@ -137,7 +137,50 @@ test('does not expose an empty attempted cache when the first daily fetch fails'
   });
   await assert.rejects(client.refresh(), /offline/);
   assert.equal(client.current(), null);
+  assert.equal((await client.refresh()).status, 'retry-later');
+});
+
+test('an offline start does not consume the daily attempt and refreshes once the network returns', async () => {
+  const storage = memoryStorage();
+  let online = false, requests = 0;
+  const client = RSS.createClient({
+    fetchImpl: async () => { requests++; return new Response(xml, { headers: { 'content-type': 'application/rss+xml' } }); },
+    storage, Parser: FixtureParser, isOnline: () => online,
+    today: () => '2026-11-10', now: () => Date.parse('2026-11-10T09:00:00Z')
+  });
+  assert.equal((await client.refresh()).status, 'offline');
+  assert.equal(requests, 0);
+  assert.equal(storage.raw(RSS.CACHE_KEY), undefined);
+  online = true;
+  assert.equal((await client.refresh()).status, 'updated');
+  assert.equal(requests, 1);
+});
+
+test('a failed attempt is retried after the cooldown, but a successful quote is kept for the whole day', async () => {
+  const storage = memoryStorage();
+  let time = Date.parse('2026-11-10T09:00:00Z'), fail = true, requests = 0;
+  const client = RSS.createClient({
+    fetchImpl: async () => {
+      requests++;
+      if (fail) throw new TypeError('offline');
+      return new Response(xml, { headers: { 'content-type': 'application/rss+xml' } });
+    },
+    storage, Parser: FixtureParser, isOnline: () => true,
+    today: () => new Date(time).toISOString().slice(0, 10), now: () => time
+  });
+  await assert.rejects(client.refresh(), /offline/);
+  time += 30 * 60 * 1000; fail = false;
+  assert.equal((await client.refresh()).status, 'retry-later');
+  time += 31 * 60 * 1000;
+  assert.equal((await client.refresh()).status, 'updated');
+  time += 5 * 60 * 60 * 1000;
   assert.equal((await client.refresh()).status, 'checked-today');
+  assert.equal(requests, 2);
+});
+
+test('a generic title such as "Quote of the Day: Name" is not shown as the quote', () => {
+  const generic = '<rss version="2.0"><channel><item><title>Quote of the Day: Gandhi</title><description>Be the change you wish to see.</description></item></channel></rss>';
+  assert.deepEqual(RSS.parseFeed(generic, FixtureParser), { quote: 'Be the change you wish to see.', author: '' });
 });
 
 test('uses the browser direct fetch once a day, deduplicates concurrent calls, then refreshes on the next date', async () => {

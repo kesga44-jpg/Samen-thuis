@@ -460,7 +460,7 @@ const brainyQuoteClient = brainyQuoteRSS?.createClient({
     if (!auth?.ready) return null;
     const session = await auth.ready();
     if (!session?.access_token) return null;
-    const response = await fetch(`${DEFAULT_PROJECT_URL}/functions/v1/data-sources`, {
+    const response = await fetch(`${auth.base()}/functions/v1/data-sources`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1762,9 +1762,11 @@ setupNav();
 render();
 handleInitialAgendaImport();
 refreshBrainyQuoteRSS();
+window.addEventListener('online', refreshBrainyQuoteRSS);
+// De client zelf beperkt netwerkverzoeken: één succesvolle quote per dag, mislukte pogingen pas na een uur opnieuw.
 setInterval(() => {
   if (document.visibilityState === 'visible') refreshBrainyQuoteRSS();
-}, 24 * 60 * 60 * 1000);
+}, 60 * 60 * 1000);
 if (syncConfigured()) syncNow();
 
 ;

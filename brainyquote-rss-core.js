@@ -10,6 +10,7 @@
   const MAX_FEED_BYTES = 32 * 1024;
   const MAX_QUOTE_LENGTH = 500;
   const MAX_AUTHOR_LENGTH = 120;
+  const RETRY_AFTER_MS = 60 * 60 * 1000;
 
   function cleanText(value, maxLength) {
     return String(value || '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, maxLength);
@@ -33,7 +34,7 @@
 
     const title = cleanText(item.querySelector('title')?.textContent, MAX_QUOTE_LENGTH + 40);
     const description = htmlText(item.querySelector('description')?.textContent, Parser);
-    const genericTitle = /^(today'?s )?quote(?: of the day)?$/i.test(title);
+    const genericTitle = /^(today'?s )?quote/i.test(title);
     const quote = cleanText(genericTitle || !title ? description : title, MAX_QUOTE_LENGTH);
     const author = genericTitle || !description || description === title ? '' : cleanText(description, MAX_AUTHOR_LENGTH);
     if (quote.length < 4) throw new Error('BrainyQuote-feed bevat geen geldig citaat.');
@@ -61,7 +62,8 @@
       author,
       date: /^\d{4}-\d{2}-\d{2}$/.test(value.date) ? value.date : '',
       checkedDate: /^\d{4}-\d{2}-\d{2}$/.test(value.checkedDate) ? value.checkedDate
-        : /^\d{4}-\d{2}-\d{2}/.test(value.checkedAt || '') ? value.checkedAt.slice(0, 10) : ''
+        : /^\d{4}-\d{2}-\d{2}/.test(value.checkedAt || '') ? value.checkedAt.slice(0, 10) : '',
+      checkedAt: Number.isFinite(Date.parse(value.checkedAt)) ? new Date(value.checkedAt).toISOString() : ''
     };
   }
 
@@ -115,7 +117,8 @@
     storage = null,
     Parser = globalThis.DOMParser,
     now = () => Date.now(),
-    today = () => new Date(now()).toISOString().slice(0, 10)
+    today = () => new Date(now()).toISOString().slice(0, 10),
+    isOnline = () => globalThis.navigator?.onLine !== false
   } = {}) {
     let inFlight = null;
     let memoryCache = null;
@@ -133,7 +136,11 @@
       if (inFlight) return inFlight;
       const date = today();
       const cached = getCache();
-      if (cached?.checkedDate === date) return { status: 'checked-today', quote: cached };
+      if (current()?.date === date) return { status: 'checked-today', quote: cached };
+      // Een mislukte poging wordt pas na een uur herhaald; een succesvolle quote geldt de hele dag.
+      const lastAttempt = cached?.checkedDate === date ? Date.parse(cached.checkedAt) : NaN;
+      if (Number.isFinite(lastAttempt) && now() - lastAttempt < RETRY_AFTER_MS) return { status: 'retry-later', quote: current() };
+      if (!isOnline()) return { status: 'offline', quote: current() };
 
       const checkedAt = new Date(now()).toISOString();
       const attempted = { ...(cached || {}), checkedDate: date, checkedAt };
