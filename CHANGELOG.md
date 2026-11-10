@@ -2,6 +2,13 @@
 
 Indeling volgens [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/). Eerdere versies staan in de losse `*_V*.md`/`UPDATE_*.md`-notities.
 
+## [Unreleased]
+
+### Gewijzigd
+- De bèta-prijstracker gebruikt alleen exacte, betrouwbare PrijsProfeet-matches met dezelfde productidentiteit en verpakking; vier verschillende prijzen blijven vereist en kortingspercentages vormen geen automatische grens.
+- Bèta-prijswaarnemingen bewaren bron-, winkel-, product-, EAN- en verpakkingsgegevens. Oude onvolledige waarnemingen blijven behouden maar worden niet automatisch vergeleken; bij API-fouten blijft de laatst bekende prijs staan.
+- PrijsProfeet-documentatie bijgewerkt op basis van de officiële API-documentatie en voorwaarden.
+
 ## [26.0-rc1] — 2026-11-08 (releasekandidaat, gesplitst in 8 PR's, niet gemerged)
 
 ### Gewijzigd ten opzichte van de eerste versie hieronder

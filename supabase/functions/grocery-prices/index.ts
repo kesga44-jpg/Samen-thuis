@@ -1,5 +1,12 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { guard, createRateLimiter, cleanText } from "../_shared/guard.ts";
+import "../_shared/price-history-core.js";
+
+const priceHistoryCore = (globalThis as typeof globalThis & {
+  SamenThuisPriceHistory: {
+    normalizeProviderProduct(product: unknown, response: unknown): Record<string, unknown>;
+  };
+}).SamenThuisPriceHistory;
 
 // R7/PR-8: geen open CORS meer en een gebruikers-JWT is verplicht (zie ../_shared/guard.ts).
 // CORS-headers worden per verzoek toegevoegd door withHeaders().
@@ -39,7 +46,7 @@ function discountPercentage(price: unknown, originalPrice: unknown, reported: un
   return ((original - current) / original) * 100;
 }
 
-function rank(results: any[], preferredRetailer: string) {
+function rank(results: any[], preferredRetailer: string, searchResponse: unknown) {
   const active = results.filter(x => x?.promotion_status === "active" && numberOrNull(x?.price) != null && Number(x.price) >= 0);
   if (!active.length) return null;
   const preferred = String(preferredRetailer || "").trim().toLowerCase();
@@ -48,13 +55,7 @@ function rank(results: any[], preferredRetailer: string) {
   // De API geeft fuzzy zoekresultaten in relevantievolgorde. Behoud die volgorde.
   const x = list[0];
   return {
-    productId: x.product_id || x.base_product_id || "",
-    baseProductId: x.base_product_id || "",
-    name: x.name || "",
-    retailer: x.retailer || "",
-    price: Number(x.price),
-    originalPrice: numberOrNull(x.original_price),
-    savingsPercentage: discountPercentage(x.price, x.original_price, x.savings_percentage),
+    ...priceHistoryCore.normalizeProviderProduct(x, searchResponse),
     promotionType: x.promotion_type || "",
     promotionText: x.promotion_text || x.offer_text || "",
     promotionStatus: x.promotion_status || "active",
@@ -115,10 +116,8 @@ function normalizeOffer(x: any) {
 async function listCategories() {
   const headers: Record<string,string> = { "User-Agent": "SamenThuis/1.0 (+https://github.com/)", "Accept": "application/json" };
   if (key) headers["X-API-Key"] = key;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 10000);
   try {
-    const response = await fetch(CATEGORIES_API, { headers, signal: controller.signal });
+    const response = await fetchProvider(CATEGORIES_API, headers);
     if (!response.ok) {
       console.error("PrijsProfeet categories HTTP", response.status);
       return json({error:`PrijsProfeet ${response.status}`}, response.status >= 500 || response.status === 429 ? 502 : response.status);
@@ -136,7 +135,14 @@ async function listCategories() {
   } catch (error) {
     console.error("PrijsProfeet categories mislukt:", error instanceof Error ? error.name + ": " + error.message : "onbekend");
     return json({error:"Categorieën ophalen mislukt"},502);
-  } finally { clearTimeout(timer); }
+  }
+}
+
+async function fetchProvider(url: string | URL, headers: Record<string,string>) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10000);
+  try { return await fetch(url, { headers, signal: controller.signal }); }
+  finally { clearTimeout(timer); }
 }
 
 async function searchOffers(query: string, category = "", page = 1) {
@@ -150,8 +156,8 @@ async function searchOffers(query: string, category = "", page = 1) {
     "User-Agent": "SamenThuis/1.0 (+https://github.com/)"
   };
   if (key) headers["X-API-Key"] = key;
-  const response = await fetch(url, { headers });
-  if (!response.ok) return json({error:`PrijsProfeet ${response.status}`},response.status);
+  const response = await fetchProvider(url, headers);
+  if (!response.ok) return json({error:response.status===429?"PrijsProfeet heeft de aanvraaglimiet bereikt. Probeer later opnieuw.":`PrijsProfeet ${response.status}`},response.status);
   const payload = await response.json();
   const results = Array.isArray(payload.results) ? payload.results : [];
   const offers = results
@@ -171,10 +177,14 @@ async function lookup(item: {id:string;query:string;preferredRetailer?:string}) 
     "User-Agent": "SamenThuisBeta/1.0 (+https://github.com/)"
   };
   if (key) headers["X-API-Key"] = key;
-  const response = await fetch(url, { headers });
-  if (!response.ok) return { id:item.id, result:null, error:`PrijsProfeet ${response.status}` };
+  const response = await fetchProvider(url, headers);
+  if (!response.ok) return { id:item.id, result:null, error:response.status===429?"PrijsProfeet heeft de aanvraaglimiet bereikt. Probeer later opnieuw.":`PrijsProfeet ${response.status}` };
   const payload = await response.json();
-  return { id:item.id, result:rank(Array.isArray(payload.results) ? payload.results : [], item.preferredRetailer || ""), error:"" };
+  return {
+    id:item.id,
+    result:rank(Array.isArray(payload.results) ? payload.results : [], item.preferredRetailer || "", payload),
+    error:""
+  };
 }
 
 serve(async req => {
