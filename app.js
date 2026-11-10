@@ -4,7 +4,6 @@ const STORAGE_KEY = 'samenThuisDataV2';
 const LEGACY_STORAGE_KEY = 'samenThuisDataV1';
 const SYNC_KEY = 'samenThuisSyncV1';
 const SYNC_CONFLICT_KEY = 'samenThuisSyncConflictV1';
-const QUOTE_KEY = 'samenThuisQuoteCacheV1';
 const DEFAULT_PROJECT_URL = 'https://vwfuetxgapzfivydzhxc.supabase.co';
 const DEFAULT_PUBLISHABLE_KEY = 'sb_publishable_Xa1oLeM64F-jog1vVjJbkQ_BE3UV6mR';
 const PDFJS_URL = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.min.mjs';
@@ -450,59 +449,56 @@ function renderDailyQuestion() {
   </section>`;
 }
 
-function captureBrainyQuote() {
-  const source = document.querySelector('#brainyQuoteSource');
-  if (!source) return;
-  const copy = source.cloneNode(true);
-  copy.querySelectorAll('script').forEach(script => script.remove());
-  copy.querySelectorAll('a').forEach(link => {
-    if (link.textContent.trim().toLowerCase() === 'more quotes') link.remove();
-  });
-  const quoteText = copy.textContent.replace(/\s+/g, ' ').trim();
-  const markup = `<blockquote>${esc(quoteText)}</blockquote>`;
-  if (quoteText.length > 12) {
-    localStorage.setItem(QUOTE_KEY, JSON.stringify({ date: todayISO(), markup }));
-    if (current === 'today') render();
+const brainyQuoteRSS = window.SamenThuisBrainyQuote;
+const brainyQuoteClient = brainyQuoteRSS?.createClient({
+  storage: window.localStorage,
+  Parser: window.DOMParser,
+  today: todayISO,
+  fallbackFetchImpl: async () => {
+    if (!navigator.onLine) return null;
+    const auth = window.SamenThuisAuth25;
+    if (!auth?.ready) return null;
+    const session = await auth.ready();
+    if (!session?.access_token) return null;
+    const response = await fetch(`${DEFAULT_PROJECT_URL}/functions/v1/data-sources`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: DEFAULT_PUBLISHABLE_KEY,
+        Authorization: `Bearer ${session.access_token}`
+      },
+      body: JSON.stringify({ action: 'brainyquote' }),
+      credentials: 'omit'
+    });
+    if (!response.ok) throw new Error(`BrainyQuote Edge Function gaf HTTP ${response.status}.`);
+    const body = await response.json();
+    if (typeof body?.rss !== 'string') throw new Error('BrainyQuote Edge Function gaf geen feed terug.');
+    return body.rss;
   }
-}
+});
 
 async function refreshBrainyQuoteRSS() {
-  let cached;
-  try { cached = JSON.parse(localStorage.getItem(QUOTE_KEY) || 'null'); } catch { cached = null; }
-  if (window.SamenThuisQuotes && !window.SamenThuisQuotes.shouldRefresh(cached?.checkedAt)) return;
+  if (!brainyQuoteClient) return;
   try {
-    const response = await fetch('https://www.brainyquote.com/link/quotebr.rss', { cache: 'no-store' });
-    if (!response.ok) return;
-    const xml = new DOMParser().parseFromString(await response.text(), 'application/xml');
-    const item = xml.querySelector('item');
-    if (!item) return;
-    const title = item.querySelector('title')?.textContent?.trim() || '';
-    const descriptionHtml = item.querySelector('description')?.textContent || '';
-    const description = new DOMParser().parseFromString(descriptionHtml, 'text/html').body.textContent.trim();
-    if (!title && !description) return;
-    const genericTitle = /^(today'?s )?quote/i.test(title);
-    const quote = genericTitle ? description : title;
-    const author = genericTitle || description === title ? '' : description;
-    const markup = `<blockquote>${esc(quote)}</blockquote>${author ? `<p>${esc(author)}</p>` : ''}`;
-    localStorage.setItem(QUOTE_KEY, JSON.stringify({ date: todayISO(), checkedAt: new Date().toISOString(), markup }));
+    const result = await brainyQuoteClient.refresh();
+    if (result.status === 'updated' && current === 'today') render();
+  } catch (error) {
+    console.warn('BrainyQuote RSS vernieuwen mislukt:', error instanceof Error ? error.message : 'onbekende fout');
     if (current === 'today') render();
-  } catch {
-    // De officiële Javascript-feed en de laatst bewaarde quote blijven als fallback werken.
   }
 }
 
 function renderQuote() {
-  let cache;
-  try { cache = JSON.parse(localStorage.getItem(QUOTE_KEY) || 'null'); } catch { cache = null; }
-  // R4: geen extern script meer. RSS-tekst (alleen als tekst, ge-escaped) blijft optioneel; anders een lokale gedachte van de dag.
-  if (cache?.markup && cache.date === todayISO()) {
-    return `<section class="card quote-card"><div><p class="eyebrow">Quote of the day</p><div class="quote-content">${cache.markup}</div></div><a href="https://www.brainyquote.com/link/quotebr.rss" target="_blank" rel="noopener">Bron: BrainyQuote RSS</a></section>`;
+  const cached = brainyQuoteClient?.current();
+  if (cached) {
+    const stale = cached.date !== todayISO();
+    return `<section class="card quote-card"><div><p class="eyebrow">${stale ? 'Laatste bekende quote' : 'Quote of the day'}</p><div class="quote-content"><blockquote>${brainyQuoteRSS.escapeHtml(cached.quote)}</blockquote>${cached.author ? `<p>${brainyQuoteRSS.escapeHtml(cached.author)}</p>` : ''}</div></div><div><a href="${brainyQuoteRSS.FEED_URL}" target="_blank" rel="noopener noreferrer">Bron: BrainyQuote RSS</a>${stale ? `<small class="muted"> · laatst opgehaald ${brainyQuoteRSS.escapeHtml(cached.date)}</small>` : ''}</div></section>`;
   }
   const local = window.SamenThuisQuotes?.localQuoteFor ? window.SamenThuisQuotes.localQuoteFor(todayISO()) : null;
   const quote = local
     ? `<div class="quote-content"><blockquote>${esc(local.text)}</blockquote></div>`
     : '<p class="quote-offline">De quote wordt opgehaald zodra er verbinding is.</p>';
-  return `<section class="card quote-card"><div><p class="eyebrow">Gedachte van de dag</p>${quote}</div><small class="muted">Bron: Samen Thuis (lokaal)</small></section>`;
+  return `<section class="card quote-card"><div><p class="eyebrow">Gedachte van de dag</p>${quote}</div><div><small class="muted">Bron: Samen Thuis (lokale fallback)</small> · <a href="${brainyQuoteRSS.FEED_URL}" target="_blank" rel="noopener noreferrer">BrainyQuote RSS</a></div></section>`;
 }
 
 function tripFolderById(folderId) {
@@ -1765,7 +1761,6 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js');
 setupNav();
 render();
 handleInitialAgendaImport();
-setTimeout(captureBrainyQuote, 600);
 refreshBrainyQuoteRSS();
 setInterval(() => {
   if (document.visibilityState === 'visible') refreshBrainyQuoteRSS();

@@ -14,6 +14,8 @@ try { ({ chromium } = require('playwright')); } catch { console.log('SKIP: playw
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json' };
+const brainyQuoteUrl = 'https://www.brainyquote.com/link/quotebr.rss';
+const brainyQuoteFixture = '<rss version="2.0"><channel><item><title>Stay curious &amp; kind. &lt;img src=x onerror=window.__brainyQuoteXss=true&gt;</title><description><![CDATA[<p>Jane Doe</p><script>window.__brainyQuoteXss = true</script>]]></description></item></channel></rss>';
 const server = http.createServer((req, res) => {
   const p = path.join(root, decodeURIComponent(new URL(req.url, 'http://x').pathname));
   const file = p.endsWith('/') ? path.join(p, 'index.html') : p;
@@ -33,9 +35,16 @@ for (const width of [375, 768, 1280]) {
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
   page.on('console', m => { if (m.type() === 'error' && !/Failed to load resource|net::ERR/.test(m.text())) errors.push(m.text()); });
-  // Geen internet: alle externe verzoeken worden geblokkeerd (Supabase, Open-Meteo, OFF, CDN).
-  let external = 0;
-  await context.route(url => !url.href.startsWith(base), route => { external++; route.abort(); });
+  // BrainyQuote wordt nagebootst; alle overige externe verzoeken worden geblokkeerd.
+  let external = 0, rssRequests = 0;
+  await context.route(url => !url.href.startsWith(base), route => {
+    external++;
+    if (route.request().url() === brainyQuoteUrl) {
+      rssRequests++;
+      return route.fulfill({ status: 200, contentType: 'application/rss+xml', body: brainyQuoteFixture });
+    }
+    return route.abort();
+  });
   await page.goto(base, { waitUntil: 'load' });
   await page.waitForTimeout(800);
   check(`${width}px: app start zonder JS-fouten`, errors.length === 0, errors.slice(0, 3).join(' | '));
@@ -73,7 +82,11 @@ for (const width of [375, 768, 1280]) {
 
   await page.goto(base + '#/today'); await page.waitForTimeout(500);
   const quote = await page.locator('.quote-card').count() ? await page.locator('.quote-card').innerText() : '';
-  check(`${width}px: geen BrainyQuote-script; lokale gedachte of geen quotewidget`, !(await page.locator('script[src*="brainyquote"]').count()) && (!quote || /Samen Thuis|Quote/.test(quote)));
+  check(`${width}px: BrainyQuote RSS wordt in de productiekaart getoond`, /Stay curious & kind\./.test(quote) && /Jane Doe/.test(quote));
+  check(`${width}px: quote heeft een bronlink en geen geïnjecteerde HTML`, await page.locator('.quote-card a[href="https://www.brainyquote.com/link/quotebr.rss"]').count() === 1 && await page.locator('.quote-card img, .quote-card script').count() === 0 && !(await page.evaluate(() => window.__brainyQuoteXss)));
+  const requestsBeforeNavigation = rssRequests;
+  await page.goto(base + '#/voeding'); await page.waitForTimeout(150);
+  check(`${width}px: paginawissel vraagt RSS niet opnieuw op`, rssRequests === requestsBeforeNavigation && rssRequests === 1);
   check(`${width}px: geen extra externe verzoeken door Voeding`, true, `${external} geblokkeerde externe verzoeken (Supabase/weer)`);
   check(`${width}px: geen JS-fouten tijdens de flow`, errors.length === 0, errors.slice(0, 3).join(' | '));
   await context.close();
