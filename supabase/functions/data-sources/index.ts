@@ -1,4 +1,9 @@
 import { guard, createRateLimiter, cleanText } from "../_shared/guard.ts";
+import "../_shared/brainyquote-rss.js";
+
+const brainyQuote = (globalThis as typeof globalThis & {
+  SamenThuisBrainyQuoteEdge: { fetchBrainyQuoteRSS(): Promise<string> };
+}).SamenThuisBrainyQuoteEdge;
 
 // R7/PR-8: gebruikers-JWT verplicht, CORS alleen voor ALLOWED_ORIGINS, groottelimiet en limiet per gebruiker.
 const limiter=createRateLimiter(20,60_000);
@@ -11,6 +16,11 @@ Deno.serve(async(req)=>{
   const j=(v:any,status=200)=>new Response(JSON.stringify(v),{status,headers:{...headers,"Content-Type":"application/json"}});
   try{
     const b=gate.body as any;
+
+    if(b.action==="brainyquote"){
+      const rss=await brainyQuote.fetchBrainyQuoteRSS();
+      return j({rss});
+    }
 
     if(b.action==="ned-energy"){
       const key=Deno.env.get("NED_API_KEY");
