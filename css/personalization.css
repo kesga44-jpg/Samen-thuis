@@ -141,10 +141,10 @@ button.primary,
 
 .secondary,
 button.secondary {
-  background: color-mix(in srgb, var(--paper) 84%, var(--ink) 16%) !important;
+  background: var(--st-secondary-bg, color-mix(in srgb, var(--paper) 84%, var(--ink) 16%)) !important;
   border-radius: var(--user-radius);
-  color: var(--ink) !important;
-  -webkit-text-fill-color: var(--ink) !important;
+  color: var(--st-secondary-text, var(--ink)) !important;
+  -webkit-text-fill-color: var(--st-secondary-text, var(--ink)) !important;
 }
 
 a,
@@ -165,9 +165,25 @@ td {
   background-color: var(--st-success, var(--green));
 }
 
+.check.done,
+.tag.green {
+  color: var(--st-success-text, #fff);
+  -webkit-text-fill-color: var(--st-success-text, #fff);
+}
+
+.tag {
+  color: var(--st-tag-text, var(--blue));
+}
+
 .tag.orange {
-  background-color: color-mix(in srgb, var(--st-warning, var(--orange)) 20%, var(--paper));
-  color: var(--st-warning, var(--orange));
+  background-color: var(--st-warning-surface, color-mix(in srgb, var(--st-warning, var(--orange)) 20%, var(--paper)));
+  color: var(--st-warning-text, var(--st-warning, var(--orange)));
+  -webkit-text-fill-color: var(--st-warning-text, var(--st-warning, var(--orange)));
+}
+
+.tag.red {
+  color: var(--st-error-badge-text, var(--st-error, var(--red)));
+  -webkit-text-fill-color: var(--st-error-badge-text, var(--st-error, var(--red)));
 }
 
 .tag.red,

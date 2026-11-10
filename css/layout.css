@@ -4,7 +4,7 @@
 
 /* Meldingeninbox */
 .inbox-btn { position: relative; }
-.inbox-count { position: absolute; top: -6px; right: -6px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: #e5484d; color: #fff; font-size: .7rem; line-height: 18px; text-align: center; }
+.inbox-count { position: absolute; top: -6px; right: -6px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: #c62828; color: #fff; -webkit-text-fill-color: #fff; font-size: .7rem; line-height: 18px; text-align: center; }
 #inboxDialog { max-width: min(560px, 94vw); width: 100%; border: 1px solid rgba(255,255,255,.15); border-radius: 18px; background: #0d273e; color: inherit; padding: 18px; }
 .inbox-item.unread strong { color: #fff; }
 .inbox-item .item-main { background: none; border: 0; color: inherit; text-align: left; font: inherit; }

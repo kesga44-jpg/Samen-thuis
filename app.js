@@ -5376,7 +5376,6 @@ function apply20(){
     const normalized = c / 255;
     return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
   }).reduce((sum, c, index) => sum + c * [0.2126, 0.7152, 0.0722][index], 0);
-  const baseRgb = channels(hex);
   const contrast = (foreground, background) => {
     const [a, b] = [luminance(foreground), luminance(background)].sort((x, y) => y - x);
     return (a + 0.05) / (b + 0.05);
@@ -5384,11 +5383,23 @@ function apply20(){
   const readableAcross = (foreground, backgrounds) => {
     const minimum = value => Math.min(...backgrounds.map(background => contrast(value, background)));
     if (minimum(foreground) >= 4.5) return foreground;
+    const candidates = [];
+    [0, 255].forEach(target => {
+      for (let amount = 0.01; amount <= 1; amount += 0.01) {
+        const candidate = mix(channels(foreground), target, amount);
+        if (minimum(candidate) >= 4.5) {
+          candidates.push({ color: candidate, amount });
+          break;
+        }
+      }
+    });
+    if (candidates.length) return candidates.sort((a, b) => a.amount - b.amount)[0].color;
     return ['#000000', '#ffffff'].sort((a, b) => minimum(b) - minimum(a))[0];
   };
-  const readableOn = (background, target) => {
+  const readableOn = (background, target, foreground = hex) => {
+    if (contrast(foreground, background) >= 4.5) return foreground;
     for (let amount = 0; amount <= 1; amount += 0.01) {
-      const candidate = mix(baseRgb, target, amount);
+      const candidate = mix(channels(foreground), target, amount);
       if (contrast(candidate, background) >= 4.5) return candidate;
     }
     return target === 0 ? '#000000' : '#ffffff';
@@ -5396,8 +5407,15 @@ function apply20(){
   const background = color.background, paper = color.card;
   const foreground = readableAcross(ui20.textColor, [background, paper]);
   const secondary = readableAcross(ui20.secondaryTextColor, [background, paper]);
+  const blueSoft = mix(channels(color.accent), dark ? channels(background) : 255, dark ? 0.72 : 0.88);
+  const warningSurface = mix(channels(paper), channels(color.warning), 0.2);
+  const secondarySurface = mix(channels(paper), channels(foreground), 0.16);
+  const navTarget = luminance(color.navigation) > 0.45 ? 0 : 255;
+  const activeTarget = luminance(color.activeItem) > 0.45 ? 0 : 255;
+  const paperTarget = luminance(paper) > 0.45 ? 0 : 255;
+  const secondaryTarget = luminance(secondarySurface) > 0.45 ? 0 : 255;
   const buttonText = contrast(color.buttonText, color.button) >= 4.5
-    ? color.buttonText : readableOn(color.button, luminance(color.button) > 0.45 ? 0 : 255);
+    ? color.buttonText : readableOn(color.button, luminance(color.button) > 0.45 ? 0 : 255, color.buttonText);
   const rootStyle = html.style;
   rootStyle.setProperty('--bg', background);
   rootStyle.setProperty('--paper', paper);
@@ -5405,9 +5423,10 @@ function apply20(){
   rootStyle.setProperty('--muted', secondary);
   rootStyle.setProperty('--user-primary-text', foreground);
   rootStyle.setProperty('--user-secondary-text', secondary);
+  rootStyle.setProperty('--st-link-on-light', readableOn('#ffffff', 0, color.link));
   rootStyle.setProperty('--line', color.border);
   rootStyle.setProperty('--blue', color.button);
-  rootStyle.setProperty('--blue-soft', mix(channels(color.accent), dark ? channels(background) : 255, dark ? 0.72 : 0.88));
+  rootStyle.setProperty('--blue-soft', blueSoft);
   rootStyle.setProperty('--green', color.success);
   rootStyle.setProperty('--red', color.error);
   rootStyle.setProperty('--orange', color.warning);
@@ -5415,17 +5434,27 @@ function apply20(){
   rootStyle.setProperty('--accent-button-text', buttonText);
   rootStyle.setProperty('--st-accent', color.accent);
   rootStyle.setProperty('--st-nav-bg', color.navigation);
-  rootStyle.setProperty('--st-nav-text', readableOn(color.navigation, luminance(color.navigation) > 0.45 ? 0 : 255));
-  rootStyle.setProperty('--st-nav-active-text', readableOn(color.activeItem, luminance(color.activeItem) > 0.45 ? 0 : 255));
+  rootStyle.setProperty('--st-nav-text', readableOn(color.navigation, navTarget, color.inactiveItem));
+  rootStyle.setProperty('--st-nav-active-text', readableOn(color.activeItem, activeTarget, color.buttonText));
+  rootStyle.setProperty('--st-nav-focus', readableOn(color.navigation, navTarget, color.accent));
+  rootStyle.setProperty('--st-focus', readableOn(paper, paperTarget, color.accent));
   rootStyle.setProperty('--st-icon', color.icon);
-  rootStyle.setProperty('--st-link', color.link);
+  rootStyle.setProperty('--st-link', readableAcross(color.link, [background, paper]));
   rootStyle.setProperty('--st-active', color.activeItem);
-  rootStyle.setProperty('--st-inactive', color.inactiveItem);
+  rootStyle.setProperty('--st-inactive', readableOn(color.navigation, navTarget, color.inactiveItem));
+  rootStyle.setProperty('--st-secondary-bg', secondarySurface);
+  rootStyle.setProperty('--st-secondary-text', readableOn(secondarySurface, secondaryTarget, foreground));
   rootStyle.setProperty('--st-table', color.table);
   rootStyle.setProperty('--st-chart', color.chart);
   rootStyle.setProperty('--st-success', color.success);
+  rootStyle.setProperty('--st-success-text', readableOn(color.success, luminance(color.success) > 0.45 ? 0 : 255, color.success));
   rootStyle.setProperty('--st-warning', color.warning);
+  rootStyle.setProperty('--st-warning-surface', warningSurface);
+  rootStyle.setProperty('--st-warning-text', readableOn(warningSurface, luminance(warningSurface) > 0.45 ? 0 : 255, color.warning));
   rootStyle.setProperty('--st-error', color.error);
+  rootStyle.setProperty('--st-error-on-paper', readableOn(paper, paperTarget, color.error));
+  rootStyle.setProperty('--st-error-badge-text', readableOn('#faeaeb', 0, color.error));
+  rootStyle.setProperty('--st-tag-text', readableOn(blueSoft, luminance(blueSoft) > 0.45 ? 0 : 255, color.button));
   rootStyle.setProperty('--dock20', `color-mix(in srgb, ${color.navigation} 82%, transparent)`);
   rootStyle.setProperty('--dock20-active', `color-mix(in srgb, ${color.activeItem} 20%, transparent)`);
   rootStyle.setProperty('--user-font-family', ui20.fontFamily === 'system'
