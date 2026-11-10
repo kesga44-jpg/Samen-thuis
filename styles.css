@@ -988,10 +988,14 @@ html:not([data-theme20="dark"]) body.st-glass20 .light-surface23 .muted{
 }
 
 body.st-glass20 .card:not(.welcome) .text-btn,
-body.st-glass20 .card:not(.welcome) a,
-body.st-glass20 .light-surface23 .accent{
-  color:var(--blue)!important;
-  -webkit-text-fill-color:var(--blue)!important;
+body.st-glass20 .card:not(.welcome) a{
+  color:var(--st-link,var(--blue))!important;
+  -webkit-text-fill-color:var(--st-link,var(--blue))!important;
+}
+body.st-glass20 .light-surface23 .accent,
+body.st-glass20 .light-surface23 a{
+  color:var(--st-link-on-light,var(--text-on-light))!important;
+  -webkit-text-fill-color:var(--st-link-on-light,var(--text-on-light))!important;
 }
 
 body.st-glass20 .welcome,
@@ -1158,10 +1162,32 @@ body.st-glass20 .hero-card *{
   --text-muted-on-dark:#c7d3df;
 }
 
-/* Witte/lichtgrijze kaarten: donkere tekst in BEIDE thema's. */
+/* Dag-, idee- en statistiekkaarten volgen het per thema instelbare kaartoppervlak. */
 body.st-glass20 .day,
 body.st-glass20 .idea,
-body.st-glass20 .stat,
+body.st-glass20 .stat{
+  color:var(--user-primary-text,var(--ink))!important;
+}
+
+body.st-glass20 .day *,
+body.st-glass20 .idea *,
+body.st-glass20 .stat *{
+  color:var(--user-primary-text,var(--ink))!important;
+  -webkit-text-fill-color:var(--user-primary-text,var(--ink))!important;
+}
+
+body.st-glass20 .day .day-name,
+body.st-glass20 .day .muted,
+body.st-glass20 .day .event small,
+body.st-glass20 .day .event .muted,
+body.st-glass20 .idea p,
+body.st-glass20 .idea small,
+body.st-glass20 .stat span{
+  color:var(--user-secondary-text,var(--muted))!important;
+  -webkit-text-fill-color:var(--user-secondary-text,var(--muted))!important;
+}
+
+/* These surfaces remain explicitly light in both themes. */
 body.st-glass20 .outfit18,
 body.st-glass20 .daily-question .answer-grid>article,
 body.st-glass20 .light-surface23,
@@ -1170,11 +1196,6 @@ body.st-glass20 .goal-card23{
   color:var(--text-on-light)!important;
 }
 
-body.st-glass20 .day strong,
-body.st-glass20 .day .day-date,
-body.st-glass20 .idea strong,
-body.st-glass20 .idea h3,
-body.st-glass20 .stat strong,
 body.st-glass20 .outfit18 strong,
 body.st-glass20 .daily-question .answer-grid>article strong,
 body.st-glass20 .daily-question .answer-grid>article p:not(.muted),
@@ -1186,11 +1207,6 @@ body.st-glass20 .goal-card23 strong{
   opacity:1!important;
 }
 
-body.st-glass20 .day .day-name,
-body.st-glass20 .day .muted,
-body.st-glass20 .idea p,
-body.st-glass20 .idea small,
-body.st-glass20 .stat span,
 body.st-glass20 .outfit18 small,
 body.st-glass20 .daily-question .answer-grid>article .muted,
 body.st-glass20 .daily-question .answer-grid>article small,
@@ -1207,8 +1223,7 @@ html[data-theme20="dark"] body.st-glass20 .card:not(.day):not(.idea):not(.stat):
 html[data-theme20="dark"] body.st-glass20 .travel-actions,
 html[data-theme20="dark"] body.st-glass20 .daily-question,
 html[data-theme20="dark"] body.st-glass20 .quote-card,
-html[data-theme20="dark"] body.st-glass20 .import-card,
-html[data-theme20="dark"] body.st-glass20 .household-board{
+html[data-theme20="dark"] body.st-glass20 .import-card{
   color:var(--text-on-dark);
 }
 
@@ -1253,39 +1268,39 @@ html[data-theme20="dark"] body.st-glass20 .travel-actions .muted{
   -webkit-text-fill-color:var(--text-muted-on-dark)!important;
 }
 
-/* Agenda: witte dagkaarten houden altijd dezelfde donkere typografie. */
+/* Agenda- en ideeënelementen volgen het kleurpaar van hun kaartoppervlak. */
 body.st-glass20 .day .day-name{
-  color:#475363!important;
-  -webkit-text-fill-color:#475363!important;
+  color:var(--user-secondary-text,var(--muted))!important;
+  -webkit-text-fill-color:var(--user-secondary-text,var(--muted))!important;
 }
 body.st-glass20 .day .day-date{
-  color:#0b1728!important;
-  -webkit-text-fill-color:#0b1728!important;
+  color:var(--user-primary-text,var(--ink))!important;
+  -webkit-text-fill-color:var(--user-primary-text,var(--ink))!important;
 }
 body.st-glass20 .day .event,
 body.st-glass20 .day .event strong{
-  color:#17243a!important;
-  -webkit-text-fill-color:#17243a!important;
+  color:var(--user-primary-text,var(--ink))!important;
+  -webkit-text-fill-color:var(--user-primary-text,var(--ink))!important;
 }
 body.st-glass20 .day .event small,
 body.st-glass20 .day .event .muted{
-  color:#475363!important;
-  -webkit-text-fill-color:#475363!important;
+  color:var(--user-secondary-text,var(--muted))!important;
+  -webkit-text-fill-color:var(--user-secondary-text,var(--muted))!important;
 }
 
-/* Date ideeën: witte kaarten houden donkere tekst. */
+/* Date ideeën gebruiken hetzelfde thematische kaartoppervlak als de overige kaarten. */
 body.st-glass20 .idea,
 body.st-glass20 .idea h1,
 body.st-glass20 .idea h2,
 body.st-glass20 .idea h3,
 body.st-glass20 .idea strong{
-  color:#17243a!important;
-  -webkit-text-fill-color:#17243a!important;
+  color:var(--user-primary-text,var(--ink))!important;
+  -webkit-text-fill-color:var(--user-primary-text,var(--ink))!important;
 }
 body.st-glass20 .idea p,
 body.st-glass20 .idea small{
-  color:#475363!important;
-  -webkit-text-fill-color:#475363!important;
+  color:var(--user-secondary-text,var(--muted))!important;
+  -webkit-text-fill-color:var(--user-secondary-text,var(--muted))!important;
 }
 
 /* Actieknoppen blijven wit op blauw. */
@@ -1443,11 +1458,11 @@ html[data-theme20="dark"] body.st-glass20 .day,
 html[data-theme20="dark"] body.st-glass20 .idea,
 html[data-theme20="dark"] body.st-glass20 .travel-preview-card,
 html[data-theme20="dark"] body.st-glass20 .checkbox-field{
-  --ink:#17253a;
-  --muted:#66768a;
+  --ink:var(--user-primary-text);
+  --muted:var(--user-secondary-text);
   --blue:#246ca6;
-  color:#17253a !important;
-  -webkit-text-fill-color:#17253a !important;
+  color:var(--user-primary-text) !important;
+  -webkit-text-fill-color:var(--user-primary-text) !important;
 }
 
 /* Tekst op expliciet lichte geneste vlakken blijft donker */
@@ -1458,8 +1473,8 @@ html[data-theme20="dark"] body.st-glass20 .day *,
 html[data-theme20="dark"] body.st-glass20 .idea *,
 html[data-theme20="dark"] body.st-glass20 .travel-preview-card *,
 html[data-theme20="dark"] body.st-glass20 .checkbox-field *{
-  color:var(--ink) !important;
-  -webkit-text-fill-color:var(--ink) !important;
+  color:var(--user-primary-text) !important;
+  -webkit-text-fill-color:var(--user-primary-text) !important;
 }
 
 /* Secundaire tekst op lichte geneste vlakken */

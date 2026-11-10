@@ -109,6 +109,197 @@ body.st-glass20 .auto24 button:disabled {
   opacity: 1 !important;
 }
 
+/* White controls and cards need a dark foreground even when the app theme is dark. */
+body.st-glass20 .filter:not(.active),
+body.st-glass20 .calendar-filter {
+  color: #17243a !important;
+  -webkit-text-fill-color: #17243a !important;
+  opacity: 1 !important;
+}
+
+body.st-glass20 .calendar-filter.active {
+  color: var(--accent-button-text, #fff) !important;
+  -webkit-text-fill-color: var(--accent-button-text, #fff) !important;
+  background: var(--accent-button-bg, #315f86) !important;
+  border-color: var(--accent-button-bg, #315f86) !important;
+}
+
+body.st-glass20 .day-empty {
+  color: var(--user-secondary-text, var(--muted)) !important;
+  -webkit-text-fill-color: var(--user-secondary-text, var(--muted)) !important;
+  opacity: 1 !important;
+}
+
+body.st-glass20 .calendar-event small {
+  color: var(--user-secondary-text, var(--muted)) !important;
+  -webkit-text-fill-color: var(--user-secondary-text, var(--muted)) !important;
+}
+
+body.st-glass20 .check:not(.done) {
+  color: #17243a !important;
+  -webkit-text-fill-color: #17243a !important;
+}
+
+body.st-glass20 .delete {
+  color: var(--st-error-on-paper, var(--user-primary-text, var(--ink))) !important;
+  -webkit-text-fill-color: var(--st-error-on-paper, var(--user-primary-text, var(--ink))) !important;
+}
+
+body.st-glass20 .st-nav a {
+  color: var(--st-nav-text, #fff) !important;
+  -webkit-text-fill-color: var(--st-nav-text, #fff) !important;
+}
+
+body.st-glass20 .st-nav a.active {
+  color: var(--st-nav-active-text, #fff) !important;
+  -webkit-text-fill-color: var(--st-nav-active-text, #fff) !important;
+}
+
+body.st-glass20 .st-nav a.active .st-ico {
+  color: var(--st-nav-active-text, #fff) !important;
+}
+
+body.st-glass20 .st-tabs a.active {
+  color: var(--st-nav-text, #fff) !important;
+  -webkit-text-fill-color: var(--st-nav-text, #fff) !important;
+}
+
+body.st-glass20 .st-search-btn,
+body.st-glass20 .st-search-btn svg,
+body.st-glass20 .st-search-btn span {
+  color: var(--st-nav-text, #fff) !important;
+  -webkit-text-fill-color: var(--st-nav-text, #fff) !important;
+}
+
+html[data-theme20] body.st-glass20 .st-icon-btn:not(.st-search-btn) {
+  background: var(--paper, #fff) !important;
+  color: var(--user-primary-text, var(--ink)) !important;
+  -webkit-text-fill-color: var(--user-primary-text, var(--ink)) !important;
+}
+
+html[data-theme20] body.st-glass20 .st-searchbar {
+  background: var(--paper, #fff) !important;
+  color: var(--user-secondary-text, var(--muted)) !important;
+  -webkit-text-fill-color: var(--user-secondary-text, var(--muted)) !important;
+}
+
+html[data-theme20] body.st-glass20 .st-searchbar kbd {
+  color: var(--user-primary-text, var(--ink)) !important;
+  -webkit-text-fill-color: var(--user-primary-text, var(--ink)) !important;
+}
+
+html[data-theme20] body.st-glass20 .offer-chip25:not(.is-selected) {
+  color: var(--user-primary-text, var(--ink)) !important;
+  -webkit-text-fill-color: var(--user-primary-text, var(--ink)) !important;
+}
+
+html[data-theme20] body.st-glass20 .offer-chip25.is-selected {
+  background: var(--accent-button-bg, var(--blue)) !important;
+  color: var(--accent-button-text, #fff) !important;
+  -webkit-text-fill-color: var(--accent-button-text, #fff) !important;
+  border-color: var(--accent-button-bg, var(--blue)) !important;
+}
+
+html[data-theme20] body.st-glass20 .weather18 {
+  background: linear-gradient(135deg, #315f86, #426f95) !important;
+}
+
+html[data-theme20] body.st-glass20 .weather18 :is(p, small) {
+  opacity: 1 !important;
+}
+
+html[data-theme20] body.st-glass20 .weather18 .text-btn {
+  color: #fff !important;
+  -webkit-text-fill-color: #fff !important;
+}
+
+html[data-theme20="dark"] body.st-glass20 .household-board,
+html[data-theme20="dark"] body.st-glass20 .household-board :is(h1, h2, h3, p, strong, b, small, span, a, label, li) {
+  color: #5a4600 !important;
+  -webkit-text-fill-color: #5a4600 !important;
+}
+
+html[data-theme20] body.st-glass20 .fin-remainder th,
+html[data-theme20] body.st-glass20 .fin-remainder td,
+html[data-theme20] body.st-glass20 .fin-status,
+html[data-theme20] body.st-glass20 .fin-pill.ok,
+html[data-theme20] body.st-glass20 .fin-pill.wait,
+html[data-theme20] body.st-glass20 .fin-shortfall,
+html[data-theme20] body.st-glass20 .fin-note {
+  -webkit-text-fill-color: currentColor !important;
+}
+
+html[data-theme20] body.st-glass20 .fin-remainder th,
+html[data-theme20] body.st-glass20 .fin-remainder td,
+html[data-theme20] body.st-glass20 .fin-status-green,
+html[data-theme20] body.st-glass20 .fin-pill.ok {
+  color: #124d2a !important;
+}
+
+html[data-theme20] body.st-glass20 .fin-status-orange,
+html[data-theme20] body.st-glass20 .fin-pill.wait,
+html[data-theme20] body.st-glass20 .fin-note {
+  color: #6b3a08 !important;
+}
+
+html[data-theme20] body.st-glass20 .fin-status-red,
+html[data-theme20] body.st-glass20 .fin-shortfall {
+  color: #7a1d26 !important;
+}
+
+html[data-theme20] body.st-glass20 .card:not(.welcome):not(.hero-card):not(.dark-card) .sport-health p.sport-privacy {
+  color: #633f2c !important;
+  -webkit-text-fill-color: #633f2c !important;
+}
+
+html[data-theme20] body.st-glass20 .nut-pre,
+html[data-theme20] body.st-glass20 .nut-message {
+  color: #17243a !important;
+  -webkit-text-fill-color: #17243a !important;
+}
+
+body.st-glass20 .st26-page button.is-active,
+body.st-glass20 .st26-page .st26-primary {
+  color: #fff !important;
+  -webkit-text-fill-color: #fff !important;
+}
+
+html[data-theme20] body.st-glass20 .st26-page button:not(.is-active):not(.st26-primary):not(:disabled) {
+  color: #172b42 !important;
+  -webkit-text-fill-color: #172b42 !important;
+}
+
+html[data-theme20] body.st-glass20 .st26-page :is(.st26-balance, .st26-form, .st26-card),
+html[data-theme20] body.st-glass20 .st26-page :is(.st26-balance, .st26-form, .st26-card) :is(h1, h2, h3, p, small, strong, span, label) {
+  color: #172b42 !important;
+  -webkit-text-fill-color: #172b42 !important;
+  opacity: 1 !important;
+}
+
+html[data-theme20] body.st-glass20 .st26-page .st26-form :is(input, select, textarea) {
+  color: #172b42 !important;
+  -webkit-text-fill-color: #172b42 !important;
+}
+
+html[data-theme20] body.st-glass20 .st26-page .st26-note {
+  color: var(--user-secondary-text, var(--muted)) !important;
+  -webkit-text-fill-color: var(--user-secondary-text, var(--muted)) !important;
+  opacity: 1 !important;
+}
+
+html:root[data-theme20] body.st-glass20 .st26-page button:disabled {
+  color: #17243a !important;
+  -webkit-text-fill-color: #17243a !important;
+  background: #e8edf2 !important;
+  border-color: #8492a2 !important;
+  opacity: 1 !important;
+}
+
+body.st-glass20 .st26-page button:focus-visible {
+  outline: 3px solid #315f86 !important;
+  outline-offset: 3px !important;
+}
+
 @media (max-width: 560px) {
   body.st-glass20 .auto24 .auto-tabs24 button[data-auto24-tab] {
     min-height: 52px;
@@ -117,5 +308,124 @@ body.st-glass20 .auto24 button:disabled {
   body.st-glass20 [data-v15-price-card] .v13-card {
     min-width: 0;
     overflow-wrap: anywhere;
+  }
+}
+
+html[data-theme20="dark"] body.st-glass20 .today18 .ct18 > span,
+html[data-theme20="dark"] body.st-glass20 .today18 .stats18 small {
+  color: #475363 !important;
+  -webkit-text-fill-color: #475363 !important;
+}
+
+html[data-theme20="dark"] body.st-glass20 .today18 .meal18,
+html[data-theme20="dark"] body.st-glass20 .today18 .meal18 strong {
+  color: #17243a !important;
+  -webkit-text-fill-color: #17243a !important;
+}
+
+html[data-theme20="dark"] body.st-glass20 .today18 .meal18 small {
+  color: #9b5d36 !important;
+  -webkit-text-fill-color: #9b5d36 !important;
+}
+
+html[data-theme20="dark"] body.st-glass20 :is(.today18, .agenda18, .outfit18) .text-btn {
+  color: var(--st-link) !important;
+  -webkit-text-fill-color: var(--st-link) !important;
+}
+
+html[data-theme20="dark"] body.st-glass20 .outfit18 {
+  color: var(--user-primary-text, var(--ink)) !important;
+  -webkit-text-fill-color: var(--user-primary-text, var(--ink)) !important;
+}
+
+html[data-theme20="dark"] body.st-glass20 .nut-pane .eyebrow {
+  color: #b8a7ff !important;
+  -webkit-text-fill-color: #b8a7ff !important;
+}
+
+html[data-theme20="dark"] body.st-glass20 .nut-disclaimer {
+  color: #17243a !important;
+  -webkit-text-fill-color: #17243a !important;
+}
+
+html[data-theme20="dark"] body.st-glass20 .st26-page .st26-eyebrow {
+  opacity: 1 !important;
+}
+
+html[data-theme20="dark"] body.st-glass20 .st26-page .st26-empty,
+html[data-theme20="dark"] body.st-glass20 .st26-page .st26-empty :is(strong, p) {
+  color: #d2dbe8 !important;
+  -webkit-text-fill-color: #d2dbe8 !important;
+}
+
+html[data-theme20="dark"] body.st-glass20 .st26-page .st26-empty {
+  border-color: rgba(167, 190, 224, .55) !important;
+}
+
+html[data-theme20="dark"] body.st-glass20 .st26-page .st26-form :is(input, select, textarea) {
+  background: #fff !important;
+  border: 1px solid #6b7785 !important;
+  color: #172b42 !important;
+  -webkit-text-fill-color: #172b42 !important;
+  color-scheme: light !important;
+}
+
+html[data-theme20="dark"] body.st-glass20 .st26-page .st26-form :is(input, select, textarea)::placeholder {
+  color: #475363 !important;
+  -webkit-text-fill-color: #475363 !important;
+  opacity: 1 !important;
+}
+
+html[data-theme20="dark"] body.st-glass20 .st26-page :is(button, input, select, textarea):focus-visible {
+  outline: 2px solid #17243a !important;
+  outline-offset: 2px !important;
+  box-shadow: 0 0 0 5px #c7d9ff !important;
+}
+
+html:root[data-theme20="dark"] body.st-glass20 :is(input, select, textarea) {
+  border-color: #8492a2 !important;
+}
+
+html:root[data-theme20="dark"] body.st-glass20 .budget23 .goal-card23,
+html:root[data-theme20="dark"] body.st-glass20 .budget23 .goal-card23 * {
+  color: #17243a !important;
+  -webkit-text-fill-color: #17243a !important;
+}
+
+html:root[data-theme20="dark"] body.st-glass20 .budget23 .goal-card23 .ok23 {
+  color: #21643c !important;
+  -webkit-text-fill-color: #21643c !important;
+}
+
+html:root[data-theme20="dark"] body.st-glass20 .budget23 .goal-card23 .warn23 {
+  color: #8b2732 !important;
+  -webkit-text-fill-color: #8b2732 !important;
+}
+
+html:root[data-theme20="dark"] body.st-glass20 .budget23 :is(.goal-card23, .fixed-row23) button:not(.danger23) {
+  background: #edf2f7 !important;
+  border: 1px solid #6b7785 !important;
+  color: #17243a !important;
+  -webkit-text-fill-color: #17243a !important;
+}
+
+html:root[data-theme20="dark"] body.st-glass20 .budget23 :is(.goal-card23, .fixed-row23) button.danger23 {
+  background: #fff !important;
+  border: 1px solid #a43d47 !important;
+  color: #a43d47 !important;
+  -webkit-text-fill-color: #a43d47 !important;
+}
+
+@media (max-width: 700px) {
+  body.st-glass20 .budget23 .calc23 > span {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 8px;
+    overflow-wrap: anywhere;
+  }
+
+  body.st-glass20 .budget23 .calc23 > span b {
+    white-space: nowrap;
   }
 }
