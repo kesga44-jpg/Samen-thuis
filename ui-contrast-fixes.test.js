@@ -12,9 +12,9 @@ const app = read('app.js');
 
 test('contrast stylesheet is loaded after user-theme styles and included in offline cache', () => {
   assert.ok(html.indexOf('css/personalization.css') < html.indexOf('css/ui-contrast-fixes.css'));
-  assert.match(html, /css\/ui-contrast-fixes\.css\?v=1/);
-  assert.match(sw, /samen-thuis-v44-ui-contrast/);
-  assert.match(sw, /\.\/css\/ui-contrast-fixes\.css\?v=1/);
+  assert.match(html, /css\/ui-contrast-fixes\.css\?v=2/);
+  assert.match(sw, /samen-thuis-v45-auto-contrast/);
+  assert.match(sw, /\.\/css\/ui-contrast-fixes\.css\?v=2/);
 });
 
 test('grocery badge overrides are restricted to the existing price-reference markup', () => {
