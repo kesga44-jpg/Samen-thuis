@@ -1,4 +1,7 @@
-import {money,norm,percentile,uniqueNumbers,humanAge} from './utils.js';
+import {money,norm,esc,humanAge} from './js/utils.js';
+import './supabase/functions/_shared/price-history-core.js';
+
+const priceHistoryCore=globalThis.SamenThuisPriceHistory;
 
 export function priceFunctionUrl(data){
   const base=String(data.settings.supabaseUrl||'').replace(/\/$/,'');
@@ -6,27 +9,11 @@ export function priceFunctionUrl(data){
 }
 
 export function learnedThresholds(track){
-  const history=track?.history||[];
-  const latest=track?.latest||{};
-  const relevant=latest.baseProductId ? history.filter(x=>x.baseProductId===latest.baseProductId) : latest.name ? history.filter(x=>norm(x.name)===norm(latest.name)) : history;
-  const values=uniqueNumbers(relevant.map(x=>Number(x.price)).filter(Number.isFinite));
-  if(values.length<4) return {floor:null,good:null,count:values.length};
-  return {floor:percentile(values,.15),good:percentile(values,.35),count:values.length};
+  return priceHistoryCore.learnedThresholds(track);
 }
 
 export function priceStatus(track){
-  const latest=track?.latest;
-  if(!latest||!Number.isFinite(Number(latest.price))) return {code:'none',label:'Geen actuele aanbieding',icon:'○'};
-  const price=Number(latest.price);
-  const learned=learnedThresholds(track);
-  const hasManualFloor=track.manualFloor!==null&&track.manualFloor!==''&&Number.isFinite(Number(track.manualFloor));
-  const hasManualGood=track.manualGood!==null&&track.manualGood!==''&&Number.isFinite(Number(track.manualGood));
-  const floor=hasManualFloor?Number(track.manualFloor):learned.floor;
-  const good=hasManualGood?Number(track.manualGood):learned.good;
-  if(Number.isFinite(floor) && price<=floor+0.001) return {code:'floor',label:'Bodemprijs',icon:'🔥',floor,good};
-  if(Number.isFinite(good) && price<=good+0.001) return {code:'good',label:'Goede prijs',icon:'🟢',floor,good};
-  if(Number(latest.savingsPercentage)>=25) return {code:'good',label:'Sterke aanbieding',icon:'🟢',floor,good};
-  return {code:'deal',label:'Aanbieding',icon:'🟡',floor,good};
+  return priceHistoryCore.priceStatus(track);
 }
 
 export function priceSummary(track,{compact=false}={}){
@@ -37,12 +24,19 @@ export function priceSummary(track,{compact=false}={}){
   const until=p.validUntil?` · t/m ${new Date(p.validUntil).toLocaleDateString('nl-NL',{day:'numeric',month:'short'})}`:'';
   const was=p.originalPrice!==null&&p.originalPrice!==''&&Number.isFinite(Number(p.originalPrice))?` · was ${money(p.originalPrice)}`:'';
   const age=p.checkedAt?` · ${humanAge(p.checkedAt)}`:'';
-  if(compact) return `<span class="price-inline price-${s.code}">${s.icon} ${money(p.price)} · ${p.retailer||'winkel'}</span>`;
+  const retailer=esc(p.retailer||'winkel');
+  const match=esc(p.name||track.query||'onbekend product');
+  const source=esc(p.source||'onbekend');
+  const packageInfo=esc(p.packaging||p.quantity||p.size||'Verpakking onbekend');
+  const matchNotice=s.code==='unverified'?' · productmatch niet bevestigd':'';
+  const refreshNotice=track.error?'<small class="price-error">Verversen mislukt; laatst bekende prijs wordt getoond.</small>':'';
+  if(compact) return `<span class="price-inline price-${s.code}" title="${s.label}${matchNotice}">${s.icon} ${s.code==='unverified'?'Match controleren · ':''}${money(p.price)} · ${retailer}</span>`;
   return `<div class="price-box price-${s.code}">
     <div class="price-top"><strong>${s.icon} ${s.label}</strong><b>${money(p.price)}</b></div>
-    <small>${p.retailer||'Onbekende winkel'}${was}${until}${age}</small>
-    <small class="price-match">Match: ${p.name||track.query}</small>
-  </div>`;
+    <small>${retailer}${was}${until}${age}</small>
+    <small>Verpakking: ${packageInfo} · Bron: ${source}</small>
+    <small class="price-match">${s.code==='unverified'?'Niet gebruikt voor automatische prijsgrenzen. Match: ':'Match: '}${match}</small>
+    ${refreshNotice}</div>`;
 }
 
 function stale(track,hours){
@@ -51,40 +45,43 @@ function stale(track,hours){
 }
 
 function addObservation(track,result){
-  const date=(result.validFrom||new Date().toISOString()).slice(0,10);
-  const key=`${date}|${Number(result.price).toFixed(2)}|${result.retailer||''}|${result.name||''}`;
-  const exists=(track.history||[]).some(x=>`${x.date}|${Number(x.price).toFixed(2)}|${x.retailer||''}|${x.name||''}`===key);
+  const observation=priceHistoryCore.createObservation(result);
+  if(!observation) return;
+  const key=JSON.stringify([observation.date,observation.price,observation.source,observation.retailer,observation.productId,observation.baseProductId,observation.ean,observation.packaging]);
+  const exists=(track.history||[]).some(x=>JSON.stringify([x.date,priceHistoryCore.validPrice(x.price),x.source||'',x.retailer||'',x.productId||'',x.baseProductId||'',x.ean||'',x.packaging||x.quantity||x.size||''])===key);
   if(!exists){
     track.history ||= [];
-    track.history.push({date,price:Number(result.price),retailer:result.retailer||'',name:result.name||'',productId:result.productId||'',baseProductId:result.baseProductId||''});
+    track.history.push(observation);
     track.history=track.history.slice(-120);
   }
 }
 
-export async function refreshPriceTracks(store,{force=false,onProgress=()=>{}}={}){
+export async function refreshPriceTracks(store,{force=false,onProgress=()=>{},fetchImpl=globalThis.fetch}={}){
   const data=store.data;
   if(!data.settings.autoPriceRefresh && !force) return {checked:0,found:0};
   const tracks=data.priceTracks.filter(t=>t.query && (force||stale(t,data.settings.priceRefreshHours)));
   if(!tracks.length) return {checked:0,found:0};
   const url=priceFunctionUrl(data);
   if(!url) throw new Error('Geen Supabase URL ingesteld');
+  if(typeof fetchImpl!=='function') throw new Error('Prijsservice is niet beschikbaar in deze browser');
   const headers={'Content-Type':'application/json'};
   if(data.settings.supabaseAnonKey){ headers.apikey=data.settings.supabaseAnonKey; headers.Authorization=`Bearer ${data.settings.supabaseAnonKey}`; }
   let checked=0,found=0;
   const chunks=[]; for(let i=0;i<tracks.length;i+=12) chunks.push(tracks.slice(i,i+12));
   for(const chunk of chunks){
     onProgress({checked,total:tracks.length});
-    const response=await fetch(url,{method:'POST',headers,body:JSON.stringify({queries:chunk.map(t=>({id:t.id,query:t.query,preferredRetailer:t.preferredRetailer||''}))})});
-    if(!response.ok) throw new Error(`Prijsservice ${response.status}`);
+    const response=await fetchImpl(url,{method:'POST',headers,body:JSON.stringify({queries:chunk.map(t=>({id:t.id,query:t.query,preferredRetailer:t.preferredRetailer||''}))})});
+    if(!response.ok) throw new Error(response.status===429?'Prijsservice heeft de tijdelijke aanvraaglimiet bereikt. Probeer later opnieuw.':`Prijsservice ${response.status}`);
     const payload=await response.json();
     for(const row of payload.results||[]){
       const track=data.priceTracks.find(t=>t.id===row.id); if(!track) continue;
       checked++;
-      if(row.result && Number.isFinite(Number(row.result.price))){
-        track.latest={...row.result,price:Number(row.result.price),checkedAt:new Date().toISOString()};
+      const price=priceHistoryCore.validPrice(row.result?.price);
+      if(row.result && price!=null){
+        track.latest={...row.result,price,checkedAt:new Date().toISOString()};
         track.error=''; addObservation(track,track.latest); found++;
       } else {
-        track.latest=null; track.error=row.error||'';
+        track.error=row.error||'Prijs niet beschikbaar';
       }
     }
   }
@@ -127,8 +124,8 @@ export function linkPriceTrackToItem(store,collection,item,{query,manualFloor,ma
   if(!track || norm(track.query)!==norm(query)) track=store.ensureTrack(item.title,query);
   track.label=item.title;
   track.query=query.trim();
-  track.manualFloor=manualFloor===''||manualFloor==null?null:Number(manualFloor);
-  track.manualGood=manualGood===''||manualGood==null?null:Number(manualGood);
+  track.manualFloor=manualFloor===''||manualFloor==null?null:priceHistoryCore.validPrice(manualFloor);
+  track.manualGood=manualGood===''||manualGood==null?null:priceHistoryCore.validPrice(manualGood);
   track.preferredRetailer=preferredRetailer||'';
   item.priceTrackId=track.id;
 }

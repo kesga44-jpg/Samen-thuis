@@ -10,7 +10,7 @@ Centraal register: `personal-ecosystem/API_CATALOG.md` en `API_LIMITS.md`. Dit i
 | Dienst | Doel | Status | Sleutel | Aanroep | Limiet / afspraak | Fallback | Test |
 |---|---|---|---|---|---|---|---|
 | Supabase Auth/REST (project A) | Accounts, accountsync, voorkeuren, financiële bevestigingen | ✅ | Publishable key (publiek bedoeld) | Browser, gebruikers-JWT | Auth: 2 mails/uur, 30 signins/5 min/IP | Lokaal doorwerken | Bestaand + `nutrition-integration.test.js` (sync) |
-| Supabase Edge `grocery-prices` (PrijsProfeet) | Aanbiedingen | 🔒 JWT + CORS-allowlist + limiet | Optioneel `PRIJS_PROFEET_API_KEY` (secret) | Browser → Edge (gebruikers-JWT) | 30/min/gebruiker (best-effort), body ≤ 8 kB | Cache 20 termen, melding | `edge-guard.test.js` |
+| Supabase Edge `grocery-prices` (PrijsProfeet) | Actuele aanbiedingen via `GET /api/v1/search` en categorieën via `GET /api/v1/categories` | In gebruik; providerdocumentatie geverifieerd, live endpoint niet | Geen key vereist; optionele gratis key alleen als Supabase-secret | Browser → Edge (gebruikers-JWT) → PrijsProfeet | Edge: 30/min/gebruiker; provider: 120/min voor zoeken en 30/min voor bulk per IP, deelbare limiet | Zoeksuggesties 20 min gecachet; 429 zichtbaar, handmatige invoer blijft beschikbaar | `edge-guard.test.js`, `price-history-core.test.js` |
 | Supabase Edge `data-sources` (NED, Tankerkoenig) | Energiedata, Duitse brandstofprijzen | 🔒 idem | `NED_API_KEY`, `TANKERKOENIG_API_KEY` (secrets) | Browser → Edge | 20/min/gebruiker | Functie toont fout | `edge-guard.test.js` |
 | Supabase Edge `sport-training` | AI-placeholder | ✅ ongewijzigd (JWT al verplicht, CORS `*`) | — | Browser → Edge | — | Altijd 503 | Bestaand |
 | Open-Meteo Forecast, Air Quality, Geocoding | Weer, pollen, luchtkwaliteit | ✅ + 🆕 bronvermelding | Geen | Browser | Cache 30 min (bestaand); geen achtergrondpolling | Laatste cache + "offline" | `integrations-policy.test.js` |
@@ -23,6 +23,14 @@ Centraal register: `personal-ecosystem/API_CATALOG.md` en `API_LIMITS.md`. Dit i
 | Web Push | Meldingen | ⛔ | — | — | — | Inbox in de app | `integrations-policy.test.js` |
 | WebLLM / Ollama | Lokale AI | ⛔ (nog niet goedgekeurd voor Samen Thuis) | — | — | — | Regelgebaseerd | `integrations-policy.test.js` |
 | Betaalde AI-API's | — | ⛔ uitgesloten (ADR 0008) | — | — | — | — | `integrations-policy.test.js` |
+
+### PrijsProfeet en historische prijzen
+
+De gratis endpoints leveren actuele en binnenkort geldige aanbiedingen, niet het volledige winkelschap of een historische reeks. De officiële documentatie en OpenAPI-specificatie zijn op 2026-11-09 gecontroleerd in [PrijsProfeets API-repository](https://github.com/PrijsProfeet/supermarkt-api); de geldende [API-voorwaarden](https://www.prijsprofeet.nl/api-voorwaarden) en actuele limieten kunnen veranderen. Gratis gebruik zonder key is toegestaan, met zichtbare bronvermelding en een beschrijvende `User-Agent`; de Edge Function zet die server-side. Een gratis key is optioneel en blijft, indien ingesteld, uitsluitend een Supabase-secret. De app gebruikt geen Pro-endpoints zoals `/products/{id}/price-history`.
+
+In de niet-geladen bèta-prijstracker zijn zoekresultaten fuzzy wanneer `approximate` waar is of `unmatched_terms` bevat. Dat is geen betrouwbare productidentiteit. Alleen een expliciet exacte zoekrespons mag nieuwe automatische prijsgrenzen voeden. Historische waarnemingen worden additief opgeslagen met bron, retailer, product-ID/EAN en verpakkingsmaat; oude waarnemingen blijven bewaard, maar missen ze betrouwbare match-, bron- of verpakkingsgegevens, dan tellen ze niet mee. Er zijn minimaal vier verschillende numerieke prijzen nodig. De productie-PWA laadt deze bèta-tracker niet. De volledige uitleg en bronlinks staan in [`GRATIS_PRIJZEN.md`](../GRATIS_PRIJZEN.md).
+
+Open Prices staat alleen als losse barcode-opvraging in de niet-geladen bèta-code onder `js/sources.js`; het is geen onderdeel van de productie-PWA-prijshistorie en wordt door deze wijziging niet aangeroepen.
 
 ## 2. Open Food Facts — details
 
