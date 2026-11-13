@@ -7,7 +7,7 @@ Doel: de bestaande migraties en beveiligingsscripts reproduceerbaar testen op ee
 | Wel | Niet |
 |---|---|
 | Lokale PostgreSQL 15 + Auth + Storage + Edge Runtime in Docker | Een kopie van productie |
-| Zes migraties + legacy-basisschema en synthetische rechten/RLS-tests | Het Phase-3-script, productie-RLS of echte gegevens |
+| Zeven migraties + legacy-basisschema en synthetische rechten/RLS-tests | Het Phase-3-script, productie-RLS of echte gegevens |
 | Synthetische testaccounts en -rijen | Echte huishoudgegevens, echte codes of back-ups |
 
 Lokale staging is **geen bewijs voor productie**. De productiechecks (grants, RLS, logs, plan) blijven een aparte eigenaarsvoorwaarde (zie `UPGRADE_NAV5_SYNC.md`).
@@ -28,8 +28,8 @@ Gepinde versies: **Supabase CLI 3.1.0**, **PostgreSQL 15** (`db.major_version = 
 | Bestand | Rol |
 |---|---|
 | `supabase/config.toml` | Alleen lokale instellingen (`project_id = samen-thuis-staging`). Geen `[functions.*]`-secties: het deploygedrag van de Edge Functions blijft ongewijzigd. |
-| `supabase/migrations/*` | Ongewijzigd, 6 stuks. |
-| `supabase/schema.sql` | Legacy-basisschema (`household_data` + anon-policies), idempotent. Wordt door `[db.seed]` geladen. |
+| `supabase/migrations/*` | Zeven additieve migraties; de database-hardeningmigratie volgt op de finance-migratie. |
+| `supabase/schema.sql` | Legacy-basisschema (`household_data` + anon-policies en minimale expliciete anon-grant), idempotent. Wordt door `[db.seed]` geladen. |
 | `.gitignore` | Sluit `supabase/.temp/`, `supabase/.branches/` en `.env*` uit. |
 
 ## 4. Hoe het legacy-basisschema wordt geladen
@@ -44,7 +44,8 @@ Volgorde bij reset en eerste start:
 4. 20261015 sport_training_storage
 5. 20261103 personal_profiles
 6. 20261104 finance_confirmations
-7. **Seed:** `schema.sql` (`household_data` + 3 anon-policies)
+7. 20261113 database_rate_limits_and_privileges
+8. **Seed:** `schema.sql` (`household_data` + 3 anon-policies + minimale anon-grant)
 
 Dat is veilig omdat alleen `import_legacy_household_data` naar `household_data` verwijst, en alleen in de functiebody (runtime, niet bij `create function`). `household_data` hoeft dus pas te bestaan als de functie wordt aangeroepen. Er zijn geen dubbele creaties: `schema.sql` gebruikt `if not exists` en raakt de migratieobjecten niet.
 
@@ -88,7 +89,7 @@ docker exec -i supabase_db_samen-thuis-staging psql -U postgres -At \
   -c "select to_regclass('public.household_data'), to_regclass('public.household_state'), to_regclass('public.household_legacy_imports')"
 ```
 
-Verwacht: 6 versies (20261012000000 ... 20261104000000) en drie bestaande tabellen.
+Verwacht: 7 versies (20261012000000 ... 20261113000000) en de bestaande tabellen plus de twee interne rate-limit-tabellen.
 
 ## 7. Lokale database en Studio
 
@@ -152,9 +153,15 @@ Na `start` of `db reset` draait de lokale integratietest binnen één transactie
 node --test supabase-local.test.js
 ```
 
-De test controleert dat de stack PostgreSQL 15 gebruikt, de seed `household_data` heeft geladen, platform-defaults bestaan en migraties de bedoelde toegangsweg gebruiken. De Supabase-defaultprivileges geven nieuwe tabellen in `public` standaard alle tabelrechten aan `anon`, `authenticated` en `service_role`, en nieuwe functies `EXECUTE` aan die rollen. Dit zijn platformdefaults, niet grants uit deze zes migraties. De teststub voor de losse PostgreSQL-tests bootst die ruime defaults juist niet na; daardoor kunnen die tests niet slagen door impliciete rechten.
+De integratietest controleert PostgreSQL 15, de seed, effectieve grants op tabellen, kolommen, sequences, functies en schema's, de RLS-policies, SECURITY DEFINER-instellingen, rate-limits, pg_temp-isolatie en synthetische sync/imports. De nieuwe migratie trekt voor de applicatiemigratierol `postgres` standaardrechten op toekomstige `public`-tabellen en sequences in voor `PUBLIC`, `anon` en `authenticated`, verwijdert de standaard `PUBLIC EXECUTE` voor functies en trekt API-roldefaults voor nieuwe functies in. De vertrouwde `service_role`-defaults blijven bestaan; de interne rate-limitobjecten zijn expliciet van directe toegang door die rol uitgesloten.
 
-De lokale stack toont ook bestaande extra rechten die niet door deze test-PR worden aangepast: `anon` houdt via de defaults onder meer `DELETE`/`TRUNCATE` op de legacytabel `household_data`, en `authenticated` heeft zulke extra rechten op `personal_preferences`. De test meldt deze afwijkingen als waarschuwing. `TRUNCATE` wordt niet door RLS afgeschermd. Dit is een lokale bevinding, geen controle van productie.
+**Bekende platformbeperking:** de lokale Supabase-rol `supabase_admin` heeft eigen, bredere defaults voor `anon`/`authenticated`. `postgres` is geen lid van die rol en kan die ACL's niet intrekken; de lokale test meldt dit expliciet en controleert dat applicatietabellen en SECURITY DEFINER-functies niet door `supabase_admin` worden gemaakt. Normale Supabase-appmigraties draaien als `postgres`, waarvoor toekomstige objecten wel getest zijn. Als een object ooit als `supabase_admin` wordt gemaakt, kan het deze API-rechten erven; dat vereist een afzonderlijke platformbeheerhandeling. Dit rest-risico is niet op productie onderzocht of gewijzigd.
+
+De `household_data`-seed behoudt uitsluitend de bestaande anon-route met `SELECT`, `INSERT` en `UPDATE`; `DELETE`, `TRUNCATE`, `REFERENCES` en `TRIGGER` worden niet toegekend. `personal_preferences` behoudt `SELECT`, `INSERT` en `UPDATE` voor `authenticated`, begrensd door de bestaande eigenaar-RLS. De andere accounttabellen behouden alleen hun expliciete grants. `TRUNCATE`-rechten zijn apart gecontroleerd omdat RLS deze niet afschermt. Dit is lokaal bewezen, geen productiecontrole.
+
+De limiter bewaart maximaal één compacte token-bucketrij per gebruiker en RPC-actie. De rij bevat alleen user-id, actie, tokens en tijdstempels; er worden geen join-codes, legacy-ID's, payloads, IP-adressen of per-poging logs opgeslagen. Een rij verloopt zodra de bucket weer vol is. Een beheerder kan verlopen rijen in begrensde batches verwijderen met `select public.cleanup_household_rpc_rate_limits(1000);` (maximaal 10.000 per aanroep); er wordt geen `pg_cron`-extensie vereist. Verwijdering van een Auth-gebruiker ruimt diens rijen via `ON DELETE CASCADE` op.
+
+De teststub voor losse PostgreSQL-tests bootst de brede Supabase-defaults niet na; de lokale Supabase-test controleert de effectieve defaults voor objecten die door `postgres` worden aangemaakt, plus de genoemde platformbeperking. De probe-objecten worden tijdens de testtransactie teruggedraaid.
 
 `migrations-pg.test.js` test daarnaast de SQL-semantiek in een aparte tijdelijke database met een niet-superuser-eigenaar die `BYPASSRLS` heeft. De PostgreSQL-versie kan expliciet gekozen worden:
 
@@ -163,4 +170,31 @@ runuser -u postgres -- env PG_BIN=/usr/lib/postgresql/14/bin node --test migrati
 runuser -u postgres -- env PG_BIN=/usr/lib/postgresql/16/bin node --test migrations-pg.test.js
 ```
 
-De runner selecteert standaard de eerste aanwezige versie in volgorde 16, 15, 14. De PG14/16-commando's zijn afzonderlijke tests; de volledige Supabase-stack is hier uitsluitend op PostgreSQL 15 getest. Geen van deze commando's voert het Phase-3-script uit.
+De runner selecteert standaard de eerste aanwezige versie in volgorde 16, 15, 14. De PG14/16-commando's zijn afzonderlijke tests; de volledige Supabase-stack is hier uitsluitend op PostgreSQL 15 getest. Geen van deze commando's voert het Phase-3-script of de handmatige rollback uit.
+
+### Rate-limits en operationele gevolgen
+
+| RPC | Token-bucketlimiet | Reden / normale stroom |
+|---|---|---|
+| `join_household` | burst 5; daarna 1 token per 3 minuten | Een geldige uitnodiging vereist normaal één poging; de burst laat invoerfouten en korte retries toe, maar begrenst codegissen per account over alle sessies. Een ongeldige, volle of geblokkeerde join geeft hetzelfde lege resultaat. |
+| `create_household` | burst 3; daarna 1 per 8 uur | Aanmaken hoort bij onboarding, niet bij periodieke sync; drie snelle pogingen laten correcties/dubbelklikken toe. |
+| `import_legacy_household_data` | burst 5; daarna 1 token per 3 minuten | De import hoort eenmalig te zijn; de marge laat herstel na transient fouten toe. Ontbrekende, ongeldige en al geclaimde IDs geven geen onderscheidende gegevens terug. |
+| `put_household_state` | burst 60; daarna 1 per seconde | Veel hoger dan normale periodieke sync; 60 writes kunnen direct worden gebundeld/hersteld. Bestaande lidmaatschaps-, 8 MB-payload- en versiecontroles blijven actief. |
+
+De waarden staan in `household_rpc_rate_limit_config` en kunnen alleen door de database-eigenaar worden aangepast. `join_household` retourneert bij een ongeldige code of een uitgeputte bucket `NULL` in plaats van een SQL-exception: anders zou PostgreSQL de limiterwijziging samen met de mislukte RPC terugdraaien. De UI toont voor beide situaties dezelfde generieke fout. Rate-limiting houdt pogingen per `auth.uid()` bij, onafhankelijk van venster of sessie.
+
+**Rollback:** `supabase/rollbacks/20261113000000_database_rate_limits_and_privileges.rollback.sql` herstelt alleen de vorige RPC-antwoorden en verwijdert de bucket/config-tabellen. De privileges, default privileges en lege `search_path` blijven bewust gehard. Het bestand is handmatig en is in deze validatie niet uitgevoerd.
+
+### Validatiestatus
+
+| Controle | Resultaat |
+|---|---|
+| Volledige `node --test *.test.js` als niet-root, PostgreSQL 16 beschikbaar | 392 totaal: 382 geslaagd, 0 gefaald, 10 overgeslagen |
+| `migrations-pg.test.js` | 20 geslaagd op PostgreSQL 16 |
+| `migration-security.test.js` | 14 geslaagd |
+| `node --test supabase-local.test.js` na `supabase db reset` | 2 geslaagd op lokale Supabase PostgreSQL 15; fixtures en admin-default-probe zijn transactioneel teruggedraaid |
+| `node --check app.js` en `git diff --check` | Geslaagd |
+
+De 10 skips in de volledige niet-root-run zijn beoordeeld: 3 PDF-tests (`pdfjs-dist` ontbreekt), 2 Excel-tests (`xlsx` ontbreekt), 1 Word-test (`mammoth` ontbreekt), 1 OCR-test (`IMPORT_TEST_OCR_LANGPATH` ontbreekt), 1 gecombineerde bestandsimporttest (de vereiste readers ontbreken) en 2 Supabase-tests (de niet-root testgebruiker heeft geen Docker-toegang). Het risico van de eerste 8 is dat die specifieke PDF-, XLSX-, DOCX- en OCR-parsers niet end-to-end zijn getest; hun skip verandert de geteste database-hardening niet. Beide Supabase-tests zijn afzonderlijk als Docker-capable gebruiker uitgevoerd en slaagden na een verse lokale reset op PostgreSQL 15. De tweede voert als `supabase_admin` een rollbackbare object-probe uit en rapporteert de platformdefaults, waaronder `PUBLIC EXECUTE`.
+
+Dit zijn uitsluitend lokale resultaten. De PostgreSQL 16-tests valideren SQL-semantiek en concurrency; de Supabase PostgreSQL 15-test valideert de echte lokale platformrollen/defaults en synthetische RPC-stromen. Supabase-staging en productie zijn niet getest.

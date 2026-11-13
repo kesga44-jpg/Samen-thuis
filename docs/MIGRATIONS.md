@@ -1,8 +1,10 @@
 # Migratiehandleiding
 
-## 1. Deze wijzigingsset: geen databasewijziging
+## 1. Database-hardening (lokaal/staging)
 
-Er is **geen** nieuwe SQL-migratie, tabel, bucket of policy toegevoegd. Alle nieuwe gegevens (`nutrition`, `meals[].recipeId`) staan in de bestaande versleutelde huishoudopslag. Er is niets uitgevoerd op Supabase-project A of B.
+`20261113000000_database_rate_limits_and_privileges.sql` voegt PostgreSQL-rate-limiting toe voor de gevoelige huishoud-RPC's, trekt onnodige API-rechten en ruime default privileges in, en zet bestaande SECURITY DEFINER-functies op een lege `search_path`. De limiter gebruikt een token bucket per gebruiker en RPC-actie; configuratie en opschoning staan in `docs/LOCAL_STAGING.md`. De bijbehorende handmatige rollback verwijdert alleen de rate-limitlaag en herstelt de eerdere RPC-antwoorden; privilege- en `search_path`-hardening blijven actief.
+
+Deze migratie en tests zijn uitsluitend bedoeld voor lokale/staging-validatie. Geen productie-SQL, `db push`, deployment of wijziging aan live Supabase-projecten is uitgevoerd. Lokale resultaten bewijzen geen productiestatus.
 
 ## 2. Clientmigratie (automatisch, niet-destructief)
 
@@ -33,15 +35,15 @@ Open vraag: of de Supabase-gateway met JWT-verificatie aan de CORS-preflight (`O
 
 1. Additief en herhaalbaar; rollback in `supabase/rollbacks/` (niet in `supabase/migrations/`).
 2. RLS aan in dezelfde migratie; `revoke all from anon, authenticated`; minimale grants.
-3. `security definer` met `set search_path = ''` (let op: bestaande functies gebruiken nog `public`, zie `docs/SECURITY.md` S-6).
-4. SQL-tests in `migrations-pg.test.js` en de lokale Supabase-test (`docs/LOCAL_STAGING.md`): de eerste gebruikt een beperkte stub zonder brede default privileges; de tweede controleert de PostgreSQL 15-platformdefaults en effectieve grants na de zes migraties.
+3. `security definer` met `set search_path = ''`; bestaande RPC's zijn in de migratie gehard.
+4. SQL-tests in `migrations-pg.test.js` en de lokale Supabase-test (`docs/LOCAL_STAGING.md`): de eerste gebruikt een beperkte stub zonder brede default privileges; de tweede controleert de PostgreSQL 15-platformdefaults en effectieve grants voor de `postgres`-migratie-eigenaar na de zeven migraties. De Supabase `supabase_admin`-defaults blijven een expliciet gedocumenteerde platformbeperking.
 5. Vóór uitvoering op project A: groen isolatierapport, verse back-up database + opslag met geslaagde hersteltest, expliciet akkoord (centraal ADR 0001/0010).
 
-De lokale tests wijzigen geen migratie, productiebeleid of productieomgeving. Ze voeren het handmatige Phase-3-script niet uit. De lokale Supabase-test rapporteert bestaande extra rechten die uit Supabase-defaultprivileges voortkomen; zie `docs/LOCAL_STAGING.md` § 13.
+De lokale tests wijzigen geen productiebeleid of productieomgeving. Ze voeren het handmatige Phase-3-script of de handmatige rollback niet uit. De lokale Supabase-test controleert de ingetrokken extra rechten en default privileges; zie `docs/LOCAL_STAGING.md` § 13.
 
 ## 5. Openstaande databasehandelingen (niet uitgevoerd, vereisen goedkeuring)
 
 | ID | Handeling | Voorwaarde |
 |---|---|---|
 | DB-1 | `supabase/manual/phase3_revoke_anon_household_data.sql` (R1) | Beide gebruikers op accountsync; verse back-up met hersteltest; akkoord vlak vóór uitvoering |
-| DB-2 (voorstel) | `search_path` van bestaande security-definer-functies naar `''` | Nieuwe migratie + SQL-tests; zelfde voorwaarden |
+| DB-2 | `search_path` van bestaande SECURITY DEFINER-functies naar `''` | Additief geïmplementeerd; alleen lokaal getest. Productietoepassing blijft buiten scope en vereist aparte toestemming. |

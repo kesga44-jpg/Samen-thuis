@@ -7,6 +7,7 @@ const BIN = process.env.PG_BIN ? path.resolve(process.env.PG_BIN) : candidates.f
 const skip = !process.env.PG_BIN && !BIN ? 'PostgreSQL niet beschikbaar: SQL-semantiektests overgeslagen' : false;
 const root = __dirname + '/supabase/';
 const A = '00000000-0000-4000-8000-00000000000a', B = '00000000-0000-4000-8000-00000000000b', C = '00000000-0000-4000-8000-00000000000c', D = '00000000-0000-4000-8000-00000000000d';
+const E = '00000000-0000-4000-8000-00000000000e', F = '00000000-0000-4000-8000-00000000000f', G = '00000000-0000-4000-8000-000000000010', H = '00000000-0000-4000-8000-000000000011';
 let dir, port = 54000 + Math.floor(Math.random() * 900);
 const run = (args, o = {}) => cp.spawnSync(BIN + '/' + args[0], args.slice(1), { encoding: 'utf8', ...o });
 function psql(sql, user) {
@@ -47,14 +48,14 @@ test.before(() => {
   ok(file(__dirname + '/supabase/schema.sql'), 'household_data');
   ok(psql(`grant select, insert, update on public.household_data to anon`), 'legacy R1-rechten zijn expliciet');
   for (const f of fs.readdirSync(root + 'migrations').filter(n => n.endsWith('.sql') && !n.includes('rollback')).sort()) ok(file(root + 'migrations/' + f), f);
-  ok(psql(`insert into auth.users values ('${A}'),('${B}'),('${C}'),('${D}');`));
+  ok(psql(`insert into auth.users values ('${A}'),('${B}'),('${C}'),('${D}'),('${E}'),('${F}'),('${G}'),('${H}');`));
 });
 test.after(() => { if (!skip && dir) run(['pg_ctl', '-D', dir + '/d', '-m', 'immediate', 'stop']); });
 
 let hhAB, hhC, hhDamaged, code;
 test('twee accounts in één huishouden; vreemd huishouden is onzichtbaar en onbeschrijfbaar', { skip }, () => {
   let r = psql(`select id||'|'||join_code from create_household('AB')`, A); ok(r); [hhAB, code] = r.out.split('|');
-  ok(psql(`select 1 from join_household('${code}')`, B));
+  assert.equal(psql(`select public.join_household('${code}') is not null`, B).out, 't');
   r = psql(`select id from create_household('C')`, C); ok(r); hhC = r.out.split('\n')[0];
   r = psql(`select id from create_household('Damaged')`, A); ok(r); hhDamaged = r.out.split('\n')[0];
   assert.equal(psql(`select count(*) from household_members where household_id='${hhAB}'`, A).out, '2');
@@ -82,7 +83,37 @@ test('migratiestub laat alleen expliciete privileges toe en gebruikt een niet-su
   assert.equal(psql(`select has_table_privilege('anon','public.household_data','TRUNCATE')`).out, 'f');
   assert.equal(psql(`select count(*) from pg_default_acl d cross join lateral aclexplode(d.defaclacl) a where d.defaclrole='migration_owner'::regrole and d.defaclnamespace='public'::regnamespace and a.grantee in ('anon'::regrole,'authenticated'::regrole,0)`).out, '0');
   assert.equal(psql(`select relrowsecurity and not relforcerowsecurity from pg_class where oid='public.personal_preferences'::regclass`).out, 't');
-  assert.equal(psql(`select prosecdef and proconfig @> array['search_path=public'] from pg_proc where oid='public.create_household(text)'::regprocedure`).out, 't');
+  for (const table of ['households', 'household_members', 'chalkboard_messages', 'household_state', 'household_legacy_imports', 'personal_preferences', 'finance_income_months', 'finance_income_history', 'finance_distributions', 'household_rpc_rate_limit_config', 'household_rpc_rate_limits']) {
+    for (const role of ['anon', 'authenticated']) {
+      for (const privilege of ['TRUNCATE', 'REFERENCES', 'TRIGGER']) {
+        assert.equal(psql(`select has_table_privilege('${role}','public.${table}','${privilege}')`).out, 'f', `${role} ${privilege} ${table}`);
+      }
+    }
+  }
+  assert.equal(psql(`select has_table_privilege('anon','public.household_data','DELETE')`).out, 'f');
+  assert.equal(psql(`select has_table_privilege('authenticated','public.personal_preferences','DELETE')`).out, 'f');
+  assert.equal(psql(`select has_column_privilege('authenticated','public.household_state','payload','UPDATE')`).out, 'f');
+  assert.equal(psql(`select has_column_privilege('anon','public.household_data','payload','SELECT')`).out, 't');
+  assert.equal(psql(`select has_sequence_privilege('anon', c.oid, 'USAGE') from pg_class c where c.relkind='S' and c.relnamespace='public'::regnamespace limit 1`).out, 'f');
+  assert.equal(psql(`select has_function_privilege('authenticated','public.consume_household_rpc_rate_limit(text)','EXECUTE')`).out, 'f');
+  assert.equal(psql(`select has_function_privilege('authenticated','public.cleanup_household_rpc_rate_limits(integer)','EXECUTE')`).out, 'f');
+  assert.equal(psql(`select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.prosecdef and not coalesce(p.proconfig, '{}') @> array['search_path=""']`).out, '0');
+  assert.equal(psql(`select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace cross join lateral aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a where n.nspname='public' and a.grantee=0 and a.privilege_type='EXECUTE'`).out, '0');
+  assert.equal(psql(`select pg_has_role('authenticated','service_role','USAGE')`).out, 'f');
+});
+test('default privileges gelden ook voor nieuwe tabellen en functies', { skip }, () => {
+  ok(psql(`
+    set role migration_owner;
+    create table public._migration_default_table_probe (id integer);
+    create function public._migration_default_function_probe() returns integer language sql as $$ select 1 $$;
+    reset role;
+  `));
+  assert.equal(psql(`select has_table_privilege('anon','public._migration_default_table_probe','SELECT')`).out, 'f');
+  assert.equal(psql(`select has_table_privilege('authenticated','public._migration_default_table_probe','TRUNCATE')`).out, 'f');
+  assert.equal(psql(`select has_function_privilege('anon','public._migration_default_function_probe()','EXECUTE')`).out, 'f');
+  assert.equal(psql(`select has_function_privilege('authenticated','public._migration_default_function_probe()','EXECUTE')`).out, 'f');
+  assert.equal(psql(`select count(*) from pg_proc p cross join lateral aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a where p.oid='public._migration_default_function_probe()'::regprocedure and a.grantee=0 and a.privilege_type='EXECUTE'`).out, '0');
+  ok(psql(`drop function public._migration_default_function_probe(); drop table public._migration_default_table_probe;`));
 });
 test('niet-aangemeld (zonder uid) krijgt geen toegang', { skip }, () => {
   bad(psql(`select put_household_state('${hhAB}','tasks','{}'::jsonb,1)`, ''), /Geen toegang/);
@@ -102,8 +133,8 @@ test('gereserveerde/ongeldige onderdeelnamen en te grote payloads worden geweige
   bad(psql(`select put_household_state('${hhAB}','big',jsonb_build_object('a',repeat('x',8100000)),0)`, A), /Ongeldige gegevens/);
 });
 test('ledenlimiet: derde account geweigerd; bestaand lid opnieuw joinen is no-op', { skip }, () => {
-  bad(psql(`select 1 from join_household('${code}')`, D), /maximaal twee/);
-  ok(psql(`select 1 from join_household('${code}')`, B));
+  assert.equal(psql(`select public.join_household('${code}') is not null`, D).out, 'f');
+  assert.equal(psql(`select public.join_household('${code}') is not null`, B).out, 't');
   assert.equal(psql(`select count(*) from household_members where household_id='${hhAB}'`, A).out, '2');
 });
 test('ledenlimiet bij gelijktijdige uitnodigingen (echte parallelle sessies)', { skip }, () => {
@@ -116,6 +147,73 @@ test('ledenlimiet bij gelijktijdige uitnodigingen (echte parallelle sessies)', {
     assert.equal(psql(`select count(*) from household_members where household_id='${rid}'`, C).out, '2', 'nooit meer dan 2 leden');
   });
 });
+test('create- en join-limieten zijn per gebruiker; ongeldige join-pogingen delen dezelfde bucket', { skip }, () => {
+  const created = [];
+  for (let i = 1; i <= 3; i++) {
+    const r = psql(`select id||'|'||join_code from create_household('Limit-E-${i}')`, E);
+    ok(r);
+    created.push(r.out.split('|'));
+  }
+  bad(psql(`select create_household('Limit-E-blocked')`, E), /Te veel aanvragen/);
+  const other = psql(`select id||'|'||join_code from create_household('Limit-F')`, F);
+  ok(other, 'een andere gebruiker wordt niet beperkt');
+
+  for (let i = 0; i < 5; i++) {
+    assert.equal(psql(`select public.join_household('NOT-A-CODE') is not null`, E).out, 'f');
+  }
+  assert.equal(psql(`select public.join_household('${other.out.split('|')[1]}') is not null`, E).out, 'f');
+  assert.equal(psql(`select count(*) from household_members where household_id='${other.out.split('|')[0]}'`).out, '1');
+  assert.equal(psql(`select public.join_household('${other.out.split('|')[1]}') is not null`, G).out, 't');
+  assert.equal(psql(`select count(*) from household_members where household_id='${other.out.split('|')[0]}'`).out, '2');
+
+  assert.equal(psql(`select count(*) from household_rpc_rate_limits where user_id='${E}' and action='join_household'`).out, '1');
+  assert.equal(psql(`select count(*) from household_rpc_rate_limits where user_id='${E}' and action='create_household'`).out, '1');
+});
+test('gelijktijdige join-RPC-aanroepen uit meerdere sessies delen atomair dezelfde user-bucket', { skip }, async () => {
+  const owner = psql(`select id||'|'||join_code from create_household('Concurrent-join')`, F);
+  ok(owner);
+  const joinCode = owner.out.split('|')[1];
+  const attempts = await Promise.all(Array.from({ length: 10 }, () =>
+    psqlAsync(`select public.join_household('${joinCode}') is not null`, H)));
+  assert.equal(attempts.filter(r => r.ok && r.out === 't').length, 5, JSON.stringify(attempts));
+  assert.equal(attempts.filter(r => r.ok && r.out === 'f').length, 5, JSON.stringify(attempts));
+  assert.equal(attempts.filter(r => !r.ok).length, 0, JSON.stringify(attempts));
+  assert.equal(psql(`select count(*) from household_members where household_id='${owner.out.split('|')[0]}'`).out, '2');
+  assert.equal(psql(`select count(*) from household_rpc_rate_limits where user_id='${H}' and action='join_household'`).out, '1');
+});
+test('legacy-import telt onbekende ids, blokkeert claims na de limiet en houdt registratie compact', { skip }, () => {
+  const legacyId = '7'.repeat(64);
+  const hid = createdForUser(E, 'Limit-E-1');
+  for (let i = 0; i < 5; i++) {
+    assert.equal(psql(`select import_legacy_household_data('${hid}','${'8'.repeat(64)}')`, E).out, 'f');
+  }
+  ok(psql(`insert into household_data(id,payload) values ('${legacyId}','{"synthetic":true}')`));
+  bad(psql(`select import_legacy_household_data('${hid}','${legacyId}')`, E), /Te veel aanvragen/);
+  assert.equal(psql(`select count(*) from household_legacy_imports where legacy_id='${legacyId}'`).out, '0');
+  assert.equal(psql(`select count(*) from household_rpc_rate_limits where user_id='${E}' and action='import_legacy_household_data'`).out, '1');
+});
+test('rate-limitregistraties verlopen veilig en worden in begrensde batches opgeschoond', { skip }, () => {
+  ok(psql(`update household_rpc_rate_limits set expires_at=now()-interval '1 second' where user_id='${H}' and action='join_household'`));
+  assert.equal(psql(`select cleanup_household_rpc_rate_limits(1)`).out, '1');
+  assert.equal(psql(`select count(*) from household_rpc_rate_limits where user_id='${H}' and action='join_household'`).out, '0');
+  assert.equal(psql(`select count(*) from household_rpc_rate_limits where user_id='${G}' and action='join_household'`).out, '1');
+});
+test('put_household_state laat normale sync en herstel toe maar begrenst excessieve succesvolle writes', { skip }, () => {
+  const hid = createdForUser(F, 'Limit-F');
+  ok(psql(`select put_household_state('${hid}','sync-baseline','{"v":1}'::jsonb,0)`, F));
+  bad(psql(`select put_household_state('${hid}','sync-baseline','{"v":2}'::jsonb,0)`, F), /Versieconflict/);
+  for (let i = 0; i < 59; i++) {
+    ok(psql(`select put_household_state('${hid}','sync-${i}','{"v":1}'::jsonb,0)`, F));
+  }
+  bad(psql(`select put_household_state('${hid}','sync-blocked','{"v":1}'::jsonb,0)`, F), /Te veel aanvragen/);
+  assert.equal(psql(`select count(*) from household_state where household_id='${hid}' and section like 'sync-%'`, F).out, '60');
+  assert.equal(psql(`select version from household_state where household_id='${hid}' and section='sync-baseline'`, F).out, '1');
+});
+function createdForUser(user, name) {
+  const result = psql(`select id from households where name='${name}' order by created_at limit 1`, user);
+  ok(result, 'verwacht huishouden ontbreekt');
+  return result.out;
+}
 test('gelijktijdige state-writes met dezelfde versie accepteren precies één schrijver', { skip }, async () => {
   ok(psql(`select put_household_state('${hhAB}','race','{"writer":"initial"}'::jsonb,0)`, A));
   const writes = await Promise.all([
@@ -137,14 +235,14 @@ test('legacy-import: kopieert, nooit dubbel, nooit overschrijven, één huishoud
   // Orphaned and explicitly excluded rows stay untouched and unclaimed.
   const orphan = 'f'.repeat(64);
   ok(psql(`insert into household_data(id,payload) values ('${orphan}','{"orphan":true}')`));
-  bad(psql(`select import_legacy_household_data('${hhAB}','kort')`, A), /Ongeldig/);
+  assert.equal(psql(`select import_legacy_household_data('${hhAB}','kort')`, A).out, 'f');
   assert.equal(psql(`select import_legacy_household_data('${hhAB}','${'0'.repeat(64)}')`, A).out, 'f'); // onbekend
   assert.equal(psql(`select import_legacy_household_data('${hhAB}','${lid}')`, A).out, 't');
   ok(psql(`update household_data set payload='{"v":2}' where id='${lid}'`));
   assert.equal(psql(`select import_legacy_household_data('${hhAB}','${lid}')`, B).out, 'f'); // dubbel
   assert.equal(psql(`select payload->>'v' from household_state where section='legacy_full' and household_id='${hhAB}'`, A).out, '1');
   assert.equal(psql(`select import_legacy_household_data('${hhC}','${foreign}')`, C).out, 't');
-  bad(psql(`select import_legacy_household_data('${hhAB}','${foreign}')`, A), /al aan een ander huishouden/);
+  assert.equal(psql(`select import_legacy_household_data('${hhAB}','${foreign}')`, A).out, 'f');
   assert.equal(psql(`select payload->>'v' from household_data where id='${lid}'`).out, '2', 'oude rij onaangetast');
   bad(psql(`select count(*) from household_data`, A), /permission denied/);
   assert.equal(psql(`select import_legacy_household_data('${hhDamaged}','${damaged}')`, A).out, 't');
@@ -152,16 +250,18 @@ test('legacy-import: kopieert, nooit dubbel, nooit overschrijven, één huishoud
   assert.equal(psql(`select count(*) from household_legacy_imports where legacy_id in ('${orphan}','${'c'.repeat(64)}')`).out, '0');
 });
 test('import faalt expliciet wanneer de seed-table ontbreekt', { skip }, () => {
+  const missing = psql(`select id from create_household('MissingSeed')`, D);
+  ok(missing);
   const sql = `
     begin;
     reset role;
     alter table public.household_data rename to household_data_temporarily_unavailable;
     set role authenticated;
-    set request.jwt.claim.sub = '${A}';
+    set request.jwt.claim.sub = '${D}';
     do $$
     begin
       begin
-        perform public.import_legacy_household_data('${hhAB}', '${'0'.repeat(64)}');
+        perform public.import_legacy_household_data('${missing.out}', '${'0'.repeat(64)}');
         raise exception 'import had moeten falen';
       exception when undefined_table then null;
       end;

@@ -133,7 +133,10 @@
   async function household(kind, value) {
     try {
       const c = cloud();
-      if (kind === 'create') await c.createHousehold(value); else await c.joinHousehold(value);
+      if (kind === 'create') await c.createHousehold(value);
+      else if (!await c.joinHousehold(value)) {
+        throw new Error('De code is ongeldig of aanmelden is nu niet mogelijk. Probeer het later opnieuw.');
+      }
       st.household = null; st.message = kind === 'create' ? 'Huishouden aangemaakt.' : 'Je bent toegevoegd aan het huishouden.';
     } catch (e) { st.message = /maximaal twee/i.test(e.message) ? 'Dit huishouden heeft al twee accounts.' : HS.classifyError(e).message; }
     render();
