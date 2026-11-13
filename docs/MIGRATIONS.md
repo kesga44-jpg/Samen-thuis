@@ -34,8 +34,10 @@ Open vraag: of de Supabase-gateway met JWT-verificatie aan de CORS-preflight (`O
 1. Additief en herhaalbaar; rollback in `supabase/rollbacks/` (niet in `supabase/migrations/`).
 2. RLS aan in dezelfde migratie; `revoke all from anon, authenticated`; minimale grants.
 3. `security definer` met `set search_path = ''` (let op: bestaande functies gebruiken nog `public`, zie `docs/SECURITY.md` S-6).
-4. SQL-tests in `migrations-pg.test.js` (eigenaar mag, ander niet, anon niets).
+4. SQL-tests in `migrations-pg.test.js` en de lokale Supabase-test (`docs/LOCAL_STAGING.md`): de eerste gebruikt een beperkte stub zonder brede default privileges; de tweede controleert de PostgreSQL 15-platformdefaults en effectieve grants na de zes migraties.
 5. Vóór uitvoering op project A: groen isolatierapport, verse back-up database + opslag met geslaagde hersteltest, expliciet akkoord (centraal ADR 0001/0010).
+
+De lokale tests wijzigen geen migratie, productiebeleid of productieomgeving. Ze voeren het handmatige Phase-3-script niet uit. De lokale Supabase-test rapporteert bestaande extra rechten die uit Supabase-defaultprivileges voortkomen; zie `docs/LOCAL_STAGING.md` § 13.
 
 ## 5. Openstaande databasehandelingen (niet uitgevoerd, vereisen goedkeuring)
 

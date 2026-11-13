@@ -5,7 +5,8 @@
 | Soort | Commando | Waar | Vereist |
 |---|---|---|---|
 | Unit- en integratietests | `node --test *.test.js` | Lokaal en CI | Node ≥ 22.18 (voor `edge-guard.test.js`: TypeScript-stripping) |
-| SQL-semantiek (RLS, RPC's) | onderdeel van `migrations-pg.test.js` | Lokaal en CI | PostgreSQL 14–16, **niet-root**-gebruiker (`initdb` weigert root) |
+| SQL-semantiek (RLS, RPC's) | onderdeel van `migrations-pg.test.js` | Lokaal en CI | PostgreSQL 14–16, **niet-root**-gebruiker (`initdb` weigert root); `PG_BIN` kiest expliciet een versie |
+| Lokale Supabase-grants, RLS en seed | `node --test supabase-local.test.js` | Lokaal, na `supabase start`/`db reset` | Docker; vaste Supabase CLI 3.1.0; PostgreSQL 15 |
 | Syntax | `node --check app.js` (+ nieuwe modules in CI) | CI | — |
 | Browser (mobiel/desktop, offline, Voeding) | `node e2e/smoke.mjs` | Lokaal (optioneel, niet in CI) | `npm i -g playwright && npx playwright install chromium` |
 | Auto-contrast (Bewerk, statistiekfilters en -kaart) | `node e2e/auto-contrast.mjs` | Lokaal (optioneel, niet in CI) | Playwright + Chromium; `E2E_SHOTS` voor screenshots |
@@ -17,6 +18,17 @@
 ### Overgeslagen tests (verklaard)
 
 Vier importtests worden in Node overgeslagen als `xlsx`, `mammoth` of Tesseract-taaldata niet als Node-module aanwezig zijn (`import-readers.test.js`). Die bibliotheken laadt de app in de browser vanaf het CDN; ze zijn bewust geen afhankelijkheid van de repo.
+
+`supabase-local.test.js` wordt overgeslagen als de container `supabase_db_samen-thuis-staging` niet draait of de huidige gebruiker geen Docker-toegang heeft. De test praat uitsluitend met die expliciet benoemde lokale container en draait fixtures binnen een rollback-transactie; hij gebruikt geen productie-URL of projectkoppeling. De PostgreSQL-semantiekteststub heeft bewust geen brede default privileges. De aparte Supabase-test controleert de echte lokale platformdefaults en waarschuwt voor extra effectieve rechten op legacy- en voorkeurstabellen.
+
+Kies voor losse SQL-runs de PostgreSQL-binaries expliciet (uitvoeren als niet-root):
+
+```bash
+runuser -u postgres -- env PG_BIN=/usr/lib/postgresql/14/bin node --test migrations-pg.test.js
+runuser -u postgres -- env PG_BIN=/usr/lib/postgresql/16/bin node --test migrations-pg.test.js
+```
+
+De lokale Supabase-stack is in deze testopzet op PostgreSQL 15 gepind. Een geslaagde PostgreSQL 14- of 16-run van `migrations-pg.test.js` bewijst niet dat de volledige Supabase-stack op die versie draait.
 
 **Niet als afgerond beschouwen.** Daarom bestaat `e2e/import-browser.mjs`: dezelfde bestanden (plus `multi.xls` en `scan.pdf`) door de echte app-laders in Chromium, inclusief SRI-controle en een manipulatietest. Stand 2026-11-08: 9/9 geslaagd met lokaal geleverde npm-bestanden. **De live-CDN-stand (`E2E_LIVE_CDN=1`) is nog niet gedraaid** (geen internettoegang tot jsDelivr in de bouwomgeving) en is verplicht vóór het mergen van PR 3.
 
@@ -35,6 +47,8 @@ Vier importtests worden in Node overgeslagen als `xlsx`, `mammoth` of Tesseract-
 | `quotes-core.test.js` (uitgebreid) | Lokale gedachte van de dag, geen extern script in `index.html` | +3 |
 | `sync-merge.test.js` | Automatisch samenvoegen: toevoegingen van beide, verschillende velden, verwijderen, tekstlijsten, zonder basis, scenario Kees/Daphne met nagebootste cloud, echt conflict, hold, race, oude code-sync | 11 |
 | `weather-attribution.test.js` | Open-Meteo-bronvermelding op drie plekken, geen sleutel, cache | 2 |
+| `migrations-pg.test.js` | Migraties op een tijdelijke PostgreSQL: expliciete rolrechten, RLS/RPC's, importfixtures, ontbrekende seedtabel, gelijktijdige state-writes, finance en lokale rollback | — |
+| `supabase-local.test.js` | Supabase-platformdefaults versus migratiegrants, rollen/eigenaarschap, RLS, SECURITY DEFINER en synthetische account-/legacy-importscenario's; geen Phase 3 | — |
 
 
 `e2e/sync-merge.mjs` (9 controles): twee browsercontexten met de echte app (oude code-sync) en een nagebootste `household_data`-tabel; gelijktijdige toevoegingen worden samengevoegd, terugkeren naar de app haalt nieuwe wijzigingen op, een echt conflict vraagt een keuze, "Beide samenvoegen" werkt.
@@ -46,7 +60,7 @@ Vier importtests worden in Node overgeslagen als `xlsx`, `mammoth` of Tesseract-
 ## 3. Release-checklist
 
 1. Branch vanaf `main` (of de vorige PR in de stapel); nooit direct op `main`. Eén onderwerp per PR (zie `docs/IMPLEMENTATION_STATUS.md` § 3).
-2. `node --test *.test.js` groen (als niet-root, met PostgreSQL).
+2. `node --test *.test.js` groen (als niet-root, met PostgreSQL); bij wijzigingen aan databasebeveiliging ook de lokale Supabase-test na `db reset`.
 3. Bij asset-wijziging: `?v=` in `index.html` verhoogd en `node scripts/sync-sw-assets.mjs samen-thuis-vNN-onderwerp` gedraaid (`sw-assets.test.js` controleert de lijst).
 4. Bij bibliotheekwijziging: `node scripts/verify-sri.mjs` groen.
 5. `node e2e/smoke.mjs` lokaal groen (aanbevolen).

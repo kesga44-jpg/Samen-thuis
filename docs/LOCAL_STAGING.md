@@ -6,8 +6,8 @@ Doel: de bestaande migraties en beveiligingsscripts reproduceerbaar testen op ee
 
 | Wel | Niet |
 |---|---|
-| Lokale Postgres 15 + Auth + Storage + Edge Runtime in Docker | Een kopie van productie |
-| Migraties 20261012-20261104 + legacy-basisschema | Phase 3, rollbackscripts of `legacy_row_allow` (worden pas in latere PR's lokaal getest) |
+| Lokale PostgreSQL 15 + Auth + Storage + Edge Runtime in Docker | Een kopie van productie |
+| Zes migraties + legacy-basisschema en synthetische rechten/RLS-tests | Het Phase-3-script, productie-RLS of echte gegevens |
 | Synthetische testaccounts en -rijen | Echte huishoudgegevens, echte codes of back-ups |
 
 Lokale staging is **geen bewijs voor productie**. De productiechecks (grants, RLS, logs, plan) blijven een aparte eigenaarsvoorwaarde (zie `UPGRADE_NAV5_SYNC.md`).
@@ -56,7 +56,7 @@ Dat is veilig omdat alleen `import_legacy_household_data` naar `household_data` 
 
 ```bash
 # Starten (eerste keer downloadt Docker-images; daarna snel)
-npx supabase@3.1.0 start -x imgproxy,vector,logflare,realtime,pgbouncer,mailpit
+npx supabase@3.1.0 start -x imgproxy,vector,logflare,realtime,mailpit
 
 # Status en lokale URL's/keys (alleen lokale standaardwaarden)
 npx supabase@3.1.0 status
@@ -139,7 +139,28 @@ docker ps --format '{{.Names}}' | grep samen-thuis-staging
 
 ## 12. Wat deze omgeving nog niet test
 
-- Phase-3-guard v2, rollback/noodprocedure en `legacy_row_allow` (latere PR's).
-- Realistische Supabase-rechten voor nieuwe tabellen vergeleken met productie (live niet geverifieerd).
+- Het Phase-3-script, `legacy_row_allow` of een rollback/noodprocedure.
+- Productiegrants, productie-RLS, logs, plannen of gedrag.
 - Twee echte apparaten/accounts, offline gedrag en herstel in de app.
 - De Edge Functions lokaal.
+
+## 13. Rechten- en migratietests
+
+Na `start` of `db reset` draait de lokale integratietest binnen één transactie; de fixture-rijen en testaccounts worden aan het eind teruggedraaid:
+
+```bash
+node --test supabase-local.test.js
+```
+
+De test controleert dat de stack PostgreSQL 15 gebruikt, de seed `household_data` heeft geladen, platform-defaults bestaan en migraties de bedoelde toegangsweg gebruiken. De Supabase-defaultprivileges geven nieuwe tabellen in `public` standaard alle tabelrechten aan `anon`, `authenticated` en `service_role`, en nieuwe functies `EXECUTE` aan die rollen. Dit zijn platformdefaults, niet grants uit deze zes migraties. De teststub voor de losse PostgreSQL-tests bootst die ruime defaults juist niet na; daardoor kunnen die tests niet slagen door impliciete rechten.
+
+De lokale stack toont ook bestaande extra rechten die niet door deze test-PR worden aangepast: `anon` houdt via de defaults onder meer `DELETE`/`TRUNCATE` op de legacytabel `household_data`, en `authenticated` heeft zulke extra rechten op `personal_preferences`. De test meldt deze afwijkingen als waarschuwing. `TRUNCATE` wordt niet door RLS afgeschermd. Dit is een lokale bevinding, geen controle van productie.
+
+`migrations-pg.test.js` test daarnaast de SQL-semantiek in een aparte tijdelijke database met een niet-superuser-eigenaar die `BYPASSRLS` heeft. De PostgreSQL-versie kan expliciet gekozen worden:
+
+```bash
+runuser -u postgres -- env PG_BIN=/usr/lib/postgresql/14/bin node --test migrations-pg.test.js
+runuser -u postgres -- env PG_BIN=/usr/lib/postgresql/16/bin node --test migrations-pg.test.js
+```
+
+De runner selecteert standaard de eerste aanwezige versie in volgorde 16, 15, 14. De PG14/16-commando's zijn afzonderlijke tests; de volledige Supabase-stack is hier uitsluitend op PostgreSQL 15 getest. Geen van deze commando's voert het Phase-3-script uit.
