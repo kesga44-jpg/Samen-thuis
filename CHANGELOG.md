@@ -5,6 +5,7 @@ Indeling volgens [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/). Eerde
 ## [Unreleased]
 
 ### Gewijzigd
+- Database-testen aangescherpt: de PostgreSQL-stub verleent geen brede defaultrechten; extra lokale Supabase 15-tests meten platformdefaults, migratiegrants, RLS en synthetische imports. De bestaande extra rechten worden gemeld, niet gewijzigd.
 - Auto: betere leesbaarheid van de tankbeurtknop, statistiekfilters en de statistiekkaart in lichte en donkere thema's.
 - De bèta-prijstracker gebruikt alleen exacte, betrouwbare PrijsProfeet-matches met dezelfde productidentiteit en verpakking; vier verschillende prijzen blijven vereist en kortingspercentages vormen geen automatische grens.
 - Bèta-prijswaarnemingen bewaren bron-, winkel-, product-, EAN- en verpakkingsgegevens. Oude onvolledige waarnemingen blijven behouden maar worden niet automatisch vergeleken; bij API-fouten blijft de laatst bekende prijs staan.
