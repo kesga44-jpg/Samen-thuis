@@ -200,6 +200,7 @@ test('rate-limitregistraties verlopen veilig en worden in begrensde batches opge
 });
 test('put_household_state laat normale sync en herstel toe maar begrenst excessieve succesvolle writes', { skip }, () => {
   const hid = createdForUser(F, 'Limit-F');
+  ok(psql(`update household_rpc_rate_limit_config set refill_seconds=1000000 where action='put_household_state'`));
   ok(psql(`select put_household_state('${hid}','sync-baseline','{"v":1}'::jsonb,0)`, F));
   bad(psql(`select put_household_state('${hid}','sync-baseline','{"v":2}'::jsonb,0)`, F), /Versieconflict/);
   for (let i = 0; i < 59; i++) {
@@ -208,6 +209,7 @@ test('put_household_state laat normale sync en herstel toe maar begrenst excessi
   bad(psql(`select put_household_state('${hid}','sync-blocked','{"v":1}'::jsonb,0)`, F), /Te veel aanvragen/);
   assert.equal(psql(`select count(*) from household_state where household_id='${hid}' and section like 'sync-%'`, F).out, '60');
   assert.equal(psql(`select version from household_state where household_id='${hid}' and section='sync-baseline'`, F).out, '1');
+  ok(psql(`update household_rpc_rate_limit_config set refill_seconds=1 where action='put_household_state'`));
 });
 function createdForUser(user, name) {
   const result = psql(`select id from households where name='${name}' order by created_at limit 1`, user);

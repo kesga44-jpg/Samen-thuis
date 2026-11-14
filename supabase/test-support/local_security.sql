@@ -145,7 +145,10 @@ declare
     'household_data', 'households', 'household_members', 'chalkboard_messages',
     'household_state', 'household_legacy_imports', 'personal_preferences',
     'finance_income_months', 'finance_income_history', 'finance_distributions',
-    'household_rpc_rate_limit_config', 'household_rpc_rate_limits'
+    'household_rpc_rate_limit_config', 'household_rpc_rate_limits',
+    'legacy_row_disposition', 'household_state_write_audit',
+    'legacy_local_verifications', 'legacy_sync_phase3_state',
+    'legacy_recovery_allow', 'legacy_recovery_audit'
   ];
 begin
   foreach table_name in array tables loop
@@ -253,9 +256,16 @@ begin
   end if;
   if has_table_privilege('service_role', 'public.household_rpc_rate_limit_config', 'SELECT')
      or has_table_privilege('service_role', 'public.household_rpc_rate_limits', 'SELECT')
+     or has_table_privilege('service_role', 'public.legacy_row_disposition', 'SELECT')
+     or has_table_privilege('service_role', 'public.household_state_write_audit', 'INSERT')
+     or has_table_privilege('service_role', 'public.legacy_local_verifications', 'SELECT')
+     or has_table_privilege('service_role', 'public.legacy_sync_phase3_state', 'UPDATE')
+     or has_table_privilege('service_role', 'public.legacy_recovery_allow', 'SELECT')
+     or has_table_privilege('service_role', 'public.legacy_recovery_audit', 'INSERT')
+     or has_table_privilege('service_role', 'public.household_data', 'SELECT')
      or has_function_privilege('service_role', 'public.consume_household_rpc_rate_limit(text)', 'EXECUTE')
      or has_function_privilege('service_role', 'public.cleanup_household_rpc_rate_limits(integer)', 'EXECUTE') then
-    raise exception 'The privileged API role has direct access to private rate-limit objects';
+    raise exception 'The privileged API role has direct access to private rate-limit or legacy objects';
   end if;
   if exists (
     select 1 from pg_class c
@@ -280,6 +290,17 @@ begin
     'public.is_household_admin(uuid)',
     'public.put_household_state(uuid,text,jsonb,bigint)',
     'public.import_legacy_household_data(uuid,text)',
+    'public.guard_household_data_write()',
+    'public.protect_legacy_row_disposition()',
+    'public.exclude_legacy_household_row(text,text)',
+    'public.submit_legacy_local_verification(uuid,uuid,text,text,boolean)',
+    'public.legacy_phase3_v2_report()',
+    'public.legacy_phase3_v2_report_base()',
+    'public.check_legacy_sync_phase3_v2()',
+    'public.close_legacy_sync_phase3_v2()',
+    'public.open_legacy_recovery(text[],text,integer)',
+    'public.read_legacy_row_recovery(uuid)',
+    'public.close_legacy_recovery(uuid)',
     'public.household_profile_list()',
     'public.finance_set_income(uuid,text,bigint)',
     'public.finance_confirm_income(uuid,text,bigint)',
@@ -320,7 +341,8 @@ begin
   if exists (
     select 1 from pg_proc p
     join pg_namespace n on n.oid = p.pronamespace
-    where n.nspname = 'public' and p.prosecdef and position('execute' in lower(p.prosrc)) > 0
+    where n.nspname = 'public' and p.prosecdef
+      and p.prosrc ~* '\mexecute[[:space:]]+(immediate|format)\M'
   ) then
     raise exception 'A SECURITY DEFINER function contains dynamic SQL';
   end if;
@@ -345,6 +367,12 @@ begin
     'public.finance_distributions'::regclass,
     'public.household_rpc_rate_limit_config'::regclass,
     'public.household_rpc_rate_limits'::regclass
+    , 'public.legacy_row_disposition'::regclass
+    , 'public.household_state_write_audit'::regclass
+    , 'public.legacy_local_verifications'::regclass
+    , 'public.legacy_sync_phase3_state'::regclass
+    , 'public.legacy_recovery_allow'::regclass
+    , 'public.legacy_recovery_audit'::regclass
   )
     and not c.relrowsecurity;
   if bad_rls <> 0 then
@@ -352,6 +380,17 @@ begin
   end if;
   if not (select relforcerowsecurity from pg_class where oid='public.household_rpc_rate_limit_config'::regclass)
      or not (select relforcerowsecurity from pg_class where oid='public.household_rpc_rate_limits'::regclass)
+     or exists (
+       select 1 from pg_class c
+       where c.oid in (
+         'public.legacy_row_disposition'::regclass,
+         'public.household_state_write_audit'::regclass,
+         'public.legacy_local_verifications'::regclass,
+         'public.legacy_sync_phase3_state'::regclass,
+         'public.legacy_recovery_allow'::regclass,
+         'public.legacy_recovery_audit'::regclass
+       ) and not c.relforcerowsecurity
+     )
      or exists (
        select 1 from pg_class c
        where c.oid in (

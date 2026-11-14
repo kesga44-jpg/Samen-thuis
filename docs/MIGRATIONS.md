@@ -6,6 +6,14 @@
 
 Deze migratie en tests zijn uitsluitend bedoeld voor lokale/staging-validatie. Geen productie-SQL, `db push`, deployment of wijziging aan live Supabase-projecten is uitgevoerd. Lokale resultaten bewijzen geen productiestatus.
 
+### Phase 3 v2: gecontroleerde legacy-afsluiting
+
+`20261114000000_legacy_sync_phase3_v2.sql` voegt een onveranderlijke ledger, server-side payloadhashes en write-audit, lokale verificatie-attestaties, een fail-closed controle en een begrensde beheer-noodprocedure toe. De migratie sluit `household_data` niet af. Alleen `supabase/manual/phase3_v2_close_legacy_sync.sql` kan dat expliciet doen, en alleen als iedere rij en ieder gemigreerd huishouden alle controles haalt; controle en intrekking zijn één transactie onder een exclusieve advisory lock.
+
+`20261114010000_legacy_sync_phase3_security.sql` beperkt uitsluiten tot de database-eigenaar en registreert de database-login als beslisser; API-rollen krijgen geen `EXECUTE`. Nieuwe lokale attestaties vereisen voor beide actieve leden dezelfde comparison ID en gedeelde canonieke SHA-256; individuele rapporthashes mogen verschillen. PR E moet de versiegebonden canonieke bytes en hash leveren. De database controleert de attestationwaarden, maar kan geen plaintext-gelijkheid bewijzen. De migratie laat de noodherstel-kill-switch alle vensters sluiten en voorkomt daarna dat nieuwe vensters worden geopend.
+
+De oude `supabase/manual/phase3_revoke_anon_household_data.sql` is een fail-closed stub. Gebruik die niet voor uitvoering. De lokale synthetische test voert de afsluiting en kill switch uit binnen een transactie die wordt teruggedraaid. Raadpleeg `docs/LOCAL_STAGING.md` voor de ledger, hashdefinitie, operationele stappen, recoverybeperkingen en bewijsstatus. De database kan geen gelijkheid van ontsleutelde plaintext bewijzen; twee PR-E-rapporten met dezelfde comparison ID én canonieke vergelijkinghash zijn een harde voorwaarde.
+
 ## 2. Clientmigratie (automatisch, niet-destructief)
 
 | Van | Naar | Hoe | Terug |
@@ -36,14 +44,14 @@ Open vraag: of de Supabase-gateway met JWT-verificatie aan de CORS-preflight (`O
 1. Additief en herhaalbaar; rollback in `supabase/rollbacks/` (niet in `supabase/migrations/`).
 2. RLS aan in dezelfde migratie; `revoke all from anon, authenticated`; minimale grants.
 3. `security definer` met `set search_path = ''`; bestaande RPC's zijn in de migratie gehard.
-4. SQL-tests in `migrations-pg.test.js` en de lokale Supabase-test (`docs/LOCAL_STAGING.md`): de eerste gebruikt een beperkte stub zonder brede default privileges; de tweede controleert de PostgreSQL 15-platformdefaults en effectieve grants voor de `postgres`-migratie-eigenaar na de zeven migraties. De Supabase `supabase_admin`-defaults blijven een expliciet gedocumenteerde platformbeperking.
+4. SQL-tests in `migrations-pg.test.js` en de lokale Supabase-test (`docs/LOCAL_STAGING.md`): de eerste gebruikt een beperkte stub zonder brede default privileges; de tweede controleert PostgreSQL 15-platformdefaults en effectieve grants voor de `postgres`-migratie-eigenaar na alle negen migraties. De Supabase `supabase_admin`-defaults blijven een expliciet gedocumenteerde platformbeperking.
 5. Vóór uitvoering op project A: groen isolatierapport, verse back-up database + opslag met geslaagde hersteltest, expliciet akkoord (centraal ADR 0001/0010).
 
-De lokale tests wijzigen geen productiebeleid of productieomgeving. Ze voeren het handmatige Phase-3-script of de handmatige rollback niet uit. De lokale Supabase-test controleert de ingetrokken extra rechten en default privileges; zie `docs/LOCAL_STAGING.md` § 13.
+De lokale tests wijzigen geen productiebeleid of productieomgeving. De Phase-3-integratietest gebruikt uitsluitend synthetische gegevens en rolt de testafsluiting na verificatie terug. De production-side guard of handmatige rollback is niet uitgevoerd; zie `docs/LOCAL_STAGING.md`.
 
 ## 5. Openstaande databasehandelingen (niet uitgevoerd, vereisen goedkeuring)
 
 | ID | Handeling | Voorwaarde |
 |---|---|---|
-| DB-1 | `supabase/manual/phase3_revoke_anon_household_data.sql` (R1) | Beide gebruikers op accountsync; verse back-up met hersteltest; akkoord vlak vóór uitvoering |
+| DB-1 | Eventuele Phase-3-v2-afsluiting, uitsluitend na PR E en een afzonderlijk stagingbesluit | Alle guardchecks en twee lokale rapporten slagen; alleen synthetische/local staging; nooit productie zonder expliciet afzonderlijk besluit |
 | DB-2 | `search_path` van bestaande SECURITY DEFINER-functies naar `''` | Additief geïmplementeerd; alleen lokaal getest. Productietoepassing blijft buiten scope en vereist aparte toestemming. |

@@ -223,12 +223,12 @@
     const conflicts = st.conflicts.map(c => `<li class="list-item"><div class="item-main"><strong>${esc2(label(c.section))}</strong><small>${c.fields && c.fields.length ? `Op beide apparaten anders gewijzigd: ${esc2(c.fields.slice(0, 3).join(', '))}${c.fields.length > 3 ? ' …' : ''}` : 'Lokaal en cloud verschillen'}</small></div><button class="primary" data-acct-resolve="${esc2(c.section)}:merge" title="Toevoegingen van beide blijven; is hetzelfde item op beide apparaten anders gewijzigd, dan wint de cloudversie">Beide samenvoegen</button><button class="secondary" data-acct-resolve="${esc2(c.section)}:local">Mijn versie</button><button class="secondary" data-acct-resolve="${esc2(c.section)}:remote">Cloudversie</button></li>`).join('');
     const hh = st.household ? `<p class="muted">Huishouden <strong>${esc2(st.household.name)}</strong> · uitnodigingscode voor je partner: <code>${esc2(st.household.join_code)}</code> (maximaal 2 accounts)</p>` : '';
     const body = (!signed && !on) ? '<p class="muted">Meld je hierboven aan met je persoonlijke account om over te stappen.</p>'
-      : on ? `${hh}<div class="button-row"><button class="primary" data-acct-sync>Nu synchroniseren</button><button class="secondary" data-acct-off>Terug naar oude code-sync</button></div>`
+      : on ? `${hh}<div class="button-row"><button class="primary" data-acct-sync>Nu synchroniseren</button></div>`
       : `${hh}<form class="form-grid compact-form" data-acct-create><label class="field">Nieuw huishouden<input name="name" maxlength="80" placeholder="Naam huishouden"></label><button class="secondary">Aanmaken</button></form>
          <form class="form-grid compact-form" data-acct-join><label class="field">Code van je partner<input name="code" maxlength="20" autocomplete="off"></label><button class="secondary">Toevoegen</button></form>
          <button class="primary" data-acct-on ${st.busy ? 'disabled' : ''}>Overstappen naar accountsync</button>`;
     return `<section class="card settings-card" data-acct-card><div class="card-head"><div><p class="eyebrow">VEILIGE SYNC</p><h2>Accountsynchronisatie per onderdeel</h2></div><span class="tag ${on ? 'green' : ''}">${on ? 'Actief' : 'Niet actief'}</span></div>
-      <p class="muted">Alleen leden van jouw huishouden kunnen de versleutelde gegevens lezen of wijzigen. De oude code-sync blijft staan tot je overstapt en wordt daarna niet meer gebruikt. Er wordt eerst een veiligheidskopie van je lokale data gemaakt bij het overnemen van cloudgegevens.</p>
+      <p class="muted">Alleen leden van jouw huishouden kunnen de versleutelde gegevens lezen of wijzigen. Na overstappen blijft alleen de account-sync actief; terugschakelen naar de afgesloten legacy-sync is niet beschikbaar. Er wordt eerst een veiligheidskopie van je lokale data gemaakt bij het overnemen van cloudgegevens.</p>
       ${body}<p role="status" aria-live="polite" class="small-note">${esc2(st.message)}</p>${conflicts ? `<ul class="list">${conflicts}</ul>` : ''}</section>`;
   }
   const baseRender = render;
@@ -238,14 +238,9 @@
     return r;
   };
   document.addEventListener('click', e => {
-    const t = e.target.closest('[data-acct-on],[data-acct-sync],[data-acct-off],[data-acct-resolve]'); if (!t) return;
+    const t = e.target.closest('[data-acct-on],[data-acct-sync],[data-acct-resolve]'); if (!t) return;
     if (t.matches('[data-acct-on]')) activate();
     else if (t.matches('[data-acct-sync]')) accountSync({ manual: true });
-    else if (t.matches('[data-acct-off]')) {
-      try { localStorage.setItem(PRE_KEY + 'Off', JSON.stringify({ at: new Date().toISOString(), data })); } catch (_) {}
-      // Herstelvlag: de oude sync overschrijft pas na een bewuste keuze, zodat wijzigingen van het partnerapparaat niet verloren gaan.
-      try { localStorage.setItem(RESTORE_HOLD_KEY, '1'); } catch (_) {}
-      const c = load(); c.enabled = false; store(c); st.conflicts = []; st.message = 'Oude code-sync is weer actief. Bij verschillen vraagt de app eerst welke versie je bewaart.'; render(); updateSyncBadge(); }
     else { const [s, ch] = t.dataset.acctResolve.split(':'); accountSync({ manual: true, resolutions: { [s]: ch } }); }
   });
   document.addEventListener('submit', e => {
