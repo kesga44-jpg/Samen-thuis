@@ -51,6 +51,56 @@ test('supabase_admin-defaults zijn expliciet geobserveerd, niet door app-migrati
   }
 });
 
+test('Phase 3 security-migratie invalideert oude attestaties en is herhaalbaar', { skip }, () => {
+  const migration = fs.readFileSync(
+    path.join(__dirname, 'supabase', 'migrations', '20261114010000_legacy_sync_phase3_security.sql'),
+    'utf8'
+  );
+  const sql = `
+    begin;
+    insert into auth.users (id, aud, role, email)
+    values ('00000000-0000-4000-8000-0000000000f1', 'authenticated',
+      'authenticated', 'phase3-old-verification@example.invalid');
+    insert into public.households (id, name, join_code, created_by)
+    values ('10000000-0000-4000-8000-0000000000f1', 'PHASE3-OLD-VERIFICATION',
+      'PHASE3-OLD-VERIFICATION-CODE', '00000000-0000-4000-8000-0000000000f1');
+    alter table public.legacy_local_verifications
+      drop constraint legacy_local_verifications_comparison_sha256_check;
+    insert into public.legacy_local_verifications
+      (household_id, user_id, comparison_id, report_sha256,
+        conflicts_resolved, verified_at)
+    values ('10000000-0000-4000-8000-0000000000f1',
+      '00000000-0000-4000-8000-0000000000f1',
+      '20000000-0000-4000-8000-0000000000f1', repeat('a', 64), true, now());
+    ${migration}
+    do $$
+    begin
+      if exists (
+        select 1 from public.legacy_local_verifications
+        where household_id = '10000000-0000-4000-8000-0000000000f1'
+          and conflicts_resolved
+      ) then
+        raise exception 'An old attestation without a canonical hash remained valid';
+      end if;
+      if not exists (
+        select 1 from pg_constraint
+        where conrelid = 'public.legacy_local_verifications'::regclass
+          and conname = 'legacy_local_verifications_comparison_sha256_check'
+      ) then
+        raise exception 'The canonical hash constraint was not restored';
+      end if;
+    end
+    $$;
+    rollback;
+  `;
+  const result = cp.spawnSync(
+    'docker',
+    ['exec', '-i', container, 'psql', '-U', 'postgres', '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-q', '-f', '-'],
+    { encoding: 'utf8', input: sql }
+  );
+  assert.equal(result.status, 0, [result.stdout, result.stderr].filter(Boolean).join('\n'));
+});
+
 test('Phase 3 v2 blokkeert onvolledige migratie en test gecontroleerd noodherstel', { skip }, () => {
   const phase3 = fs.readFileSync(path.join(__dirname, 'supabase', 'test-support', 'phase3_v2.sql'), 'utf8');
   const killSwitch = fs.readFileSync(path.join(__dirname, 'supabase', 'rollbacks', '20261114000000_legacy_sync_phase3_v2.rollback.sql'), 'utf8');
@@ -60,6 +110,22 @@ test('Phase 3 v2 blokkeert onvolledige migratie en test gecontroleerd noodherste
       if exists (select 1 from public.legacy_recovery_allow where closed_at is null) then
         raise exception 'Emergency rollback did not close every recovery window';
       end if;
+      if not exists (
+        select 1 from public.legacy_sync_phase3_state
+        where singleton and recovery_disabled_at is not null
+      ) then
+        raise exception 'Emergency rollback did not permanently disable new recovery windows';
+      end if;
+      if (
+        select count(*) from public.legacy_recovery_audit
+        where action = 'closed'
+          and recovery_id in (
+            current_setting('test.phase3_recovery_id')::uuid,
+            current_setting('test.phase3_recovery_id2')::uuid
+          )
+      ) <> 2 then
+        raise exception 'Emergency rollback did not audit every recovery window';
+      end if;
       if has_table_privilege('anon', 'public.household_data', 'SELECT')
          or has_table_privilege('authenticated', 'public.household_data', 'SELECT')
          or has_table_privilege('service_role', 'public.household_data', 'SELECT') then
@@ -67,6 +133,29 @@ test('Phase 3 v2 blokkeert onvolledige migratie en test gecontroleerd noodherste
       end if;
     end
     $$;
+    set local role service_role;
+    do $$
+    declare failed boolean := false;
+    begin
+      begin
+        perform public.open_legacy_recovery(array[repeat('a', 64)],
+          'Recovery stays disabled after kill switch', 5);
+      exception when insufficient_privilege then
+        failed := true;
+      end;
+      if not failed then raise exception 'Recovery reopened after the kill switch'; end if;
+      failed := false;
+      begin
+        perform * from public.read_legacy_row_recovery(
+          current_setting('test.phase3_recovery_id')::uuid
+        );
+      exception when insufficient_privilege then
+        failed := true;
+      end;
+      if not failed then raise exception 'A killed recovery window remained readable'; end if;
+    end
+    $$;
+    reset role;
     rollback;
   `;
   const result = cp.spawnSync(

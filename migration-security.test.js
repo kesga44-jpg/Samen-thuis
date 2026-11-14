@@ -5,6 +5,7 @@ const up = fs.readFileSync(d + 'migrations/20261014000000_household_state_sync.s
 const profile = fs.readFileSync(d + 'migrations/20261103000000_personal_profiles.sql', 'utf8').replace(/--.*$/gm, '');
 const hardening = fs.readFileSync(d + 'migrations/20261113000000_database_rate_limits_and_privileges.sql', 'utf8').replace(/--.*$/gm, '');
 const phase3v2 = fs.readFileSync(d + 'migrations/20261114000000_legacy_sync_phase3_v2.sql', 'utf8').replace(/--.*$/gm, '');
+const phase3security = fs.readFileSync(d + 'migrations/20261114010000_legacy_sync_phase3_security.sql', 'utf8').replace(/--.*$/gm, '');
 const rateRows = hardening.slice(hardening.indexOf('create table if not exists public.household_rpc_rate_limits'), hardening.indexOf('create index if not exists household_rpc_rate_limits_expiry_idx'));
 test('household_state: RLS aan, geen anon, geen directe schrijfrechten', () => {
   assert.match(up, /enable row level security/);
@@ -61,6 +62,39 @@ test('ledger en import leggen dezelfde server-hash transactioneel vast', () => {
   assert.match(phase3v2, /legacy_row_disposition_immutable/);
   assert.match(phase3v2, /version > l\.initial_import_version/);
   assert.match(phase3v2, /PR E local reports from both active members/);
+});
+test('legacy-uitsluiting is alleen database-ownerwerk en legt de database-login vast', () => {
+  const exclude = phase3security.slice(
+    phase3security.indexOf('create or replace function public.exclude_legacy_household_row'),
+    phase3security.indexOf('comment on function public.exclude_legacy_household_row')
+  );
+  assert.match(phase3security, /drop function if exists public\.exclude_legacy_household_row\(text, text, uuid\)/i);
+  assert.match(exclude, /decision_actor = session_user/i);
+  assert.match(exclude, /decided_by = null/i);
+  assert.match(phase3security, /revoke all on function public\.exclude_legacy_household_row\(text, text\)\s+from public, anon, authenticated, service_role/i);
+  assert.doesNotMatch(phase3security, /grant execute on function public\.exclude_legacy_household_row/i);
+});
+test('lokale attestaties vereisen een gedeelde canonieke vergelijkinghash', () => {
+  assert.match(phase3security, /comparison_sha256 text/);
+  assert.match(phase3security, /p_comparison_sha256 text/);
+  assert.match(phase3security, /comparison_sha256 is distinct from p_comparison_sha256/i);
+  assert.match(phase3security, /count\(distinct v\.comparison_sha256\)[\s\S]*<> 1/i);
+  assert.match(phase3security, /'id', 'shared_comparison_hash'/i);
+  assert.match(phase3security, /report hashes may differ/i);
+  assert.match(phase3security, /Not independently verifiable by the database/i);
+});
+test('noodherstel controleert alle payloadhashes atomair en kill switch sluit heropenen', () => {
+  const read = phase3security.slice(phase3security.indexOf('create or replace function public.read_legacy_row_recovery'));
+  const open = phase3security.slice(phase3security.indexOf('create or replace function public.open_legacy_recovery'));
+  const killSwitch = fs.readFileSync(d + 'rollbacks/20261114000000_legacy_sync_phase3_v2.rollback.sql', 'utf8');
+  assert.match(read, /payload_sha256 = pg_catalog\.encode/);
+  assert.match(read, /if valid_rows <> expected then[\s\S]*raise exception/i);
+  assert.ok(read.indexOf('if valid_rows <> expected then') < read.indexOf('return query'));
+  assert.match(read, /for share of l, d/i);
+  assert.match(read, /pg_advisory_xact_lock_shared\(741140, 3\)/i);
+  assert.match(open, /recovery_disabled_at is null/i);
+  assert.match(killSwitch, /pg_advisory_xact_lock\(741140, 3\)/i);
+  assert.match(killSwitch, /recovery_disabled_at = coalesce/i);
 });
 test('import_legacy: lidmaatschapscontrole, id-formaat, claim-tabel en geen overschrijving in SQL', () => {
   const sql = up.slice(up.indexOf('function public.import_legacy_household_data'));

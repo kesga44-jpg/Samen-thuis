@@ -7,7 +7,7 @@ Doel: de bestaande migraties en beveiligingsscripts reproduceerbaar testen op ee
 | Wel | Niet |
 |---|---|
 | Lokale PostgreSQL 15 + Auth + Storage + Edge Runtime in Docker | Een kopie van productie |
-| Acht migraties + legacy-basisschema en synthetische rechten/RLS/Phase-3-v2-tests | Productie-RLS of echte gegevens |
+| Negen migraties + legacy-basisschema en synthetische rechten/RLS/Phase-3-v2-tests | Productie-RLS of echte gegevens |
 | Synthetische testaccounts en -rijen | Echte huishoudgegevens, echte codes of back-ups |
 
 Lokale staging is **geen bewijs voor productie**. Productiechecks (grants, RLS, logs en plannen) blijven een aparte eigenaarsvoorwaarde (zie `MIGRATIONS.md`).
@@ -46,7 +46,8 @@ Volgorde bij reset en eerste start:
 6. 20261104 finance_confirmations
 7. 20261113 database_rate_limits_and_privileges
 8. 20261114 legacy_sync_phase3_v2 (ledger, server-side audit, guard en recovery-RPC's; sluit niets automatisch af)
-9. **Seed:** `schema.sql` (`household_data` + 3 anon-policies + minimale anon-grant)
+9. 20261114 legacy_sync_phase3_security (database-owner-only uitsluiten, gedeelde canonieke vergelijkinghash en integere, kill-switchbare recovery)
+10. **Seed:** `schema.sql` (`household_data` + 3 anon-policies + minimale anon-grant)
 
 Dat is veilig omdat alleen `import_legacy_household_data` naar `household_data` verwijst, en alleen in de functiebody (runtime, niet bij `create function`). `household_data` hoeft dus pas te bestaan als de functie wordt aangeroepen. Er zijn geen dubbele creaties: `schema.sql` gebruikt `if not exists` en raakt de migratieobjecten niet.
 
@@ -90,7 +91,7 @@ docker exec -i supabase_db_samen-thuis-staging psql -U postgres -At \
   -c "select to_regclass('public.household_data'), to_regclass('public.household_state'), to_regclass('public.household_legacy_imports')"
 ```
 
-Verwacht: 8 versies (20261012000000 ... 20261114000000) en de bestaande tabellen plus ledger-, audit-, recovery- en rate-limit-tabellen.
+Verwacht: 9 versies (20261012000000 ... 20261114010000) en de bestaande tabellen plus ledger-, audit-, recovery- en rate-limit-tabellen.
 
 ## 7. Lokale database en Studio
 
@@ -191,18 +192,18 @@ De additieve migratie `20261114000000_legacy_sync_phase3_v2.sql` sluit niets aut
 
 `import_legacy_household_data` lockt de bronrij en berekent vóór wijzigingen SHA-256 over UTF-8 van de oorspronkelijke `jsonb::text`-representatie. Importclaim, `legacy_full`-state en ledgerdispositie worden in één transactie vastgelegd. De rate-limit blijft burst 5 en daarna één token per 180 seconden. Een mislukking rolt alle wijzigingen terug.
 
-`check_legacy_sync_phase3_v2()` geeft een rapport met afzonderlijke checks. De guard faalt gesloten bij ontbrekende/onopgeloste ledgerstatus, ongeldige uitsluiting, ontbrekende/hash-mismatched payload, inconsistent of dubbel importresultaat, orphan `legacy_full`-state, ontbrekende twee actieve leden met passende rollen, minder dan twee actieve schrijvers na de initiële importversie, onopgeloste imports/herstelvensters, alternatieve gebruikersroutes of ontbrekende lokale verificatie. De database kan niet verifiëren dat versleutelde payloads op beide apparaten tot dezelfde plaintext leiden. PR E moet daarom per lid een lokaal rapport leveren; dezelfde vergelijking-ID en opgeloste conflicten zijn verplicht.
+`check_legacy_sync_phase3_v2()` geeft een rapport met afzonderlijke checks. De guard faalt gesloten bij ontbrekende/onopgeloste ledgerstatus, ongeldige uitsluiting, ontbrekende/hash-mismatched payload, inconsistent of dubbel importresultaat, orphan `legacy_full`-state, ontbrekende twee actieve leden met passende rollen, minder dan twee actieve schrijvers na de initiële importversie, onopgeloste imports/herstelvensters, alternatieve gebruikersroutes of ontbrekende lokale verificatie. Voor de twee leden moeten comparison ID én canonieke vergelijkinghash gelijk zijn; hun individuele rapporthashes mogen verschillen. PR E moet een versiegebonden canonieke representatie vastleggen en per lid dezelfde hash daarvan aanleveren. De database kan niet verifiëren dat die rapporten eerlijk zijn of dat versleutelde payloads tot dezelfde plaintext leiden: het is een expliciete lokale attestatie, geen server-side plaintextbewijs.
 
 ### Lokale uitvoeringsprocedure
 
 1. Verifieer dat de CLI-doelstack lokaal is (`npx supabase@3.1.0 status`) en voer `npx supabase@3.1.0 db reset` uit.
 2. Gebruik uitsluitend synthetische data. Voer `node --test supabase-local.test.js migration-security.test.js migrations-pg.test.js` uit; de Phase-3-test controleert eerst afwijzingen en voert daarna een volledige synthetische sluiting uit in een transactie die wordt teruggedraaid.
-3. Voor een handmatige lokale proef: vul eerst alle ledgerdisposities in en lever de vereiste PR-E-rapporten voor beide accounts aan. Laat `select public.check_legacy_sync_phase3_v2();` alle checks tonen als geslaagd. Voer pas daarna `supabase/manual/phase3_v2_close_legacy_sync.sql` uit op de lokale testdatabase. Het statement herhaalt alle controles onder een exclusieve advisory lock en trekt rechten/policies atomair in.
+3. Voor een handmatige lokale proef: vul eerst alle ledgerdisposities in en lever de vereiste PR-E-rapporten voor beide accounts aan. Beide moeten dezelfde comparison ID en gedeelde canonieke vergelijkinghash rapporteren; hun rapporthashes mogen verschillen. Laat `select public.check_legacy_sync_phase3_v2();` alle checks tonen als geslaagd. Voer pas daarna `supabase/manual/phase3_v2_close_legacy_sync.sql` uit op de lokale testdatabase. Het statement herhaalt alle controles onder een exclusieve advisory lock en trekt rechten/policies atomair in.
 4. Bij een exception: niets wordt gedeeltelijk gesloten; bekijk de JSON-checks, herstel alleen de ontbrekende synthetische of staging-evidence en voer de guard opnieuw uit. De oude `phase3_revoke_anon_household_data.sql` weigert altijd en mag niet als alternatief gebruikt worden.
 
 ### Noodherstel
 
-Er bestaat geen publieke `legacy_row_allow`-tabel of normale frontendknop. Alleen een beheerder via de vertrouwde lokale `service_role`-databasecontext kan een sessie openen voor 1–20 vooraf geregistreerde ledger-ID's, met reden en TTL van 1–60 minuten. `read_legacy_row_recovery(uuid)` retourneert alleen de expliciet toegestane bronrijen en payloadhash; directe tabeltoegang blijft ingetrokken. De reads worden gelogd. Sluit de sessie met `close_legacy_recovery(uuid)`; `supabase/rollbacks/20261114000000_legacy_sync_phase3_v2.rollback.sql` is een kill switch die alle open herstelvensters sluit en geen legacytoegang heropent. Een algemene rollback naar de oude sync is bewust niet beschikbaar.
+Er bestaat geen publieke `legacy_row_allow`-tabel of normale frontendknop. Alleen een beheerder via de vertrouwde lokale `service_role`-databasecontext kan een sessie openen voor 1–20 vooraf geregistreerde ledger-ID's, met reden en TTL van 1–60 minuten. `read_legacy_row_recovery(uuid)` vergelijkt vóór enige retourwaarde de payloadhash van **alle** toegestane rijen met hun ledgerhash; ontbrekende rijen, ontbrekende/afwijkende hashes, verlopen sessies of gesloten vensters weigeren de hele dataset. De bron- en ledgerrijen worden tijdens validatie gelockt, zodat geen gedeeltelijke of tussentijds gewijzigde dataset wordt teruggegeven. Geslaagde reads worden gelogd zonder payload. Sluit de sessie met `close_legacy_recovery(uuid)`; `supabase/rollbacks/20261114000000_legacy_sync_phase3_v2.rollback.sql` is een kill switch die onder dezelfde advisory lock alle vensters sluit en een blijvende uitschakeltijd schrijft. Daarna weigert `open_legacy_recovery` nieuwe vensters; legacy-sync en tabelrechten worden niet heropend.
 
 ### Rechten en bewijsstatus
 
@@ -210,7 +211,7 @@ Na succesvolle lokale sluiting hebben `PUBLIC`, `anon`, `authenticated` en `serv
 
 | Bewijs | Status |
 |---|---|
-| Lokale PostgreSQL 15-reset, synthetische guard/import/recovery-tests | Geslaagd; 4 lokale Supabase-integratietests plus 15 statische migration-security checks |
+| Lokale PostgreSQL 15-reset, synthetische guard/import/recovery-tests | Geslaagd; 5 lokale Supabase-integratietests plus 18 statische migration-security checks |
 | Supabase-staging buiten de lokale Docker-stack | Niet uitgevoerd |
 | Statische controle van migratie en scripts | Uitgevoerd via `migration-security.test.js` |
 | Productiegrants, productiemigraties, productiegegevens en deployments | Niet uitgevoerd of bewezen |
@@ -219,12 +220,12 @@ Na succesvolle lokale sluiting hebben `PUBLIC`, `anon`, `authenticated` en `serv
 
 | Controle | Resultaat |
 |---|---|
-| Volledige `node --test *.test.js` als niet-root, PostgreSQL 16 beschikbaar | 395 totaal: 383 geslaagd, 0 gefaald, 12 overgeslagen |
-| `migrations-pg.test.js` | 20 geslaagd op PostgreSQL 16 |
-| `migration-security.test.js` | 15 geslaagd |
-| `node --test supabase-local.test.js migration-security.test.js` na verse `supabase db reset` | 19 geslaagd op lokale Supabase PostgreSQL 15; 4 Supabase-integratietests en 15 statische checks |
-| `node --check app.js`, `node --check account-sync.js` en `git diff --check` | Geslaagd |
+| Volledige Node-suite als niet-root, PostgreSQL 16.15 beschikbaar | 399 totaal: 386 geslaagd, 0 gefaald, 13 overgeslagen |
+| `migrations-pg.test.js` | 20 geslaagd op PostgreSQL 16.15 |
+| `migration-security.test.js` | 18 geslaagd |
+| `supabase-local.test.js` + `migration-security.test.js` na verse reset | 23 geslaagd; 5 integratie- en 18 statische tests op PostgreSQL 15.19 |
+| `node --check` voor alle JavaScript-bestanden en `git diff --check` | Geslaagd |
 
-De 12 skips in de volledige niet-root-run: 3 PDF-tests (`pdfjs-dist` ontbreekt), 2 Excel-tests (`xlsx` ontbreekt), 1 Word-test (`mammoth` ontbreekt), 1 OCR-test (`IMPORT_TEST_OCR_LANGPATH` ontbreekt), 1 gecombineerde bestandsimporttest (vereiste readers ontbreken) en 4 lokale Supabase-tests (niet-root testgebruiker heeft geen Docker-toegang). Het resterende risico van de eerste 8 is dat die PDF-, XLSX-, DOCX- en OCR-parsers niet end-to-end zijn getest. De 4 Supabase-tests zijn afzonderlijk als Docker-capable gebruiker uitgevoerd en slaagden na een verse lokale reset op PostgreSQL 15. De `supabase_admin`-probe rapporteert de platformdefaults, waaronder `PUBLIC EXECUTE`. PostgreSQL 14 is niet geïnstalleerd en daarom niet getest; PostgreSQL 16 semantiek/concurrency en de Supabase PostgreSQL 15-stack zijn wel getest.
+De 13 skips in de volledige niet-root-run: 3 PDF-tests (`pdfjs-dist` ontbreekt), 2 Excel-tests (`xlsx` ontbreekt), 1 Word-test (`mammoth` ontbreekt), 1 OCR-test (`IMPORT_TEST_OCR_LANGPATH` ontbreekt), 1 gecombineerde bestandsimporttest (vereiste readers ontbreken) en 5 lokale Supabase-tests (niet-root testgebruiker heeft geen Docker-toegang). Het resterende risico van de eerste 8 is dat die PDF-, XLSX-, DOCX- en OCR-parsers niet end-to-end zijn getest. De 5 Supabase-tests zijn afzonderlijk als Docker-capable gebruiker uitgevoerd en slaagden na een verse lokale reset op PostgreSQL 15.19. De `supabase_admin`-probe rapporteert de platformdefaults, waaronder `PUBLIC EXECUTE`. PostgreSQL 14 is niet geïnstalleerd en daarom niet getest; PostgreSQL 16.15 semantiek/concurrency en de Supabase PostgreSQL 15.19-stack zijn wel getest.
 
 Dit zijn uitsluitend lokale resultaten. Supabase-staging buiten de lokale Docker-stack en productie zijn niet getest.
