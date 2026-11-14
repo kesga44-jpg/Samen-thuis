@@ -8143,7 +8143,10 @@ document.addEventListener('click', event => {
     chalk25.formError = '';
     try {
       if (kind === 'create') await chalkRequest25('/rest/v1/rpc/create_household', { method: 'POST', body: JSON.stringify({ p_name: form.elements.name.value }) });
-      else await chalkRequest25('/rest/v1/rpc/join_household', { method: 'POST', body: JSON.stringify({ p_code: form.elements.code.value }) });
+      else {
+        const joined = await chalkRequest25('/rest/v1/rpc/join_household', { method: 'POST', body: JSON.stringify({ p_code: form.elements.code.value }) });
+        if (!joined) throw new Error('De code is ongeldig of aanmelden is nu niet mogelijk. Probeer het later opnieuw.');
+      }
       await refreshChalkboard25(true);
     } catch (error) {
       chalk25.formError = error.message || 'Dit is niet gelukt.'; paintChalkboard25();

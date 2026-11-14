@@ -5,7 +5,7 @@ Indeling volgens [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/). Eerde
 ## [Unreleased]
 
 ### Gewijzigd
-- Database-testen aangescherpt: de PostgreSQL-stub verleent geen brede defaultrechten; extra lokale Supabase 15-tests meten platformdefaults, migratiegrants, RLS en synthetische imports. De bestaande extra rechten worden gemeld, niet gewijzigd.
+- Database-hardening: token-bucketlimieten voor gevoelige huishoud-RPC's, minimale objectgrants, ingetrokken brede default privileges voor de `postgres`-migratie-eigenaar en veilige `search_path` voor SECURITY DEFINER-functies. PostgreSQL- en lokale Supabase-tests controleren grants, RLS, rate-limits en synthetische gegevens; de aparte `supabase_admin`-defaults blijven een gedocumenteerde platformbeperking (`docs/LOCAL_STAGING.md`).
 - Auto: betere leesbaarheid van de tankbeurtknop, statistiekfilters en de statistiekkaart in lichte en donkere thema's.
 - De bèta-prijstracker gebruikt alleen exacte, betrouwbare PrijsProfeet-matches met dezelfde productidentiteit en verpakking; vier verschillende prijzen blijven vereist en kortingspercentages vormen geen automatische grens.
 - Bèta-prijswaarnemingen bewaren bron-, winkel-, product-, EAN- en verpakkingsgegevens. Oude onvolledige waarnemingen blijven behouden maar worden niet automatisch vergeleken; bij API-fouten blijft de laatst bekende prijs staan.

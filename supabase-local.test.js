@@ -25,3 +25,28 @@ test('lokale Supabase PostgreSQL 15: grants, RLS, RPCs en synthetische fixtures'
   assert.equal(result.status, 0, [result.stdout, result.stderr].filter(Boolean).join('\n'));
   for (const warning of (result.stderr.match(/WARNING: .+/g) || [])) t.diagnostic(warning);
 });
+
+test('supabase_admin-defaults zijn expliciet geobserveerd, niet door app-migraties beheersbaar', { skip }, t => {
+  const sql = `
+    begin;
+    create table public._local_admin_default_acl_probe (id integer);
+    create function public._local_admin_default_acl_probe() returns integer
+      language sql as $$ select 1 $$;
+    select has_table_privilege('anon', 'public._local_admin_default_acl_probe', 'SELECT')
+      || '|' || has_table_privilege('authenticated', 'public._local_admin_default_acl_probe', 'TRUNCATE')
+      || '|' || has_function_privilege('anon', 'public._local_admin_default_acl_probe()', 'EXECUTE')
+      || '|' || has_function_privilege('public', 'public._local_admin_default_acl_probe()', 'EXECUTE');
+    rollback;
+  `;
+  const result = cp.spawnSync(
+    'docker',
+    ['exec', '-i', container, 'psql', '-U', 'supabase_admin', '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-qAt', '-f', '-'],
+    { encoding: 'utf8', input: sql }
+  );
+  assert.equal(result.status, 0, [result.stdout, result.stderr].filter(Boolean).join('\n'));
+  const grants = result.stdout.trim().split('\n').at(-1);
+  assert.match(grants, /^(true|false)\|(true|false)\|(true|false)\|(true|false)$/);
+  if (grants.includes('true')) {
+    t.diagnostic(`supabase_admin-created object probe reports API/PUBLIC access: ${grants}`);
+  }
+});

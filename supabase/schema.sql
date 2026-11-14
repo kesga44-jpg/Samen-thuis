@@ -7,6 +7,9 @@ create table if not exists public.household_data (
   updated_at timestamptz not null default now()
 );
 
+revoke all on public.household_data from public, anon, authenticated;
+grant select, insert, update on public.household_data to anon;
+
 alter table public.household_data enable row level security;
 
 do $$

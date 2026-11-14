@@ -57,7 +57,7 @@ Aanvullend, in een andere repository: `personal-ecosystem` branch `docs/voeding-
 | Prio | Onderwerp | Actie | Stand in rc1 |
 |---|---|---|---|
 | 1 | Voeding | Architectuur en ADR corrigeren | ✅ ADR 0001 herschreven en geaccepteerd; code: geen recept-aanmaak, receptinhoud alleen-lezen, bron wint bij herimport, alleen voedingsannotaties; centrale patch klaar |
-| 2 | Beveiliging | Database-RLS en functies onderzoeken | ⏳ Volgende stap. Bekend: R1 (`household_data` anon), S-6 (`search_path = public`). Alleen onderzoek + migratievoorstel + lokale SQL-tests; niets uitvoeren |
+| 2 | Beveiliging | Database-rate-limiting en least-privilege hardening | 🟡 Additieve migratie en tests in PR C; PostgreSQL 16 en lokale Supabase 15-integratie getest. `supabase_admin`-default-ACL blijft een expliciet platform-rest-risico; niets op productie toegepast, R1/Phase 3 blijft ongewijzigd |
 | 3 | Dependencies | SheetJS upgraden en SRI controleren | ⏳ SRI lokaal bewezen (manipulatietest); live-controle en SheetJS-upgrade open |
 | 4 | Edge Functions | JWT en CORS testen, daarna deployen | ⏳ Code + unit-tests klaar; Deno/Supabase-test en deploy open |
 | 5 | CSP | Beleid opstellen en testen | ⏳ Voorstel staat in `docs/SECURITY.md` |
