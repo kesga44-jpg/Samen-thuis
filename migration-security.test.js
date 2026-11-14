@@ -4,6 +4,7 @@ const d = __dirname + '/supabase/';
 const up = fs.readFileSync(d + 'migrations/20261014000000_household_state_sync.sql', 'utf8').replace(/--.*$/gm, '');
 const profile = fs.readFileSync(d + 'migrations/20261103000000_personal_profiles.sql', 'utf8').replace(/--.*$/gm, '');
 const hardening = fs.readFileSync(d + 'migrations/20261113000000_database_rate_limits_and_privileges.sql', 'utf8').replace(/--.*$/gm, '');
+const phase3v2 = fs.readFileSync(d + 'migrations/20261114000000_legacy_sync_phase3_v2.sql', 'utf8').replace(/--.*$/gm, '');
 const rateRows = hardening.slice(hardening.indexOf('create table if not exists public.household_rpc_rate_limits'), hardening.indexOf('create index if not exists household_rpc_rate_limits_expiry_idx'));
 test('household_state: RLS aan, geen anon, geen directe schrijfrechten', () => {
   assert.match(up, /enable row level security/);
@@ -22,20 +23,44 @@ test('schrijffunctie controleert lidmaatschap en versie', () => {
   assert.match(up, /is_household_member\(p_household\)/);
   assert.match(up, /40001/);
 });
-test('anon-revoke staat buiten migrations (handmatige fase 3)', () => {
+test('legacy-afsluiting staat achter de expliciete Phase-3-v2-guard', () => {
   assert.ok(fs.existsSync(d + 'manual/phase3_revoke_anon_household_data.sql'));
-  for (const f of fs.readdirSync(d + 'migrations').filter(n => !n.includes('rollback') && n !== '20261113000000_database_rate_limits_and_privileges.sql')) assert.doesNotMatch(fs.readFileSync(d + 'migrations/' + f, 'utf8').replace(/--.*$/gm, ''), /revoke[^;]*public\.household_data\b/i, f);
+  assert.ok(fs.existsSync(d + 'manual/phase3_v2_close_legacy_sync.sql'));
+  for (const f of fs.readdirSync(d + 'migrations').filter(n => !n.includes('rollback')
+    && n !== '20261113000000_database_rate_limits_and_privileges.sql'
+    && n !== '20261114000000_legacy_sync_phase3_v2.sql')) {
+    assert.doesNotMatch(fs.readFileSync(d + 'migrations/' + f, 'utf8').replace(/--.*$/gm, ''), /revoke[^;]*public\.household_data\b/i, f);
+  }
+  const beforeClose = phase3v2.slice(0, phase3v2.indexOf('create or replace function public.close_legacy_sync_phase3_v2'));
+  assert.doesNotMatch(beforeClose, /revoke all on public\.household_data from public, anon, authenticated/i);
+  assert.doesNotMatch(phase3v2, /grant select, insert, update on public\.household_data to anon/i);
   assert.match(hardening, /grant select, insert, update on public\.household_data to anon/i);
   assert.match(fs.readFileSync(d + 'schema.sql', 'utf8'), /grant select, insert, update on public\.household_data to anon/i);
   assert.ok(fs.existsSync(d + 'rollbacks/20261014000000_household_state_sync.rollback.sql'));
 });
-test('fase 3 is bewaakt, trekt niets in binnen migrations en raakt coach_data niet aan', () => {
+test('oude Phase-3-script weigert fail-closed; v2 controle en afsluiting zijn apart', () => {
   const p3 = fs.readFileSync(d + 'manual/phase3_revoke_anon_household_data.sql', 'utf8');
-  assert.match(p3, /Fase 3 geweigerd/); assert.match(p3, /to_regprocedure\('public\.put_household_state/); assert.doesNotMatch(p3.replace(/--.*$/gm, ''), /coach_data/);
-  assert.match(p3.split('\n').find(l => /^\s*drop policy/.test(l)) || '', /household_data/);
-  const code = p3.replace(/--.*$/gm, ''), end = code.lastIndexOf('end $$;');
-  assert.ok(end > code.indexOf('Fase 3 geweigerd') && !/\b(drop|revoke|grant|create|alter)\b/i.test(code.slice(end + 7)), 'geen wijzigende statements buiten het DO-blok');
-  assert.ok(code.indexOf('revoke') < end && code.indexOf('drop policy') < end);
+  assert.match(p3, /Oud Phase-3-script geblokkeerd/);
+  assert.doesNotMatch(p3.replace(/--.*$/gm, ''), /\b(drop policy|revoke|grant)\b/i);
+  const closeAt = phase3v2.indexOf('create or replace function public.close_legacy_sync_phase3_v2');
+  const closeBody = phase3v2.slice(closeAt);
+  assert.ok(closeAt >= 0);
+  assert.ok(closeBody.indexOf('legacy_phase3_v2_report()') < closeBody.indexOf('revoke all on public.household_data'));
+  assert.match(closeBody, /pg_advisory_xact_lock\(741140, 3\)/);
+  assert.match(closeBody, /drop policy if exists/);
+  assert.match(closeBody, /TRUNCATE/);
+});
+test('ledger en import leggen dezelfde server-hash transactioneel vast', () => {
+  const importBody = phase3v2.slice(phase3v2.indexOf('create or replace function public.import_legacy_household_data'));
+  assert.match(importBody, /for update/);
+  assert.match(importBody, /pg_catalog\.sha256/);
+  assert.match(importBody, /payload_sha256/);
+  assert.match(importBody, /legacy_row_disposition/);
+  assert.match(importBody, /get diagnostics inserted = row_count;\s*if inserted <> 1 then\s*raise exception/i);
+  assert.match(phase3v2, /create table if not exists public\.legacy_row_disposition/);
+  assert.match(phase3v2, /legacy_row_disposition_immutable/);
+  assert.match(phase3v2, /version > l\.initial_import_version/);
+  assert.match(phase3v2, /PR E local reports from both active members/);
 });
 test('import_legacy: lidmaatschapscontrole, id-formaat, claim-tabel en geen overschrijving in SQL', () => {
   const sql = up.slice(up.indexOf('function public.import_legacy_household_data'));
