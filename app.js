@@ -249,10 +249,10 @@ function migrateData(raw) {
     const completedDates = Array.isArray(item.completedDates) ? item.completedDates : (item.done ? [item.due || todayISO()] : []);
     return { secondWeekday: '', notes: '', ...item, completedDates };
   });
-  migrated.meta = {
-    version: 2,
-    updatedAt: raw.meta?.updatedAt || new Date().toISOString()
-  };
+  migrated.meta = { version: 2, updatedAt: raw.meta?.updatedAt || new Date().toISOString() };
+  if (raw.meta && typeof raw.meta === 'object' && !Array.isArray(raw.meta)) {
+    SamenThuisCore.preserveUnknownFields(raw.meta, migrated.meta, clone);
+  }
   return migrated;
 }
 
@@ -263,7 +263,10 @@ const RECOVERY_KEYS = {
 };
 
 function recoveryOptions() {
-  return { ...RECOVERY_KEYS, migrate: migrateData, fresh: freshLocalData, now: () => new Date().toISOString() };
+  return {
+    ...RECOVERY_KEYS, migrate: migrateData, fresh: freshLocalData, now: () => new Date().toISOString(),
+    preserveLocal: () => ({ sportCoach: clone(data?.sportCoach) })
+  };
 }
 
 let storageProtected = false;
@@ -707,12 +710,12 @@ function tripItemRow(item) {
 function renderSettings() {
   const configured = syncConfigured();
   return `<div class="settings-grid">
-    <section class="card settings-card"><div class="card-head"><div><p class="eyebrow">Apparaten</p><h2>Versleutelde synchronisatie</h2></div><span class="tag ${configured ? 'green' : ''}">${configured ? 'Verbonden' : 'Code invullen'}</span></div><p>Vul op elk apparaat dezelfde geheime huishoudcode in. De overige verbindingsgegevens zijn al ingesteld.</p>
+    <section class="card settings-card"><div class="card-head"><div><p class="eyebrow">Apparaten</p><h2>Versleutelde synchronisatie</h2></div><span class="tag ${configured ? 'green' : ''}">${configured ? 'Verbonden' : 'Code invullen'}</span></div><p>Vul op elk apparaat dezelfde geheime huishoudcode in. De overige verbindingsgegevens zijn al ingesteld. De oude code-sync is in deze client gepauzeerd; oude servertoegang blijft bestaan tot DB-1.</p>
       <form id="syncForm" class="form-grid compact-form"><div class="field"><label for="syncHouseholdCode">Geheime huishoudcode (minimaal 12 tekens)</label><input id="syncHouseholdCode" name="householdCode" type="password" value="${esc(syncConfig.householdCode)}" minlength="12" autocomplete="off" placeholder="Jullie gedeelde geheime code"></div><div class="button-row"><button class="primary" type="submit">Bewaren en verbinden</button>${configured ? '<button class="secondary" type="button" data-sync-now>Nu synchroniseren</button>' : ''}</div></form>
     </section>
     ${renderCalendarSettings()}
     ${renderSyncConflictCard()}
-    <section class="card settings-card"><div class="card-head"><div><p class="eyebrow">Gegevens</p><h2>Back-up</h2></div></div><p>Maak een los JSON-bestand of herstel een eerdere back-up. Herstellen vervangt alle huidige gegevens op dit apparaat; Importeren voegt gegevens samen. De synchronisatiecode en sleutel worden niet in de back-up gezet. Vrijwillige Sport & Training-gezondheidsinformatie staat wel leesbaar in de JSON-back-up; bewaar en deel die zorgvuldig.</p><div class="button-row"><button class="secondary" data-action="backup">Back-up maken</button><button class="secondary" data-action="restore">Back-up herstellen (vervangen)</button></div></section>
+    <section class="card settings-card"><div class="card-head"><div><p class="eyebrow">Gegevens</p><h2>Back-up</h2></div></div><p>Maak een JSON-back-up of herstel een eerdere back-up. SportCoach-gegevens worden niet in deze JSON opgenomen of erdoor hersteld. Een afzonderlijke veilige SportCoach-export is nog niet beschikbaar. Herstellen vervangt de overige gegevens op dit apparaat; Importeren voegt die samen. De synchronisatiecode en sleutel worden niet in de back-up gezet.</p><div class="button-row"><button class="secondary" data-action="backup">Back-up maken</button><button class="secondary" data-action="restore">Back-up herstellen (vervangen)</button></div></section>
     ${recoveryCard()}
     <section class="card settings-card"><div class="card-head"><div><p class="eyebrow">Apple Opdracht</p><h2>Eenvoudig tekstformaat</h2></div></div><p>Laat de Opdracht per afspraak één regel maken:</p><pre><code>Agendanaam | 2026-09-04 | 09:00 | Titel</code></pre><p>De persoon volgt uit de agenda. Een vijfde veld met Kees, Daphne of Samen is optioneel en gaat voor de agendakeuze. Een zesde veld mag de eindtijd bevatten. Bij onbekende namen kies je de persoon één keer.</p><p>Dit is een import, geen tweerichtingskoppeling. Verplaatsen of verwijderen in Apple Agenda wordt niet automatisch overgenomen.</p></section>
   </div>`;
@@ -1396,11 +1399,13 @@ function downloadBackup(file) {
   anchor.download = file.name;
   anchor.click();
   setTimeout(() => URL.revokeObjectURL(anchor.href), 1000);
-  toast('Back-up opgeslagen');
+  toast('Back-upbestand gemaakt; SportCoach staat er niet in');
 }
 
 async function exportBackup() {
-  const file = new File([JSON.stringify(data, null, 2)], `samen-thuis-backup-${todayISO()}.json`, { type: 'application/json' });
+  const backupData = { ...data };
+  delete backupData.sportCoach;
+  const file = new File([JSON.stringify(backupData, null, 2)], `samen-thuis-backup-${todayISO()}.json`, { type: 'application/json' });
   const isAppleMobile = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   if (isAppleMobile && navigator.share && navigator.canShare?.({ files: [file] })) {
     try {
@@ -1447,8 +1452,8 @@ function updateSyncBadge(message) {
   else if (!navigator.onLine) badge.textContent = 'Offline · later synchroniseren';
   else if (syncing) badge.textContent = 'Synchroniseren…';
   else if (syncError) badge.textContent = 'Sync controleren';
-  else badge.textContent = syncConfig.lastSyncedAt ? 'Apparaten gelijk' : 'Sync gereed';
-  badge.classList.toggle('connected', syncConfigured() && !syncing && !syncError);
+  else badge.textContent = syncConfigured() ? 'Oude sync gepauzeerd · status onbekend' : 'Alleen dit apparaat';
+  badge.classList.remove('connected');
 }
 
 function bytesToBase64(bytes) {
@@ -1494,49 +1499,17 @@ function supabaseHeaders() {
   return headers;
 }
 
-async function syncNow({ manual = false } = {}) {
-  if (!syncConfigured() || syncing || !navigator.onLine) {
-    if (manual && !navigator.onLine) toast('Geen internetverbinding');
-    return;
-  }
-  syncing = true;
+function pauseLegacySync(manual = false) {
+  const message = 'Oude code-sync is gepauzeerd in deze app. Lokale gegevens blijven behouden; de oude serverroute is nog niet door DB-1 afgesloten.';
   syncError = '';
-  updateSyncBadge();
-  try {
-    if (!window.crypto?.subtle) throw new Error('Versleuteling vereist HTTPS');
-    const householdId = await sha256(syncConfig.householdCode.trim());
-    const baseUrl = syncConfig.projectUrl.replace(/\/+$/, '');
-    const response = await fetch(`${baseUrl}/rest/v1/household_data?id=eq.${householdId}&select=payload,updated_at`, { headers: supabaseHeaders() });
-    if (!response.ok) throw new Error(`Supabase gaf ${response.status}`);
-    const rows = await response.json();
-    let remoteData = null;
-    if (rows[0]?.payload) remoteData = migrateData(await decryptData(rows[0].payload, syncConfig.householdCode));
-    const isFirstConnection = !syncConfig.lastSyncedAt;
-    const remoteIsNewer = remoteData && new Date(remoteData.meta.updatedAt) > new Date(data.meta.updatedAt);
-    if (remoteData && (isFirstConnection || remoteIsNewer)) {
-      data = remoteData;
-      save({ touch: false, sync: false });
-    } else if (!remoteData || new Date(data.meta.updatedAt) >= new Date(remoteData.meta.updatedAt)) {
-      const payload = await encryptData(data, syncConfig.householdCode);
-      const upload = await fetch(`${baseUrl}/rest/v1/household_data?on_conflict=id`, {
-        method: 'POST', headers: { ...supabaseHeaders(), Prefer: 'resolution=merge-duplicates,return=minimal' },
-        body: JSON.stringify({ id: householdId, payload, updated_at: data.meta.updatedAt })
-      });
-      if (!upload.ok) throw new Error(`Opslaan gaf ${upload.status}`);
-    }
-    syncConfig.lastSyncedAt = new Date().toISOString();
-    syncError = '';
-    localStorage.setItem(SYNC_KEY, JSON.stringify(syncConfig));
-    if (current === 'settings' || remoteData) render();
-    if (manual) toast('Apparaten zijn bijgewerkt');
-  } catch (error) {
-    console.error('Synchronisatie mislukt', error);
-    syncError = error.message || 'Synchronisatie mislukt';
-    if (manual) toast('Synchronisatie lukt nog niet. Controleer de instellingen.');
-  } finally {
-    syncing = false;
-    updateSyncBadge();
-  }
+  updateSyncBadge(message);
+  if (manual) toast(message);
+  return Promise.resolve({ status: 'legacy-paused' });
+}
+
+async function syncNow({ manual = false } = {}) {
+  if (!syncConfigured()) return { status: 'not-configured' };
+  return pauseLegacySync(manual);
 }
 
 function scheduleSync() {
@@ -2230,131 +2203,8 @@ if (syncConfigured()) syncNow();
   }
 
   syncNow = async function syncNowV11({ manual = false } = {}) {
-    if (!syncConfigured() || syncing || !navigator.onLine) {
-      if (manual && !navigator.onLine) toast('Geen internetverbinding');
-      return;
-    }
-    if (getSyncConflict() && !syncConflictResolution) {
-      syncError = 'Wijzigingen op beide apparaten; kies welke versie je wilt bewaren.';
-      updateSyncBadge();
-      return;
-    }
-    syncing = true;
-    syncError = '';
-    updateSyncBadge();
-    try {
-      if (!window.crypto?.subtle) throw new Error('Versleuteling vereist HTTPS');
-      const householdId = await sha256(syncConfig.householdCode.trim());
-      const baseUrl = syncConfig.projectUrl.replace(/\/+$/, '');
-      const response = await fetch(`${baseUrl}/rest/v1/household_data?id=eq.${householdId}&select=payload,updated_at`, { headers: supabaseHeaders() });
-      if (!response.ok) throw new Error(`Supabase gaf ${response.status}`);
-      const rows = await response.json();
-      let remoteData = null;
-      if (rows[0]?.payload) remoteData = migrateData(await decryptData(rows[0].payload, syncConfig.householdCode));
-      const pendingConflict = syncConflictStore.get();
-      if (syncConflictResolution && pendingConflict?.resolution && remoteData
-        && SamenThuisCore.remoteChangedSinceChoice(pendingConflict.remoteData, remoteData)) {
-        const selectedData = pendingConflict.selectedData
-          || (syncConflictResolution === 'local' ? pendingConflict.localData : pendingConflict.remoteData);
-        const renewedConflict = {
-          ...pendingConflict,
-          localData: clone(selectedData),
-          remoteData: clone(remoteData),
-          localUpdatedAt: selectedData.meta?.updatedAt || '',
-          remoteUpdatedAt: remoteData.meta?.updatedAt || '',
-          resolution: '',
-          selectedData: null,
-          detectedAt: new Date().toISOString()
-        };
-        syncConflictStore.store(renewedConflict);
-        syncConflictResolution = '';
-        syncError = 'De andere versie is verder gewijzigd; maak opnieuw een keuze.';
-        if (current === 'settings') render();
-        toast(syncError);
-        return;
-      }
-
-      const localTime = new Date(data.meta?.updatedAt || 0).getTime();
-      const remoteTime = new Date(remoteData?.meta?.updatedAt || 0).getTime();
-      let remoteLoaded = false;
-
-      const plan = SamenThuisCore.planSync({
-        local: data, remote: remoteData, hold: !!localStorage.getItem(RESTORE_HOLD_KEY),
-        resolution: syncConflictResolution, lastSyncedAt: syncConfig.lastSyncedAt
-      });
-      // Wijzigingen op beide apparaten: eerst automatisch samenvoegen ten opzichte van de laatst gesynchroniseerde versie.
-      // Lukt dat zonder dat hetzelfde veld aan beide kanten anders is gewijzigd, dan is er geen keuze nodig.
-      let autoMerged = null;
-      if (remoteData && plan === 'conflict' && !syncConflictResolution && !localStorage.getItem(RESTORE_HOLD_KEY)) {
-        const syncBase = loadLegacySyncBase(householdId);
-        if (syncBase && window.SamenThuisHouseholdSync?.mergeData) {
-          const merged = window.SamenThuisHouseholdSync.mergeData(syncBase, data, remoteData);
-          if (merged.ok) autoMerged = merged.value;
-        }
-      }
-      if (autoMerged) {
-        try { localStorage.setItem('samenThuisPreMergeBackup', JSON.stringify({ at: nowIso(), data })); } catch (_) { /* geen ruimte: samenvoegen gaat door, cloudversie blijft herstelbaar */ }
-        data = migrateData({ ...autoMerged, meta: { ...(data.meta || {}), updatedAt: nowIso() } });
-        normaliseTravelData();
-        if (save({ touch: false, sync: false }) === false) throw new Error('Lokaal opslaan is geblokkeerd; synchronisatie niet afgerond');
-        await uploadSyncData(baseUrl, householdId, rows[0]);
-        remoteLoaded = true;
-        toast('Wijzigingen van beide apparaten zijn samengevoegd');
-      } else if (!remoteData) {
-        await uploadSyncData(baseUrl, householdId, rows[0]);
-      } else if (plan === 'conflict') {
-        const conflict = {
-          localData: clone(data),
-          remoteData: clone(remoteData),
-          localUpdatedAt: data.meta.updatedAt,
-          remoteUpdatedAt: remoteData.meta.updatedAt,
-          detectedAt: new Date().toISOString()
-        };
-        if (!syncConflictStore.store(conflict)) {
-          syncError = 'Conflict gevonden, maar browseropslag is vol. Kies een versie voordat je deze pagina verlaat.';
-          if (current === 'settings') render();
-          toast(syncError);
-          return;
-        }
-        syncError = 'Wijzigingen op beide apparaten; kies welke versie je wilt bewaren.';
-        if (current === 'settings') render();
-        toast('Wijzigingen op beide apparaten gevonden. Kies een versie bij Instellingen.');
-        return;
-      } else if (syncConflictResolution === 'remote') {
-        data = clone(pendingConflict?.selectedData || remoteData);
-        normaliseTravelData();
-        if (save({ touch: false, sync: false }) === false) throw new Error('Lokaal opslaan is geblokkeerd; synchronisatie niet afgerond');
-        remoteLoaded = true;
-      } else if (syncConflictResolution === 'local') {
-        data = clone(pendingConflict?.selectedData || data);
-        await uploadSyncData(baseUrl, householdId, rows[0]);
-      } else if (remoteTime > localTime) {
-        data = remoteData;
-        normaliseTravelData();
-        if (save({ touch: false, sync: false }) === false) throw new Error('Lokaal opslaan is geblokkeerd; synchronisatie niet afgerond');
-        remoteLoaded = true;
-      } else if (localTime > remoteTime) {
-        await uploadSyncData(baseUrl, householdId, rows[0]);
-      }
-
-      syncConfig.lastSyncedAt = nowIso();
-      localStorage.setItem(SYNC_KEY, JSON.stringify(syncConfig));
-      storeLegacySyncBase(householdId, data);
-      try { localStorage.removeItem(RESTORE_HOLD_KEY); } catch {}
-      if (syncConflictResolution) {
-        if (syncConflictStore.clear()) syncConflictResolution = '';
-      }
-      syncError = '';
-      if (current === 'settings' || remoteLoaded) render();
-      if (manual) toast('Apparaten zijn bijgewerkt');
-    } catch (error) {
-      console.error('Synchronisatie mislukt', error);
-      syncError = error.message || 'Synchronisatie mislukt';
-      if (manual) toast('Synchronisatie lukt nog niet. Controleer de instellingen.');
-    } finally {
-      syncing = false;
-      updateSyncBadge();
-    }
+    if (!syncConfigured()) return { status: 'not-configured' };
+    return pauseLegacySync(manual);
   };
 
   function startAutomaticSync() {
@@ -6143,7 +5993,7 @@ function fuelMate243(obj){
 }
 function sigImport246(x,kind=''){if(!x||typeof x!=='object')return String(x);if(kind==='cars')return plateImport243(x.plate||'')||String(x.id||'');if(kind==='fuelEntries')return [x.carId||'',String(x.date||'').slice(0,10),num243(x.odometer),num243(x.liters||x.volume),num243(x.total||x.totalCost)].join('|');if(kind==='planning')return [x.title||'',x.date||'',x.time||'',x.person||''].join('|').toLowerCase();return String(x.id||[x.title||x.name||'',x.date||x.due||'',x.category||''].join('|')).toLowerCase()}
 function mergeArray246(a,b,kind=''){return SamenThuisCore.mergeUnique(a,b,x=>sigImport246(x,kind))}
-function mergeBackup246(raw){const incoming=typeof migrateData==='function'?migrateData(raw):raw;if(!incoming||typeof incoming!=='object')throw new Error('Ongeldige Samen Thuis back-up');const keys=['planning','meals','groceries','chores','stock','trips','ideas','home','freezer','cars','fuelEntries'];keys.forEach(k=>{if(Array.isArray(incoming[k]))data[k]=mergeArray246(data[k],incoming[k],k)});Object.entries(incoming).forEach(([k,v])=>{if(keys.includes(k)||v==null)return;if(k==='sportCoach'&&v&&typeof v==='object'){const old=data.sportCoach&&typeof data.sportCoach==='object'?data.sportCoach:{},merged={...v,...old};merged.profiles={...(v.profiles||{}),...(old.profiles||{})};['programs','sessions','sources','exercises','evaluations','library','plans'].forEach(key=>{merged[key]=mergeArray246(old[key],v[key],key)});merged.favorites=[...new Set([...(v.favorites||[]),...(old.favorites||[])])];merged.libraryCategories=[...new Set([...(v.libraryCategories||[]),...(old.libraryCategories||[])])];merged.activeWorkouts={...(v.activeWorkouts||{}),...(old.activeWorkouts||{})};merged.settings={...(v.settings||{}),...(old.settings||{})};data.sportCoach=merged;return}if(v&&typeof v==='object'&&!Array.isArray(v)){data[k]={...v,...((data[k]&&typeof data[k]==='object'&&!Array.isArray(data[k]))?data[k]:{})}}else if(data[k]===undefined||data[k]===null||data[k]==='')data[k]=v})}
+function mergeBackup246(raw){const incoming=typeof migrateData==='function'?migrateData(raw):raw;if(!incoming||typeof incoming!=='object')throw new Error('Ongeldige Samen Thuis back-up');const keys=['planning','meals','groceries','chores','stock','trips','ideas','home','freezer','cars','fuelEntries'];keys.forEach(k=>{if(Array.isArray(incoming[k]))data[k]=mergeArray246(data[k],incoming[k],k)});Object.entries(incoming).forEach(([k,v])=>{if(keys.includes(k)||k==='sportCoach'||v==null)return;if(v&&typeof v==='object'&&!Array.isArray(v)){data[k]={...v,...((data[k]&&typeof data[k]==='object'&&!Array.isArray(data[k]))?data[k]:{})}}else if(data[k]===undefined||data[k]===null||data[k]==='')data[k]=v})}
 async function runImport243(){
  if(!importFile243)return toast('Kies eerst een bestand');
  try{
@@ -6233,11 +6083,7 @@ function getSyncConflict() {
 function renderSyncConflictCard() {
   const conflict = getSyncConflict();
   if (!conflict) return '';
-  const date = value => {
-    const parsed = new Date(value);
-    return Number.isNaN(parsed.getTime()) ? 'onbekend' : parsed.toLocaleString('nl-NL');
-  };
-  return `<section class="card settings-card sync-conflict"><div class="card-head"><div><p class="eyebrow">SYNCHRONISATIECONFLICT</p><h2>Beide apparaten zijn gewijzigd</h2></div><span class="tag red">Actie nodig</span></div><p>Er zijn sinds de vorige synchronisatie wijzigingen op beide apparaten. Kies welke volledige versie leidend wordt. De andere versie blijft bewaard in de conflictback-up op dit apparaat totdat de keuze succesvol is gesynchroniseerd.</p><p><strong>Dit apparaat:</strong> ${esc(date(conflict.localUpdatedAt))}<br><strong>Andere apparaat:</strong> ${esc(date(conflict.remoteUpdatedAt))}</p><p class="muted">Kies bij voorkeur <strong>Beide samenvoegen</strong>: toevoegingen van beide apparaten blijven bewaard. Is hetzelfde item op beide apparaten anders gewijzigd, dan wint de versie van het andere apparaat (de laatst opgeslagen cloudversie).</p><div class="button-row"><button class="primary" data-sync-conflict-choice="merge">Beide samenvoegen</button><button class="secondary" data-sync-conflict-choice="local">Deze apparaatversie gebruiken</button><button class="secondary" data-sync-conflict-choice="remote">Andere apparaatversie gebruiken</button></div></section>`;
+  return `<section class="card settings-card sync-conflict"><div class="card-head"><div><p class="eyebrow">OUDE SYNCHRONISATIE</p><h2>Bewaard conflict niet toegepast</h2></div><span class="tag">Lokaal bewaard</span></div><p>De oude code-sync is gepauzeerd. Een eerder opgeslagen conflict en de bijbehorende lokale kopie blijven ongewijzigd bewaard; deze app past geen van beide versies automatisch toe. Los dit pas op via een afzonderlijk goedgekeurde gegevensovergang.</p></section>`;
 }
 
 // Basis voor automatisch samenvoegen in de oude code-sync: de gegevens zoals ze na de laatste geslaagde synchronisatie
@@ -6285,42 +6131,7 @@ async function uploadSyncData(baseUrl, householdId, expectedRemoteRow = null) {
 document.addEventListener('click', event => {
   const choice = event.target.closest('[data-sync-conflict-choice]');
   if (!choice) return;
-  if (syncing) return;
-  const conflict = getSyncConflict();
-  if (!conflict) return;
-  if (!conflict.resolution && !['local', 'remote', 'merge'].includes(choice.dataset.syncConflictChoice)) {
-    toast('Kies een geldige versie om de synchronisatie te hervatten.');
-    return;
-  }
-  let selection;
-  try {
-    if (choice.dataset.syncConflictChoice === 'merge') {
-      // Samenvoegen = de samengevoegde versie wordt "deze apparaatversie" en gaat naar de cloud (zelfde veilige route als 'local').
-      const HS = window.SamenThuisHouseholdSync;
-      if (!HS?.mergeData) throw new Error('Samenvoegen is niet beschikbaar; kies een versie.');
-      const base = loadLegacySyncBaseAny();
-      const merged = HS.mergeData(base, conflict.localData, conflict.remoteData, { onConflict: 'remote' }).value;
-      merged.meta = { ...(conflict.localData.meta || {}), updatedAt: new Date().toISOString() };
-      selection = { choice: 'local', data: migrateData(merged) };
-    } else {
-      selection = SamenThuisCore.resolveSyncConflict(
-        conflict, choice.dataset.syncConflictChoice, clone, new Date().toISOString()
-      );
-    }
-  } catch (error) {
-    toast(error.message);
-    return;
-  }
-  const pending = { ...conflict, resolution: selection.choice, selectedData: clone(selection.data) };
-  if (!syncConflictStore.store(pending)) {
-    toast('De keuze kan niet veilig worden bewaard omdat browseropslag vol is. Maak ruimte en probeer opnieuw.');
-    return;
-  }
-  syncConflictResolution = selection.choice;
-  data = selection.data;
-  save({ touch: false, sync: false });
-  render();
-  syncNow({ manual: true });
+  toast('De oude code-sync is gepauzeerd. Het bewaarde conflict is niet gewijzigd of toegepast.');
 });
 
 /* v25 · standalone forecast page and device-local dashboard editor */

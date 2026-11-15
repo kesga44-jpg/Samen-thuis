@@ -14,7 +14,7 @@
     try { localStorage.setItem(BASE_VALUES_KEY, JSON.stringify({ [slot()]: values })); return true; }
     catch (_) { try { localStorage.removeItem(BASE_VALUES_KEY); } catch (__) {} console.warn('Basis voor samenvoegen past niet in de opslag; bij gelijktijdige wijzigingen wordt om een keuze gevraagd.'); return false; }
   };
-  const SECTION_LABELS = { groceries: 'boodschappen', meals: 'weekmenu', planning: 'agenda', chores: 'routines', tasks: 'taken', stock: 'voorraad', freezer: 'vriezer', ideas: 'date-ideeën', home: 'woning', trips: 'reizen', tripFolders: 'reizen', tripSections: 'reizen', budgetV23: 'financiën', nutrition: 'voeding', challengeDataV26: 'challenges', sportCoach: 'sport', dailyAnswers: 'vraag van de dag' };
+  const SECTION_LABELS = { groceries: 'boodschappen', meals: 'weekmenu', planning: 'agenda', chores: 'routines', tasks: 'taken', stock: 'voorraad', freezer: 'vriezer', ideas: 'date-ideeën', home: 'woning', trips: 'reizen', tripFolders: 'reizen', tripSections: 'reizen', budgetV23: 'financiën', nutrition: 'voeding', challengeDataV26: 'challenges', dailyAnswers: 'vraag van de dag' };
   const label = s => SECTION_LABELS[s] || s;
   const st = { household: null, conflicts: [], message: '', busy: false, uid: AUTH.session()?.user?.id || '' };
   // Accountwissel: nooit huishouden/conflicten van het vorige account blijven gebruiken.
@@ -71,13 +71,15 @@
       if (result.status === 'ok') {
         syncConfig.lastSyncedAt = new Date().toISOString(); localStorage.setItem(SYNC_KEY, JSON.stringify(syncConfig));
         try { localStorage.removeItem(RESTORE_HOLD_KEY); } catch (_) {}
-        st.message = result.pushed.length || pulled.length ? `Bijgewerkt: ${result.pushed.length} verstuurd, ${pulled.length} ontvangen.` : 'Apparaten zijn gelijk.';
+        st.message = result.pushed.length || pulled.length
+          ? `Synchronisatieronde afgerond: ${result.pushed.length} verstuurd, ${pulled.length} ontvangen.`
+          : 'Geen wijzigingen gevonden in deze synchronisatieronde.';
         if (result.merged && result.merged.length) {
           const names = [...new Set(result.merged.map(label))].join(', ');
           st.message = `Wijzigingen van beide apparaten samengevoegd (${names}).`;
           toast(`Samengevoegd met de wijzigingen van je huisgenoot: ${names}`);
         }
-        if (manual) toast('Apparaten zijn bijgewerkt');
+        if (manual) toast('Synchronisatieronde afgerond');
       } else if (result.status === 'conflict') {
         syncError = 'Wijzigingen op beide apparaten; kies per onderdeel welke versie je bewaart.';
         st.message = syncError; toast(syncError);
@@ -104,8 +106,8 @@
     legacyBadge(message);
     const badge = document.querySelector('#syncState');
     if (!badge || message || !accountMode()) return;
-    badge.textContent = syncing ? 'Synchroniseren…' : !AUTH.session()?.user?.id ? 'Aanmelden vereist · lokaal bewaard' : !navigator.onLine ? 'Offline · later synchroniseren' : st.conflicts.length ? 'Conflict · kies versie' : syncError ? 'Sync controleren' : 'Account-sync gelijk';
-    badge.classList.toggle('connected', !syncing && !syncError && !st.conflicts.length && !!AUTH.session()?.user?.id);
+    badge.textContent = syncing ? 'Synchroniseren…' : !AUTH.session()?.user?.id ? 'Aanmelden vereist · lokaal bewaard' : !navigator.onLine ? 'Offline · later synchroniseren' : st.conflicts.length ? 'Conflict · kies versie' : syncError ? 'Sync controleren' : 'Laatst gesynchroniseerd · niet geverifieerd';
+    badge.classList.remove('connected');
   };
 
   async function activate() {
@@ -115,17 +117,14 @@
       if (!AUTH.session()?.user?.id) throw new Error('Meld je eerst aan met je persoonlijke account.');
       const c = cloud(); st.household = await c.membership();
       if (!st.household) throw new Error('Maak eerst een huishouden aan of voeg je toe met de code van je huisgenoot.');
-      let legacyNote = '';
-      try { legacyNote = (await c.importLegacy(st.household.id, await sha256(code()))) ? ' Bestaande clouddata is veilig gekopieerd.' : ''; }
-      catch (e) { const k = HS.classifyError(e); if (k.kind === 'migration' || k.kind === 'auth') throw new Error(k.message); legacyNote = ' Let op: oude clouddata kon niet worden gekopieerd (' + k.message + ').'; }
       st.busy = false;
-      // Eerst één geslaagde ronde, pas dán inschakelen; bij fout/offline blijft de oude route onaangetast.
+      // Importing the opaque legacy payload would reintroduce SportCoach.
       const first = await accountSync({ manual: true });
       if (HS.shouldEnable(first.status)) {
         const cfg = load(); cfg.enabled = true; cfg.householdId = st.household.id; store(cfg);
-        st.message = (st.message || '') + legacyNote;
+        st.message = 'Accountsync is ingeschakeld. Oude code-syncdata is niet automatisch gekopieerd en blijft behouden op de oude route tot DB-1.';
       } else {
-        st.message = 'Overstappen niet voltooid: ' + (st.message || 'controleer je verbinding en probeer opnieuw') + ' De oude code-sync blijft actief; er is niets gewijzigd.';
+        st.message = 'Overstap niet voltooid: ' + (st.message || 'controleer je verbinding en probeer opnieuw') + ' Lokale gegevens zijn behouden; de oude serverroute blijft bestaan tot DB-1.';
       }
     } catch (e) { st.message = e.message || 'Overstappen mislukt'; toast(st.message); }
     finally { st.busy = false; render(); }
@@ -228,7 +227,7 @@
          <form class="form-grid compact-form" data-acct-join><label class="field">Code van je partner<input name="code" maxlength="20" autocomplete="off"></label><button class="secondary">Toevoegen</button></form>
          <button class="primary" data-acct-on ${st.busy ? 'disabled' : ''}>Overstappen naar accountsync</button>`;
     return `<section class="card settings-card" data-acct-card><div class="card-head"><div><p class="eyebrow">VEILIGE SYNC</p><h2>Accountsynchronisatie per onderdeel</h2></div><span class="tag ${on ? 'green' : ''}">${on ? 'Actief' : 'Niet actief'}</span></div>
-      <p class="muted">Alleen leden van jouw huishouden kunnen de versleutelde gegevens lezen of wijzigen. Na overstappen blijft alleen de account-sync actief; terugschakelen naar de afgesloten legacy-sync is niet beschikbaar. Er wordt eerst een veiligheidskopie van je lokale data gemaakt bij het overnemen van cloudgegevens.</p>
+      <p class="muted">SportCoach wordt niet gesynchroniseerd. De oude code-sync is in deze app gepauzeerd; oude clouddata wordt niet automatisch gekopieerd en blijft behouden tot DB-1. Een succesvolle accountsync bevestigt niet dat beide apparaten actueel gelijk zijn.</p>
       ${body}<p role="status" aria-live="polite" class="small-note">${esc2(st.message)}</p>${conflicts ? `<ul class="list">${conflicts}</ul>` : ''}</section>`;
   }
   const baseRender = render;

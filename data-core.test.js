@@ -24,6 +24,13 @@ test('migration preserves cloned unknown data without overriding known defaults'
   assert.notEqual(migrated.futureModule, source.futureModule);
 });
 
+test('meta migration keeps unknown nested fields and overwrites only known fields', () => {
+  const rawMeta = { futureFlag: { enabled: true }, version: 1, updatedAt: 'old' };
+  const migratedMeta = { version: 2, updatedAt: 'new' };
+  preserveUnknownFields(rawMeta, migratedMeta, value => structuredClone(value));
+  assert.deepEqual(migratedMeta, { futureFlag: { enabled: true }, version: 2, updatedAt: 'new' });
+});
+
 test('FuelMate fillups normalize aliases, derive unit price, and retain flags', () => {
   assert.deepEqual(normalizeFuelMateFill({
     datetime: '2026-10-02T10:30:00Z',
@@ -256,6 +263,28 @@ test('backup import: hold set, current data copied, imported updatedAt kept, nex
   const cloud = { x: 2, meta: { updatedAt: '2026-10-01T00:00:00Z' } };
   assert.equal(planSync({ local: data, remote: cloud, hold: !!s.getItem('hold'), lastSyncedAt: '2026-10-19T00:00:00Z' }), 'conflict');
   assert.equal(planSync({ local: data, remote: null, hold: true }), 'upload');
+});
+
+test('restore preserves local SportCoach and never revives it from an older backup', () => {
+  const s = fakeStorage();
+  const localSportCoach = { sessions: [{ id: 'local-session' }] };
+  const o = {
+    ...opts, holdKey: 'hold',
+    preserveLocal: () => ({ sportCoach: structuredClone(localSportCoach) })
+  };
+  const restored = restoreBackupText(s, o, JSON.stringify({
+    sportCoach: { sessions: [{ id: 'old-backup-session' }] },
+    tasks: [{ id: 'task-1' }]
+  }));
+  assert.deepEqual(restored.sportCoach, localSportCoach);
+  assert.deepEqual(JSON.parse(s.getItem('d')).sportCoach, localSportCoach);
+
+  const absentStorage = fakeStorage();
+  const absent = restoreBackupText(absentStorage, {
+    ...o, preserveLocal: () => ({ sportCoach: undefined })
+  }, JSON.stringify({ sportCoach: { sessions: [{ id: 'old-backup-session' }] } }));
+  assert.equal(Object.hasOwn(absent, 'sportCoach'), false);
+  assert.equal(Object.hasOwn(JSON.parse(absentStorage.getItem('d')), 'sportCoach'), false);
 });
 
 test('backup import: invalid file changes nothing; failing storage keeps data, copy and no hold', () => {

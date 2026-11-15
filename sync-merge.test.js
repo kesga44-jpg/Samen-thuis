@@ -144,14 +144,15 @@ test('oude code-sync: mergeData voegt alle onderdelen samen en laat meta/setting
   assert.deepEqual(m.value.settings, { x: 2 }); assert.equal(m.value.meta.updatedAt, '2');
 });
 
-test('app.js en account-sync.js gebruiken het samenvoegen; opslag vol breekt opslaan niet', () => {
+test('accountsynchronisatie blijft samenvoegen; legacy-sync is gepauzeerd', () => {
   const app = fs.readFileSync(__dirname + '/app.js', 'utf8');
   const acct = fs.readFileSync(__dirname + '/account-sync.js', 'utf8');
-  assert.match(app, /window\.SamenThuisHouseholdSync\.mergeData\(syncBase, data, remoteData\)/);
-  assert.match(app, /storeLegacySyncBase\(householdId, data\)/);
-  assert.match(app, /data-sync-conflict-choice="merge">Beide samenvoegen/);
+  assert.match(app, /function pauseLegacySync/);
+  assert.doesNotMatch(app, /window\.SamenThuisHouseholdSync\.mergeData\(syncBase, data, remoteData\)/);
   assert.match(app, /'samenThuisSyncBaseV1', 'samenThuisAccountSyncBaseValuesV1'/, 'save() ruimt basiskopieën op bij volle opslag');
+  assert.match(acct, /HS\.runAccountSync/);
   assert.match(acct, /baseValues: loadBaseValues\(\)/);
   assert.match(acct, /data-acct-resolve="\$\{esc2\(c\.section\)\}:merge"/);
+  assert.match(fs.readFileSync(__dirname + '/household-sync-core.js', 'utf8'), /function mergeSection/);
   assert.match(app, /AUTO_SYNC_INTERVAL_MS = 30000/, 'app haalt elke 30 s nieuwe wijzigingen op als hij open staat');
 });

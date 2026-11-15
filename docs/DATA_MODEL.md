@@ -4,7 +4,7 @@
 
 | Sleutel | Inhoud | Sync | In back-up |
 |---|---|---|---|
-| `samenThuisDataV2` | Alle huishoudgegevens (zie § 2) | Ja (per top-level onderdeel, versleuteld) | Ja |
+| `samenThuisDataV2` | Huishoudgegevens plus lokale SportCoach-data (zie § 2) | Behalve lokale-only velden, waaronder `sportCoach` | Ja, behalve `sportCoach` |
 | `samenThuisDataV1` | Oude versie, alleen migratiebron | Nee | — |
 | `samenThuisSyncV1` | Huishoudcode, laatste synctijd (legacy-route) | Nee | Nee |
 | `samenThuisSyncConflictV1`, `samenThuisRestoreHold` | Conflict- en herstelstatus | Nee | Nee |
@@ -21,7 +21,9 @@ De drie sync-basissleutels zijn herbouwbaar: bij een volle opslag ruimt `save()`
 
 ## 2. `samenThuisDataV2`
 
-Bestaande onderdelen blijven ongewijzigd: `meta`, `settings` (lokaal), `planning`, `calendars`, `meals`, `groceries`, `freezer`, `chores`, `stock`, `ideas`, `home`, `trip*`, `dailyAnswers`, `budget*`/`budgetV23` (ledger in centen), `priceReferences`, `offers25`, `challengeDataV26`, `sportCoach`, enz. `migrateData` neemt onbekende velden ongewijzigd over (v23.1-principe).
+Bestaande onderdelen blijven ongewijzigd: `meta`, `settings` (lokaal), `planning`, `calendars`, `meals`, `groceries`, `freezer`, `chores`, `stock`, `ideas`, `home`, `trip*`, `dailyAnswers`, `budget*`/`budgetV23` (ledger in centen), `priceReferences`, `offers25`, `challengeDataV26`, `sportCoach`, enz. `migrateData` neemt onbekende velden en onbekende geneste `meta`-velden ongewijzigd over (v23.1-principe). Accountsync projecteert `sportCoach` niet; JSON-back-up, backup-restore en backup-merge laten het buiten beschouwing.
+
+**Opslagbeperking:** SportCoach blijft in bestaande leesbare `localStorage`-JSON. PR E voert geen omzetting naar device-only encryptie uit en biedt nog geen beveiligde export/import. Bestaande lokale waarden worden door generieke restores behouden; een afzonderlijke SportCoach-export volgt pas na een complete Storage-inventaris en onafhankelijke cryptografische beoordeling.
 
 ### Wijziging aan bestaand onderdeel (additief)
 
@@ -88,7 +90,7 @@ Ongewijzigd in deze set. Tabellen en RLS: zie `supabase/migrations/` en `persona
 |---|---|---|
 | `household_data` | Legacy versleutelde payload | Aan; `anon` lezen/invoegen/bijwerken met `using (true)` (R1) |
 | `households`, `household_members` | Huishouden (max 2 leden) | Leden lezen; schrijven via RPC |
-| `household_state`, `household_legacy_imports` | Accountsync per onderdeel | Leden lezen; schrijven via `put_household_state` |
+| `household_state`, `household_legacy_imports` | Accountsync per onderdeel | Leden lezen; schrijven via `put_household_state`; PR E weigert `sportCoach`-writes. De client-side legacy-import-RPC is ingetrokken, maar de oude `household_data`-route wordt pas in DB-1 afgesloten. |
 | `personal_preferences` | Voorkeuren, profiel | Alleen eigenaar |
 | `chalkboard_messages` | Krijtbord | Leden |
 | `finance_income_months`, `finance_income_history`, `finance_distributions` | Inkomens en verdelingen | Leden lezen; RPC; updates geblokkeerd |

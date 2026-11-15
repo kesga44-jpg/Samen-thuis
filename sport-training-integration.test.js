@@ -5,19 +5,25 @@ const path = require('node:path');
 
 const read = file => fs.readFileSync(path.join(__dirname, file), 'utf8');
 
-test('Sport & Training blijft onderdeel van de bestaande versleutelde huishoudsync en JSON-back-up', () => {
+test('SportCoach is uitgesloten van huishoudsync en generieke JSON-back-ups/restores', () => {
   const sync = read('household-sync-core.js');
   const app = read('app.js');
-  assert.match(sync, /const SKIP_KEYS = \['settings', 'meta'\]/);
+  assert.match(sync, /const SKIP_KEYS = \['settings', 'meta', 'sportCoach'\]/);
+  assert.match(sync, /const RESERVED = \[\.\.\.SKIP_KEYS, LEGACY_SECTION/);
+  assert.match(sync, /if \(row\.section === 'sportCoach'\) continue/);
   assert.match(sync, /function sectionsOf\(data\)/);
   assert.match(app, /preserveUnknownFields\(raw, migrated, clone\)/);
-  assert.match(app, /if\(k==='sportCoach'/);
-  for (const key of ['programs', 'sessions', 'library', 'plans', 'exercises']) {
-    assert.match(app, new RegExp(`merged\\[key\\]=mergeArray246`));
-    assert.match(app, new RegExp(`'${key}'`));
-  }
-  assert.match(app, /JSON\.stringify\(data, null, 2\)/);
-  assert.match(app, /gezondheidsinformatie staat wel leesbaar in de JSON-back-up/);
+  assert.match(app, /preserveUnknownFields\(raw\.meta, migrated\.meta, clone\)/);
+  assert.match(app, /delete backupData\.sportCoach/);
+  assert.match(app, /k==='sportCoach'\|\|v==null/);
+  assert.match(app, /preserveLocal: \(\) => \(\{ sportCoach: clone\(data\?\.sportCoach\) \}\)/);
+  assert.match(app, /Een afzonderlijke veilige SportCoach-export is nog niet beschikbaar/);
+  const conflictCard = app.slice(app.indexOf('function renderSyncConflictCard'), app.indexOf('// Basis voor automatisch samenvoegen'));
+  assert.doesNotMatch(conflictCard, /data-sync-conflict-choice=/);
+  const conflictStart = app.indexOf("document.addEventListener('click', event => {", app.indexOf('async function uploadSyncData'));
+  const conflictListener = app.slice(conflictStart, app.indexOf('/* v25', conflictStart));
+  assert.match(conflictListener, /bewaarde conflict is niet gewijzigd of toegepast/);
+  assert.doesNotMatch(conflictListener, /data = selection\.data|save\(\{ touch: false/);
 });
 
 test('Storage-migratie is privaat en beperkt iedere objectactie tot huishoudleden', () => {
@@ -49,7 +55,7 @@ test('sport-assets en de nieuwe account-syncbestandsinterface worden geladen en 
   const html = read('index.html');
   const sw = read('sw.js');
   const accountSync = read('account-sync.js');
-  for (const asset of ['sportcoach.css?v=2', 'sportcoach-core.js?v=2', 'account-sync.js?v=4']) {
+  for (const asset of ['sportcoach.css?v=2', 'sportcoach-core.js?v=2', 'data-core.js?v=250', 'household-sync-core.js?v=3', 'account-sync.js?v=5']) {
     assert.ok(html.includes(asset), `${asset} ontbreekt in index`);
     assert.ok(sw.includes(asset), `${asset} ontbreekt in service worker`);
   }

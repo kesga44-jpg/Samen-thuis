@@ -38,6 +38,36 @@ test('instellingen en meta worden nooit gesynchroniseerd', async () => {
   assert.deepEqual(Object.keys(s.st.state.hh1), ['tasks']);
   assert.deepEqual(r.pushed, ['tasks']);
 });
+test('SportCoach blijft lokaal: lokale data, oude remote rij en legacy_full worden uitgesloten', async () => {
+  const s = server();
+  const local = D({ sportCoach: { sessions: [{ id: 'local-session' }] } });
+  s.st.state.hh1 = {
+    sportCoach: { version: 4, payload: { corrupt: 'must not decrypt' } },
+    legacy_full: { version: 1, payload: { enc: JSON.stringify({
+      tasks: ['legacy'], sportCoach: { sessions: [{ id: 'legacy-session' }] }
+    }) } }
+  };
+  let sportCoachDecrypts = 0;
+  const r = await H.runAccountSync({
+    cloud: s.client('A'), householdId: 'hh1', local,
+    encrypt: enc,
+    decrypt: async payload => {
+      if (payload?.corrupt) { sportCoachDecrypts++; throw new Error('must not decrypt'); }
+      return dec(payload);
+    }
+  });
+  assert.equal(sportCoachDecrypts, 0);
+  assert.deepEqual(local.sportCoach, { sessions: [{ id: 'local-session' }] });
+  assert.deepEqual(r.pulls, { tasks: ['legacy'] });
+  assert.ok(!r.pushed.includes('sportCoach'));
+  assert.deepEqual(Object.keys(s.st.state.hh1).sort(), ['legacy_full', 'sportCoach']);
+  local.tasks = r.pulls.tasks;
+  local.sportCoach.sessions.push({ id: 'new-local-session' });
+  const afterLocalEdit = await run(s.client('A'), local);
+  assert.ok(!afterLocalEdit.pushed.includes('sportCoach'));
+  assert.deepEqual(local.sportCoach.sessions.map(session => session.id), ['local-session', 'new-local-session']);
+  assert.deepEqual(Object.keys(s.st.state.hh1).sort(), ['legacy_full', 'sportCoach']);
+});
 test('twee leden: wijziging van A komt bij B, zonder volledige state', async () => {
   const s = server(); let a = D({ tasks: [{ id: 1 }], notes: ['x'] });
   const ra = await run(s.client('A'), a);
@@ -108,8 +138,11 @@ test('client bevat geen service-role key en migratie sluit aan op clientnamen', 
   const sql = fs.readFileSync(__dirname + '/supabase/migrations/20261014000000_household_state_sync.sql', 'utf8');
   const js = fs.readFileSync(__dirname + '/household-sync-core.js', 'utf8');
   assert.doesNotMatch(js, /service_role/i);
-  for (const n of ['put_household_state', 'import_legacy_household_data']) { assert.match(sql, new RegExp('function public\\.' + n)); assert.match(js, new RegExp(n)); }
-  for (const p of ['p_household', 'p_section', 'p_payload', 'p_expected_version', 'p_legacy_id']) { assert.match(sql, new RegExp(p)); assert.match(js, new RegExp(p)); }
+  assert.match(sql, /function public\.put_household_state/);
+  assert.match(js, /put_household_state/);
+  assert.match(sql, /function public\.import_legacy_household_data/);
+  assert.doesNotMatch(fs.readFileSync(__dirname + '/account-sync.js', 'utf8'), /rpc\(['"]import_legacy_household_data/);
+  for (const p of ['p_household', 'p_section', 'p_payload', 'p_expected_version']) { assert.match(sql, new RegExp(p)); assert.match(js, new RegExp(p)); }
   assert.match(sql, /household_state/); assert.match(js, /household_state\?select=section,payload,version,updated_at/);
 });
 

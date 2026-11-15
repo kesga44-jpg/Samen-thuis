@@ -23,13 +23,14 @@ Meer: [installatie en configuratie](docs/INSTALLATION.md) · [test en release](d
 | [docs/SECURITY.md](docs/SECURITY.md) | Beveiligingsaudit, privacy, CSP-voorstel |
 | [docs/MIGRATIONS.md](docs/MIGRATIONS.md) | Client- en databasemigraties, Edge-deploy |
 | [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md) | Wat is gebouwd/getest, PR-indeling, open besluiten |
+| [docs/PR_E_STATUS.md](docs/PR_E_STATUS.md) | PR E: afgedwongen grenzen, bewijsstatus en blokkades |
 | [docs/adr/](docs/adr/) | Besluiten specifiek voor Samen Thuis |
 | [CHANGELOG.md](CHANGELOG.md) | Wijzigingen |
 | [CLAUDE.md](CLAUDE.md) / [AGENTS.md](AGENTS.md) | Regels voor AI-assistenten |
 
 ## Belangrijkste afspraken
 
-- Gegevens staan lokaal in `samenThuisDataV2` en reizen per onderdeel versleuteld mee in de accountsync; nieuwe velden zijn altijd additief.
+- Gegevens staan lokaal in `samenThuisDataV2` en reizen per onderdeel versleuteld mee in de accountsync, behalve expliciet lokale velden zoals `settings`, `meta` en `sportCoach`; nieuwe velden zijn altijd additief.
 - Wijzigingen van beide huisgenoten worden automatisch samengevoegd; alleen als hetzelfde veld op beide apparaten anders is gewijzigd, vraagt de app een keuze (aanbevolen: **Beide samenvoegen**). Nieuwe wijzigingen komen binnen bij openen, bij terugkeren naar de app en elke 30 seconden.
 - Het budget gebruikt één financiële ledger in integer centen. Inkomstenbronnen, verdelingsregels en terugkerende vaste lasten staan in dezelfde versleutelde huishoudgegevens. Verwachte betalingen reserveren alleen saldo; een uitgave ontstaat pas na bevestiging van de daadwerkelijke betaling.
 - Externe API's alleen op verzoek van de gebruiker; sleutels nooit in de frontend (alleen als Supabase-secret achter een Edge Function met JWT-controle).

@@ -4,7 +4,7 @@
   root.SamenThuisHouseholdSync = core;
 })(globalThis, function () {
   // Lokale-only sleutels: apparaatinstellingen en meta worden nooit per onderdeel gesynchroniseerd.
-  const SKIP_KEYS = ['settings', 'meta'];
+  const SKIP_KEYS = ['settings', 'meta', 'sportCoach'];
   const LEGACY_SECTION = 'legacy_full';
 
   function stable(v) {
@@ -26,7 +26,7 @@
     return false;
   }
   const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o || {}, k);
-  const RESERVED = ['meta', 'settings', 'legacy_full', '__proto__', 'constructor', 'prototype'];
+  const RESERVED = [...SKIP_KEYS, LEGACY_SECTION, '__proto__', 'constructor', 'prototype'];
   const validSection = n => typeof n === 'string' && /^[\w.-]{1,60}$/.test(n) && !RESERVED.includes(n);
   function sectionsOf(data) {
     const out = {};
@@ -183,8 +183,7 @@
       createHousehold: name => rpc('create_household', { p_name: name }),
       joinHousehold: code => rpc('join_household', { p_code: code }),
       readState: hid => call('/rest/v1/household_state?select=section,payload,version,updated_at&household_id=eq.' + encodeURIComponent(hid)),
-      putState: (hid, section, payload, expected) => rpc('put_household_state', { p_household: hid, p_section: section, p_payload: payload, p_expected_version: expected }),
-      importLegacy: (hid, legacyId) => rpc('import_legacy_household_data', { p_household: hid, p_legacy_id: legacyId })
+      putState: (hid, section, payload, expected) => rpc('put_household_state', { p_household: hid, p_section: section, p_payload: payload, p_expected_version: expected })
     };
   }
 
@@ -196,6 +195,7 @@
     const rows = await cloud.readState(householdId);
     const remote = {}; let legacy = null;
     for (const row of rows || []) {
+      if (row.section === 'sportCoach') continue;
       const value = await decrypt(row.payload); // sleutelfout stopt vóór enig schrijven
       if (row.section === LEGACY_SECTION) legacy = value;
       else if (validSection(row.section)) remote[row.section] = { version: Number(row.version), value };
