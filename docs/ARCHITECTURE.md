@@ -43,11 +43,11 @@ Vijf hoofdonderdelen in de onderbalk (Vandaag, Financiën, Sport, Doelen, Meer).
 ## 3. Gegevens en synchronisatie
 
 - Lokaal eerst: `localStorage['samenThuisDataV2']`. Herstelpaden (beschadigde data, back-up vóór herstel) in `data-core.js`.
-- Twee syncroutes (bestaand, ongewijzigd):
-  - **Legacy**: één versleutelde payload in `household_data` (anon, R1 — zie `docs/SECURITY.md`).
-  - **Account**: per top-level onderdeel een versleutelde rij in `household_state`, schrijven via RPC `put_household_state` met versiecontrole. Conflict → gebruiker kiest per onderdeel; nooit stil overschrijven.
+- De nieuwe client pauzeert de oude code-sync. De legacy-route en bestaande `household_data`-rijen blijven server-side beschikbaar tot DB-1; oudere clients kunnen dus nog steeds risico vormen.
+  - **Account**: per toegelaten top-level onderdeel een versleutelde rij in `household_state`, schrijven via RPC `put_household_state` met versiecontrole. `sportCoach` wordt client-side uitgesloten en de PR-E-migratie weigert nieuwe inserts/updates van die sectie.
+  - Oude `sportCoach`-rijen en `legacy_full`-payloads worden bij accountsync niet lokaal toegepast. Andere velden uit een legacy-payload kunnen nog worden overgenomen; de rij zelf blijft staan.
 - Versleuteling client-side: AES-GCM-256, sleutel via PBKDF2-SHA256 (250.000 iteraties) uit de huishoudcode.
-- Nieuw onderdeel `nutrition` reist automatisch mee in beide routes, in back-ups en in herstel. Zie `docs/DATA_MODEL.md`.
+- Nieuw onderdeel `nutrition` reist mee via de actieve accountsync-route, in JSON-back-ups en in herstel. `sportCoach` blijft lokaal; generieke JSON-back-ups nemen het niet mee en oudere backups herstellen of mergen het niet.
 - **Automatisch samenvoegen (nieuw):** beide routes bewaren lokaal de laatst gesynchroniseerde versie als basis. Wijzigen beide huisgenoten hetzelfde onderdeel (bijv. allebei een boodschap toevoegen), dan voegt `household-sync-core.js` (`merge3`/`mergeSection`/`mergeData`) de wijzigingen samen: lijsten op `id`, objecten per sleutel, tekstlijsten als verzameling, verwijderen aan één kant wordt gerespecteerd, gewijzigd-versus-verwijderd houdt het item. Alleen als hetzelfde veld aan beide kanten anders is gewijzigd, vraagt de app een keuze; daarbij is **Beide samenvoegen** de aanbevolen optie (bij echte veldconflicten wint dan de cloudversie, de laatst opgeslagen versie van de huisgenoot). Herstelde back-ups (`hold`) worden nooit automatisch samengevoegd. Ophalen gebeurt bij openen, bij terugkeren naar de app, bij `online` en elke 30 s zolang de app zichtbaar is.
 - Gezamenlijk versus persoonlijk: huishouddata in `samenThuisDataV2`/`household_state` (leden huishouden); persoonlijke voorkeuren en profiel in `personal_preferences` (alleen eigenaar, RLS). Voeding is huishouddata; persoonlijke voeding is buiten scope (Sportapp).
 

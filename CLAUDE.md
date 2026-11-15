@@ -13,7 +13,7 @@ De centrale regels in `personal-ecosystem/CLAUDE.md` gelden hier volledig. Bij s
 - Vanilla JavaScript, geen buildstap, klassieke `<script>`-tags. Geen React, TypeScript of Tailwind in de app. (Edge Functions zijn Deno/TypeScript.)
 - Nieuwe logica in een zuivere `*-core.js` (UMD-patroon, testbaar in Node) + dunne UI-module die zich aan `render()` haakt (zie `sportcoach.js`, `nutrition.js`). Laden vóór `nav-groups.js`.
 - Gegevens blijven in `samenThuisDataV2`. Nieuwe velden additief op het hoogste niveau; `migrateData` behoudt onbekende velden. Nooit gegevens wissen of hernoemen.
-- Elk top-level veld wordt automatisch een versleuteld sync-onderdeel (`household-sync-core.js`). Apparaatgebonden caches (bijv. Open Food Facts) horen in een eigen `localStorage`-sleutel, niet in `data`.
+- Top-level velden worden automatisch versleutelde sync-onderdelen (`household-sync-core.js`), behalve expliciet lokale velden (`settings`, `meta`, `sportCoach`). Apparaatgebonden caches (bijv. Open Food Facts) horen in een eigen `localStorage`-sleutel, niet in `data`.
 - Alle HTML uit gegevens via `esc()`. Externe gegevens (API's, imports) zijn onbetrouwbaar.
 - Externe scripts alleen via `cdn-libs.js` (exacte versie + SRI). Nieuwe bibliotheek: hash berekenen en `node scripts/verify-sri.mjs` draaien.
 - Netwerkverzoeken naar externe API's alleen na een gebruikersactie; nooit zoeken-tijdens-typen bij Open Food Facts.

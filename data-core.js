@@ -223,19 +223,30 @@
     return data;
   }
 
+  function preserveLocalFields(data, o) {
+    if (typeof o.preserveLocal === 'function') {
+      const local = o.preserveLocal();
+      Object.entries(local || {}).forEach(([key, value]) => {
+        if (value === undefined) delete data[key];
+        else data[key] = value;
+      });
+    }
+    return data;
+  }
+
   // Valideert vóór herstel; de huidige gegevens gaan eerst naar een aparte kopie.
   function restoreCorruptBackup(storage, o, index) {
     const items = JSON.parse(storage.getItem(o.corruptKey) || 'null')?.items || [];
     const item = items[index];
     if (!item) throw new Error('Back-up niet gevonden');
-    const data = parseStoredData(item.raw, o.migrate);
+    const data = preserveLocalFields(parseStoredData(item.raw, o.migrate), o);
     return writeRestored(storage, o, data, item.raw);
   }
 
   // Herstel vanuit een back-upbestand: zelfde bescherming als restoreCorruptBackup.
   // De updatedAt van de back-up blijft ongewijzigd, zodat de eerstvolgende sync via de hold een conflictkeuze vraagt.
   function restoreBackupText(storage, o, text) {
-    const data = parseStoredData(text, o.migrate);
+    const data = preserveLocalFields(parseStoredData(text, o.migrate), o);
     return writeRestored(storage, o, data, null);
   }
 

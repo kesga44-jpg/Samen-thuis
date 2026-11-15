@@ -1,8 +1,14 @@
 # Sport & Training
 
-Sport & Training is an additive module in Samen Thuis. It uses the existing
-household data, authentication, synchronization and backup flows; it does not
-create a separate local-storage key or synchronization channel.
+Sport & Training is an additive module in Samen Thuis. Its records remain in
+the existing local `samenThuisDataV2` storage, but are excluded from new
+household account-sync projections and generic JSON backups. No separate secure
+SportCoach export is available yet. The local storage remains readable JSON;
+PR E does not encrypt or migrate existing SportCoach records.
+
+The current client pauses the old code-sync route. Existing server-side legacy
+data and Storage objects are not changed, and older clients may still use the
+legacy route until the separately approved DB-1 transition.
 
 ## Data model and compatibility
 

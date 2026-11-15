@@ -15,6 +15,11 @@ function psql(sql, user) {
   const r = run(['psql', '-h', dir, '-p', String(port), '-U', 'postgres', '-d', 'app', '-v', 'ON_ERROR_STOP=1', '-qAt', '-c', pre + sql]);
   return { ok: r.status === 0, out: (r.stdout || '').trim(), err: (r.stderr || '').trim() };
 }
+function psqlOwner(sql, user) {
+  const pre = `set role migration_owner; set request.jwt.claim.sub = '${user}';\n`;
+  const r = run(['psql', '-h', dir, '-p', String(port), '-U', 'postgres', '-d', 'app', '-v', 'ON_ERROR_STOP=1', '-qAt', '-c', pre + sql]);
+  return { ok: r.status === 0, out: (r.stdout || '').trim(), err: (r.stderr || '').trim() };
+}
 function psqlAsync(sql, user) {
   const pre = user !== undefined ? `set role authenticated; set request.jwt.claim.sub = '${user}';\n` : '';
   return new Promise(resolve => {
@@ -64,7 +69,8 @@ test('twee accounts in één huishouden; vreemd huishouden is onzichtbaar en onb
   assert.equal(psql(`select count(*) from household_state where household_id='${hhAB}'`, B).out, '1');
   assert.equal(psql(`select count(*) from household_state`, C).out, '0');
   bad(psql(`select put_household_state('${hhAB}','tasks','{}'::jsonb,1)`, C), /Geen toegang/);
-  bad(psql(`select import_legacy_household_data('${hhAB}','${'a'.repeat(64)}')`, C), /Geen toegang/);
+  bad(psql(`select import_legacy_household_data('${hhAB}','${'a'.repeat(64)}')`, C), /permission denied/);
+  assert.equal(psql(`select has_function_privilege('authenticated','public.import_legacy_household_data(uuid,text)','EXECUTE')`).out, 'f');
   bad(psql(`insert into household_state(household_id,section,payload) values ('${hhC}','x','{}')`, C), /permission denied/);
   bad(psql(`update household_state set payload='{}'`, A), /permission denied/);
   bad(psql(`delete from household_state`, A), /permission denied/);
@@ -132,6 +138,15 @@ test('gereserveerde/ongeldige onderdeelnamen en te grote payloads worden geweige
   for (const s of ['settings', 'meta', 'legacy_full', '__proto__', 'a b', '']) bad(psql(`select put_household_state('${hhAB}','${s}','{}'::jsonb,0)`, A), /Ongeldig onderdeel/);
   bad(psql(`select put_household_state('${hhAB}','big',jsonb_build_object('a',repeat('x',8100000)),0)`, A), /Ongeldige gegevens/);
 });
+test('PR E weigert nieuwe SportCoach-writes en laat bestaande rows ongemoeid', { skip }, () => {
+  const legacySport = `insert into household_state(household_id,section,payload) values ('${hhAB}','sportCoach','{"old":true}')`;
+  ok(psql(`set session_replication_role = replica; ${legacySport}; set session_replication_role = origin;`));
+  assert.equal(psql(`select payload->>'old' from household_state where household_id='${hhAB}' and section='sportCoach'`, B).out, 'true');
+  bad(psql(`select put_household_state('${hhAB}','sportCoach','{"new":true}'::jsonb,1)`, A), /SportCoach is local-only/);
+  bad(psqlOwner(`update public.household_state set payload='{"changed":true}' where household_id='${hhAB}' and section='sportCoach'`, A), /SportCoach is local-only/);
+  assert.equal(psql(`select payload->>'old' from household_state where household_id='${hhAB}' and section='sportCoach'`, B).out, 'true');
+  assert.equal(psql(`select count(*) from household_state where household_id='${hhAB}' and section='sportCoach'`, A).out, '1');
+});
 test('ledenlimiet: derde account geweigerd; bestaand lid opnieuw joinen is no-op', { skip }, () => {
   assert.equal(psql(`select public.join_household('${code}') is not null`, D).out, 'f');
   assert.equal(psql(`select public.join_household('${code}') is not null`, B).out, 't');
@@ -185,10 +200,10 @@ test('legacy-import telt onbekende ids, blokkeert claims na de limiet en houdt r
   const legacyId = '7'.repeat(64);
   const hid = createdForUser(E, 'Limit-E-1');
   for (let i = 0; i < 5; i++) {
-    assert.equal(psql(`select import_legacy_household_data('${hid}','${'8'.repeat(64)}')`, E).out, 'f');
+    assert.equal(psqlOwner(`select import_legacy_household_data('${hid}','${'8'.repeat(64)}')`, E).out, 'f');
   }
   ok(psql(`insert into household_data(id,payload) values ('${legacyId}','{"synthetic":true}')`));
-  bad(psql(`select import_legacy_household_data('${hid}','${legacyId}')`, E), /Te veel aanvragen/);
+  bad(psqlOwner(`select import_legacy_household_data('${hid}','${legacyId}')`, E), /Te veel aanvragen/);
   assert.equal(psql(`select count(*) from household_legacy_imports where legacy_id='${legacyId}'`).out, '0');
   assert.equal(psql(`select count(*) from household_rpc_rate_limits where user_id='${E}' and action='import_legacy_household_data'`).out, '1');
 });
@@ -237,17 +252,17 @@ test('legacy-import: kopieert, nooit dubbel, nooit overschrijven, één huishoud
   // Orphaned and explicitly excluded rows stay untouched and unclaimed.
   const orphan = 'f'.repeat(64);
   ok(psql(`insert into household_data(id,payload) values ('${orphan}','{"orphan":true}')`));
-  assert.equal(psql(`select import_legacy_household_data('${hhAB}','kort')`, A).out, 'f');
-  assert.equal(psql(`select import_legacy_household_data('${hhAB}','${'0'.repeat(64)}')`, A).out, 'f'); // onbekend
-  assert.equal(psql(`select import_legacy_household_data('${hhAB}','${lid}')`, A).out, 't');
+  assert.equal(psqlOwner(`select import_legacy_household_data('${hhAB}','kort')`, A).out, 'f');
+  assert.equal(psqlOwner(`select import_legacy_household_data('${hhAB}','${'0'.repeat(64)}')`, A).out, 'f'); // onbekend
+  assert.equal(psqlOwner(`select import_legacy_household_data('${hhAB}','${lid}')`, A).out, 't');
   ok(psql(`update household_data set payload='{"v":2}' where id='${lid}'`));
-  assert.equal(psql(`select import_legacy_household_data('${hhAB}','${lid}')`, B).out, 'f'); // dubbel
+  assert.equal(psqlOwner(`select import_legacy_household_data('${hhAB}','${lid}')`, B).out, 'f'); // dubbel
   assert.equal(psql(`select payload->>'v' from household_state where section='legacy_full' and household_id='${hhAB}'`, A).out, '1');
-  assert.equal(psql(`select import_legacy_household_data('${hhC}','${foreign}')`, C).out, 't');
-  assert.equal(psql(`select import_legacy_household_data('${hhAB}','${foreign}')`, A).out, 'f');
+  assert.equal(psqlOwner(`select import_legacy_household_data('${hhC}','${foreign}')`, C).out, 't');
+  assert.equal(psqlOwner(`select import_legacy_household_data('${hhAB}','${foreign}')`, A).out, 'f');
   assert.equal(psql(`select payload->>'v' from household_data where id='${lid}'`).out, '2', 'oude rij onaangetast');
   bad(psql(`select count(*) from household_data`, A), /permission denied/);
-  assert.equal(psql(`select import_legacy_household_data('${hhDamaged}','${damaged}')`, A).out, 't');
+  assert.equal(psqlOwner(`select import_legacy_household_data('${hhDamaged}','${damaged}')`, A).out, 't');
   assert.equal(psql(`select payload->>'ciphertext' from household_state where section='legacy_full' and household_id='${hhDamaged}'`, A).out, '%%%broken');
   assert.equal(psql(`select count(*) from household_legacy_imports where legacy_id in ('${orphan}','${'c'.repeat(64)}')`).out, '0');
 });
@@ -256,10 +271,7 @@ test('import faalt expliciet wanneer de seed-table ontbreekt', { skip }, () => {
   ok(missing);
   const sql = `
     begin;
-    reset role;
     alter table public.household_data rename to household_data_temporarily_unavailable;
-    set role authenticated;
-    set request.jwt.claim.sub = '${D}';
     do $$
     begin
       begin
@@ -270,7 +282,7 @@ test('import faalt expliciet wanneer de seed-table ontbreekt', { skip }, () => {
     end $$;
     rollback;
   `;
-  ok(psql(sql, A), 'import zonder seeded legacy table hoort 42P01 te geven');
+  ok(psqlOwner(sql, D), 'import zonder seeded legacy table hoort 42P01 te geven');
 });
 test('rollback-bestand verwijdert alleen de nieuwe objecten en laat household_data intact', { skip }, () => {
   const legacyRows = psql(`select count(*) from household_data`).out;
