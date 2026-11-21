@@ -250,6 +250,24 @@
     return { status: failed.length ? 'partial' : conflicts.length ? 'conflict' : 'ok', pulls, base: newBase, baseValues: newBaseValues, pushed, merged, conflicts, failed, hadLegacy: !!legacy };
   }
 
+  // Na een ronde: cloudwaarden alleen toepassen op onderdelen die lokaal niet zijn gewijzigd sinds de momentopname waarmee
+  // de ronde begon. Is een onderdeel intussen lokaal gewijzigd, dan wordt de (oudere) cloudrespons niet toegepast en
+  // blijven basisversie en basiswaarde van vóór de ronde staan. De volgende ronde voegt dan lokaal en cloud samen met de
+  // gewone 3-wegs logica (zonder iets blind te overschrijven).
+  // snapshot/current: volledige data-objecten; result: uitkomst van runAccountSync; prevBase/prevBaseValues: vóór de ronde.
+  function deferChangedPulls({ snapshot, current, result, prevBase = {}, prevBaseValues = {} }) {
+    const S = sectionsOf(snapshot), C = sectionsOf(current);
+    const pulls = {}, base = { ...result.base }, baseValues = { ...result.baseValues }, deferred = [];
+    for (const s of Object.keys(result.pulls || {})) {
+      const changed = hasOwn(C, s) !== hasOwn(S, s) || hashValue(C[s]) !== hashValue(S[s]);
+      if (!changed) { pulls[s] = result.pulls[s]; continue; }
+      deferred.push(s);
+      if (prevBase[s]) base[s] = prevBase[s]; else delete base[s];
+      if (hasOwn(prevBaseValues, s)) baseValues[s] = prevBaseValues[s]; else delete baseValues[s];
+    }
+    return { ...result, pulls, base, baseValues, deferred };
+  }
+
   // Legacy-route (één payload): alle onderdelen samenvoegen; meta/settings blijven lokaal.
   function mergeData(base, local, remote, { onConflict = 'report' } = {}) {
     const L = sectionsOf(local), R = sectionsOf(remote), B = base ? sectionsOf(base) : null;
@@ -262,5 +280,5 @@
     return { ok: conflicts.length === 0, value: out, conflicts };
   }
 
-  return { syncRoute, shouldEnable, validSection, SKIP_KEYS, LEGACY_SECTION, hashValue, isEmptyValue, sectionsOf, planSections, classifyError, createCloud, runAccountSync, CloudError, merge3, mergeSection, mergeData };
+  return { syncRoute, shouldEnable, validSection, SKIP_KEYS, LEGACY_SECTION, hashValue, isEmptyValue, sectionsOf, planSections, classifyError, createCloud, runAccountSync, CloudError, merge3, mergeSection, mergeData, deferChangedPulls };
 });

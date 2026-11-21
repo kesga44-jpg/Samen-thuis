@@ -3,17 +3,26 @@
 (() => {
   'use strict';
   const HS = window.SamenThuisHouseholdSync, AUTH = window.SamenThuisAuth25;
-  if (window.__ST_ACCOUNT_SYNC__ || !HS || !AUTH) return;
+  if (window.__ST_ACCOUNT_SYNC__ || !HS || !AUTH || !window.SamenThuisSyncMeta) return;
   window.__ST_ACCOUNT_SYNC__ = true;
   const KEY = 'samenThuisAccountSyncV1', PRE_KEY = 'samenThuisPreAccountSyncBackup';
-  // Laatst gesynchroniseerde waarde per onderdeel (per account + huishouden): basis voor automatisch samenvoegen.
-  // Alleen op dit apparaat. Past het niet in de opslag, dan valt de app terug op "kies per onderdeel" (geen dataverlies).
-  const BASE_VALUES_KEY = 'samenThuisAccountSyncBaseValuesV1';
-  const loadBaseValues = () => { try { const all = JSON.parse(localStorage.getItem(BASE_VALUES_KEY) || '{}'); return (all && all[slot()]) || {}; } catch (_) { return {}; } };
-  const storeBaseValues = values => {
-    try { localStorage.setItem(BASE_VALUES_KEY, JSON.stringify({ [slot()]: values })); return true; }
-    catch (_) { try { localStorage.removeItem(BASE_VALUES_KEY); } catch (__) {} console.warn('Basis voor samenvoegen past niet in de opslag; bij gelijktijdige wijzigingen wordt om een keuze gevraagd.'); return false; }
+  // Laatst door de server bevestigde waarde per onderdeel (per account + huishouden): basis voor automatisch samenvoegen.
+  // Alleen op dit apparaat, in IndexedDB (sync-meta-store.js; fallback localStorage, daarna geheugen). Ontbreekt de basis,
+  // dan valt de app terug op "kies per onderdeel" (geen dataverlies).
+  const META = window.SamenThuisSyncMeta.shared();
+  const TAB = window.SamenThuisTabSync;
+  const LOCK = TAB ? TAB.createSyncLock({ name: 'samen-thuis-account-sync', locks: navigator.locks, storage: localStorage }) : null;
+  const CHANNEL = TAB ? TAB.createChannel({ name: 'samen-thuis-account-sync', tabId: LOCK && LOCK.tabId }) : null;
+  const loadBaseValues = async bases => { try { return await META.loadBaseValues(slot(), bases); } catch (_) { return {}; } };
+  const storeBaseValues = async values => {
+    try { await META.saveBaseValues(slot(), values); return true; }
+    catch (_) { console.warn('Basis voor samenvoegen kon niet worden bewaard; bij gelijktijdige wijzigingen wordt om een keuze gevraagd.'); return false; }
   };
+  let rerunRequested = false, retryTimer = null;
+  function scheduleRetry(ms) {
+    if (retryTimer) return;
+    retryTimer = setTimeout(() => { retryTimer = null; if (accountMode()) accountSync(); }, ms);
+  }
   const SECTION_LABELS = { groceries: 'boodschappen', meals: 'weekmenu', planning: 'agenda', chores: 'routines', tasks: 'taken', stock: 'voorraad', freezer: 'vriezer', ideas: 'date-ideeën', home: 'woning', trips: 'reizen', tripFolders: 'reizen', tripSections: 'reizen', budgetV23: 'financiën', nutrition: 'voeding', challengeDataV26: 'challenges', dailyAnswers: 'vraag van de dag' };
   const label = s => SECTION_LABELS[s] || s;
   const st = { household: null, conflicts: [], message: '', busy: false, uid: AUTH.session()?.user?.id || '' };
@@ -35,23 +44,46 @@
 
   async function accountSync({ manual = false, resolutions = {} } = {}) {
     syncIdentity();
-    if (syncing || st.busy) return { status: 'busy' };
+    // Al een ronde bezig in dit tabblad: niet parallel starten, wel direct daarna nog één ronde (niets gaat verloren).
+    if (syncing || st.busy) { rerunRequested = true; return { status: 'busy' }; }
     if (!navigator.onLine) { if (manual) toast('Geen internetverbinding; wijzigingen blijven lokaal bewaard'); syncError = ''; st.message = 'Offline: lokale wijzigingen worden later gesynchroniseerd.'; return { status: 'offline' }; }
     if (!AUTH.session()?.user?.id) { syncError = 'Aanmelden vereist'; st.message = 'Meld je aan via Instellingen om te synchroniseren. Je lokale gegevens blijven bewaard.'; if (manual) toast(st.message); updateSyncBadge(); return { status: 'signed-out' }; }
+    syncing = true;
+    try {
+      // Eén ronde tegelijk per apparaat (alle tabbladen). Bezet: een ander tabblad synchroniseert; later opnieuw proberen.
+      const locked = LOCK ? await LOCK.run(() => accountSyncRound({ manual, resolutions })) : { acquired: true, value: await accountSyncRound({ manual, resolutions }) };
+      if (!locked.acquired) { scheduleRetry(2500); return { status: 'busy' }; }
+      return locked.value;
+    } finally {
+      syncing = false; updateSyncBadge();
+      if (rerunRequested && accountMode() && navigator.onLine) { rerunRequested = false; scheduleRetry(300); }
+    }
+  }
+
+  async function accountSyncRound({ manual, resolutions }) {
     let outcome = 'error';
-    syncing = true; syncError = ''; updateSyncBadge();
+    syncError = ''; updateSyncBadge();
     try {
       if (!window.crypto?.subtle) throw new Error('Versleuteling vereist HTTPS');
       if (code().length < 12) throw new Error('Vul eerst de huishoudcode in (minimaal 12 tekens).');
       const c = cloud();
       if (!st.household) st.household = await c.membership();
       if (!st.household) throw new Error('Dit account is nog geen lid van een huishouden.');
-      const cfg = load(), mine = (cfg.bases || {})[slot()] || {};
-      const result = await HS.runAccountSync({
-        cloud: c, householdId: st.household.id, local: data, base: mine.base || {}, baseValues: loadBaseValues(),
+      const roundSlot = slot();
+      const cfg = load(), mine = (cfg.bases || {})[roundSlot] || {};
+      const prevBase = mine.base || {};
+      const prevBaseValues = await loadBaseValues(prevBase);
+      // Consistente momentopname: wijzigingen die tijdens de ronde binnenkomen raken deze ronde niet.
+      const snapshot = structuredClone(data);
+      const raw = await HS.runAccountSync({
+        cloud: window.SamenThuisSyncMeta.trackUploads(c, META, roundSlot, HS.classifyError), householdId: st.household.id,
+        local: snapshot, base: prevBase, baseValues: prevBaseValues,
         hold: !!localStorage.getItem(RESTORE_HOLD_KEY), resolutions,
         encrypt: v => encryptData(v, code()), decrypt: p => decryptData(p, code())
       });
+      // Onderdelen die tijdens de ronde lokaal zijn gewijzigd: oudere cloudrespons niet toepassen (volgende ronde voegt samen).
+      const result = HS.deferChangedPulls({ snapshot, current: data, result: raw, prevBase, prevBaseValues });
+      if (result.deferred.length) rerunRequested = true;
       let base = result.base;
       const pulled = Object.keys(result.pulls);
       if (pulled.length) {
@@ -59,14 +91,28 @@
         catch (_) { throw new Error('Geen ruimte voor een veiligheidskopie; cloudgegevens zijn niet toegepast.'); }
         const previous = data;
         data = migrateData({ ...data, ...result.pulls });
+        // Basis vastleggen vóór het opslaan: neemt save() een wijziging uit een ander tabblad mee, dan blijft die
+        // als lokale wijziging herkenbaar (hash wijkt af van de basis) en gaat hij in de volgende ronde alsnog mee.
+        const applied = HS.sectionsOf(data);
+        const appliedHash = Object.fromEntries(pulled.map(k => [k, HS.hashValue(applied[k])]));
+        const appliedValue = Object.fromEntries(pulled.map(k => [k, structuredClone(applied[k])]));
         if (save({ touch: false, sync: false }) === false) { data = previous; throw new Error('Lokaal opslaan is geblokkeerd; synchronisatie niet afgerond'); }
         const now = HS.sectionsOf(data);
-        pulled.forEach(k => { base[k] = { version: base[k].version, hash: HS.hashValue(now[k]) }; result.baseValues[k] = now[k]; });
+        pulled.forEach(k => {
+          base[k] = { version: base[k].version, hash: appliedHash[k] }; result.baseValues[k] = appliedValue[k];
+          if (HS.hashValue(now[k]) !== appliedHash[k]) rerunRequested = true;
+        });
       }
-      storeBaseValues({ ...loadBaseValues(), ...result.baseValues });
-      const next = load(); next.bases = { ...(next.bases || {}), [slot()]: { base, lastSyncedAt: new Date().toISOString() } };
+      // Volgorde voor crashbestendigheid: eerst basiswaarden (IndexedDB, met vorige waarde), dan de versie-administratie.
+      await storeBaseValues(result.baseValues);
+      const next = load(); next.bases = { ...(next.bases || {}), [roundSlot]: { base, lastSyncedAt: new Date().toISOString() } };
       next.householdId = st.household.id; store(next);
       st.conflicts = result.conflicts;
+      try {
+        await META.saveConflicts(roundSlot, result.conflicts);
+        if (result.status === 'ok') await META.clearInflight(roundSlot);
+      } catch (_) {}
+      if (CHANNEL) CHANNEL.post('sync-finished', { slot: roundSlot, status: result.status });
       outcome = result.status;
       if (result.status === 'ok') {
         syncConfig.lastSyncedAt = new Date().toISOString(); localStorage.setItem(SYNC_KEY, JSON.stringify(syncConfig));
@@ -96,7 +142,7 @@
       if (manual) toast(c.message);
       if (current === 'settings') render();
       return { status: HS.classifyError(error).kind };
-    } finally { syncing = false; updateSyncBadge(); }
+    }
   }
 
   const legacySync = syncNow;
@@ -247,8 +293,36 @@
     else if (e.target.matches('[data-acct-join]')) { e.preventDefault(); household('join', e.target.elements.code.value); }
   });
   window.addEventListener('online', () => { if (accountMode()) accountSync(); });
+
+  // Conflictstatus van een vorige sessie terughalen (tot de eerstvolgende ronde die ververst).
+  (async () => {
+    if (!accountMode()) return;
+    try {
+      const saved = await META.loadConflicts(slot());
+      if (!st.conflicts.length && saved.length) { st.conflicts = saved; updateSyncBadge(); if (current === 'settings') render(); }
+    } catch (_) {}
+  })();
+  // Een ander tabblad heeft een ronde afgerond: conflictstatus bijwerken (gegevens komen via het storage-event binnen).
+  const offChannel = CHANNEL ? CHANNEL.on(msg => {
+    if (msg.type !== 'sync-finished' || msg.slot !== slot()) return;
+    META.loadConflicts(msg.slot).then(list => { st.conflicts = list; updateSyncBadge(); if (current === 'settings') render(); }).catch(() => {});
+  }) : null;
+  window.addEventListener('pagehide', event => {
+    if (LOCK) LOCK.release();
+    if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+    if (!event.persisted && CHANNEL) { if (offChannel) offChannel(); CHANNEL.close(); }
+  });
+
+  // Onderdelen met lokale wijzigingen die de server nog niet heeft bevestigd (afgeleid uit duurzame gegevens + basis).
+  function pendingSections() {
+    const b = ((load().bases || {})[slot()] || {}).base || {};
+    const S = HS.sectionsOf(data);
+    return Object.keys(S).filter(k => b[k] ? b[k].hash !== HS.hashValue(S[k]) : !HS.isEmptyValue(S[k]));
+  }
+
   window.SamenThuisAccountSync = {
     active: accountMode, sync: accountSync, conflicts: () => st.conflicts,
+    pending: pendingSections, inflight: () => META.listInflight(slot()),
     uploadSportFile, signedSportFileUrl, deleteSportFile
   };
 })();

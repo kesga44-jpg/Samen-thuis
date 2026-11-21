@@ -312,6 +312,54 @@ function loadSyncConfig() {
 }
 
 let data = loadData();
+// Meerdere tabbladen op dit apparaat: vóór elke schrijfactie controleren of een ander tabblad intussen heeft opgeslagen
+// (zie tab-sync-core.js). Zonder de module blijft het oude gedrag (direct schrijven) bestaan.
+const dataGuard = window.SamenThuisTabSync && window.SamenThuisHouseholdSync
+  ? window.SamenThuisTabSync.createDataGuard({ storage: localStorage, key: STORAGE_KEY, merge3: window.SamenThuisHouseholdSync.merge3 })
+  : null;
+
+function reportTabConflict(result) {
+  if (!result.conflicts.length) return;
+  console.warn('Dezelfde gegevens zijn in twee tabbladen anders gewijzigd; deze versie is bewaard.', result.conflicts);
+  try { window.SamenThuisSyncMeta?.shared().recordTabConflict({ fields: result.conflicts, discarded: result.remote }); } catch (_) {}
+  try { toast('Ook in een ander tabblad gewijzigd: deze versie is bewaard, de andere staat in het conflictlogboek.'); } catch (_) {}
+}
+
+// Enige plek die samenThuisDataV2 schrijft. Gooit (zoals voorheen setItem) bij een volle opslag.
+function writeDataToStorage() {
+  if (dataGuard) {
+    const result = dataGuard.prepareWrite(data);
+    if (result.external) { data = result.value; reportTabConflict(result); }
+  }
+  const text = dataGuard ? dataGuard.serialize(data) : JSON.stringify(data);
+  localStorage.setItem(STORAGE_KEY, text);
+  if (dataGuard) dataGuard.commit(text);
+}
+
+// Een ander tabblad heeft opgeslagen: samenvoegen in geheugen en opnieuw tekenen (niet tijdens typen in een veld).
+let tabRenderPending = false;
+function renderAfterTabChange() {
+  const active = document.activeElement;
+  const typing = active && active.closest && active.closest('#view') && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName);
+  if (typing) {
+    if (tabRenderPending) return;
+    tabRenderPending = true;
+    active.addEventListener('blur', () => { tabRenderPending = false; renderAfterTabChange(); }, { once: true });
+    return;
+  }
+  try { render(); } catch (_) {}
+}
+window.addEventListener('storage', event => {
+  if (!dataGuard || event.key !== STORAGE_KEY || event.storageArea !== localStorage || event.newValue == null) return;
+  const result = dataGuard.absorb(event.newValue, data);
+  if (!result.external) return;
+  data = result.value;
+  reportTabConflict(result);
+  // Het andere tabblad schreef zonder onze laatste wijziging te zien: samengevoegd resultaat terugschrijven.
+  if (result.needsWrite && !storageProtected) { try { writeDataToStorage(); } catch (_) {} }
+  renderAfterTabChange();
+});
+
 let syncConfig = loadSyncConfig();
 let current = 'today';
 let householdWeekStart = startOfWeek(todayISO());
@@ -378,11 +426,12 @@ function save({ touch = true, sync = true } = {}) {
   }
   if (touch) data.meta.updatedAt = new Date().toISOString();
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    writeDataToStorage();
   } catch (error) {
     // Opslag vol: eerst de (herbouwbare) basiskopieën voor automatisch samenvoegen opruimen en opnieuw proberen.
-    ['samenThuisSyncBaseV1', 'samenThuisAccountSyncBaseValuesV1', 'samenThuisPreMergeBackup'].forEach(key => { try { localStorage.removeItem(key); } catch (_) {} });
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    ['samenThuisSyncBaseV1', 'samenThuisAccountSyncBaseValuesV1', 'samenThuisSyncMetaFallbackV1', 'samenThuisPreMergeBackup'].forEach(key => { try { localStorage.removeItem(key); } catch (_) {} });
+    try { writeDataToStorage(); }
+    catch (_) { toast('Opslaan mislukt: de opslag van dit apparaat is vol. Maak een back-up en maak ruimte vrij.'); return false; }
   }
   const saveState = document.querySelector('#saveState');
   if (saveState) {
@@ -1790,7 +1839,7 @@ if (syncConfigured()) syncNow();
       section.updatedAt ||= section.createdAt;
     });
     (data.trips || []).forEach(normalisePriority);
-    if (persist) localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    if (persist) writeDataToStorage();
   }
 
   function syncTimeLabel(value) {
@@ -2259,7 +2308,7 @@ if (syncConfigured()) syncNow();
     if (current !== 'trips') return;
     setTimeout(() => {
       normaliseTravelData();
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+      writeDataToStorage();
       if (syncConfigured()) scheduleSync();
     }, 0);
   });

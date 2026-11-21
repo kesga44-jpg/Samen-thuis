@@ -16,6 +16,10 @@
 | **`samenThuisSyncBaseV1`** 🆕 | Oude code-sync: gegevens zoals na de laatste geslaagde synchronisatie (basis voor automatisch samenvoegen) | Nee | Nee |
 | **`samenThuisAccountSyncBaseValuesV1`** 🆕 | Accountsync: waarde per onderdeel bij de laatste geslaagde ronde (per account + huishouden) | Nee | Nee |
 | **`samenThuisPreMergeBackup`** 🆕 | Kopie van de lokale gegevens vlak vóór een automatische samenvoeging | Nee | Nee |
+| **`samenThuisSyncLeaseV1`** 🆕 | Lease voor één syncronde tegelijk (alleen als Web Locks ontbreken); verloopt na 30 s | Nee | Nee |
+| **`samenThuisSyncMetaFallbackV1`** 🆕 | Syncmetadata als IndexedDB niet beschikbaar is (herbouwbaar) | Nee | Nee |
+
+**IndexedDB `samenThuisSyncMetaV1`** 🆕 (alleen syncmetadata, nooit de applicatiegegevens): `baseValues` (per account+huishouden en onderdeel de laatst door de server bevestigde waarde plus de vorige), `inflight` (verzonden, nog niet bevestigde uploads) en `conflicts` (conflictsamenvattingen en tabbladconflicten met de niet-gekozen waarde, max. 20). Vervangt `samenThuisAccountSyncBaseValuesV1`; die sleutel wordt eenmalig overgenomen en pas na bevestigde opslag verwijderd. In `samenThuisDataV2` staat in `meta.__tabRev` de herkomst van de laatst geschreven versie (lokaal, wordt niet gesynchroniseerd).
 
 De drie sync-basissleutels zijn herbouwbaar: bij een volle opslag ruimt `save()` ze eerst op en valt de app terug op "kies een versie". Ze staan, net als alle huishouddata, onversleuteld op het apparaat (zie `docs/SECURITY.md` S-9).
 
