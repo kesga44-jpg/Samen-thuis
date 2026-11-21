@@ -128,8 +128,8 @@ try {
     const otherValue = fin[0].remote;
     await a.page.click('[data-fin-choose][data-fin-side="remote"]');
     await a.page.waitForTimeout(500);
-    const after = await a.page.evaluate(async () => ({ value: data.budgetV23.e2eShare, recs: (await SamenThuisFinanceSync.list()).map(r => r.status) }));
-    check('keuze via de kaart: gekozen waarde lokaal opgeslagen; record wacht op serverbevestiging (niet verwijderd)', after.value === otherValue && after.recs.join() === 'resolved-pending', JSON.stringify(after));
+    const after = await a.page.evaluate(async () => ({ value: data.budgetV23.e2eShare, recs: (await SamenThuisFinanceSync.list()).map(r => [r.scope, r.status, r.local === null && r.remote === null]) }));
+    check('keuze via de kaart (niet aangemeld → apparaatscope): waarde lokaal opgeslagen, record lokaal afgerond zonder financiële waarden', after.value === otherValue && JSON.stringify(after.recs) === JSON.stringify([['device', 'resolved-local', true]]), JSON.stringify(after));
     check('geen JavaScript-fouten (tabbladen)', !a.errors.length && !b.errors.length, [...a.errors, ...b.errors].join(' | '));
     const st = await a.page.evaluate(() => SamenThuisSyncMeta.shared().status());
     check('metastore gebruikt echte IndexedDB en meldt "durable"', st.mode === 'indexeddb' && st.durability === 'durable', JSON.stringify(st));
@@ -218,6 +218,18 @@ try {
       finRec.length === 1 && finRec[0].st === 'open' && finRec[0].by === '33333333-3333-4333-8333-333333333333' && finRec[0].l === 60 && finRec[0].r === 40
       && !ctl.putSections.includes('budgetV23') && ctl.putSections.includes('groceries') && /Financieel conflict/.test(badge),
       JSON.stringify({ finRec, puts: ctl.putSections, badge }));
+    // Accountwissel op hetzelfde apparaat (echte herlaadbeurt): ander account ziet en verwerkt het conflict niet.
+    const OTHER_USER = '44444444-4444-4444-8444-444444444444';
+    await a.page.evaluate(u => { const s = JSON.parse(localStorage.getItem('samenThuisPersonalAuthV1')); s.user.id = u; localStorage.setItem('samenThuisPersonalAuthV1', JSON.stringify(s)); }, OTHER_USER);
+    await a.page.reload({ waitUntil: 'load' }); await a.page.waitForTimeout(600); await waitIdle(a.page);
+    ctl.putSections = [];
+    await a.page.evaluate(() => SamenThuisAccountSync.sync()); await waitIdle(a.page);
+    const asOther = await a.page.evaluate(async () => ({ scope: SamenThuisFinanceSync.scope(), list: (await SamenThuisFinanceSync.list()).length, badge: document.querySelector('#syncState')?.textContent || '' }));
+    check('ander account op hetzelfde apparaat: ziet het conflict niet, budget van het eerste account niet verstuurd', asOther.scope.startsWith(OTHER_USER + ':') && asOther.list === 0 && !ctl.putSections.includes('budgetV23') && !/Financieel/.test(asOther.badge), JSON.stringify({ ...asOther, puts: ctl.putSections }));
+    await a.page.evaluate(u => { const s = JSON.parse(localStorage.getItem('samenThuisPersonalAuthV1')); s.user.id = u; localStorage.setItem('samenThuisPersonalAuthV1', JSON.stringify(s)); }, USER);
+    await a.page.reload({ waitUntil: 'load' }); await a.page.waitForTimeout(600); await waitIdle(a.page);
+    const back = await a.page.evaluate(async () => (await SamenThuisFinanceSync.list()).map(r => [r.status, r.local.e2ePct, r.remote.e2ePct]));
+    check('terug naar het eerste account (na herladen): conflict ongewijzigd beschikbaar', JSON.stringify(back) === JSON.stringify([['open', 60, 40]]), JSON.stringify(back));
     await a.page.evaluate(() => { location.hash = '#/settings/synchronisatie'; }); await a.page.waitForTimeout(400);
     await a.page.waitForSelector('[data-fin-choose][data-fin-side="local"]', { timeout: 5000 });
     await a.page.click('[data-fin-choose][data-fin-side="local"]');

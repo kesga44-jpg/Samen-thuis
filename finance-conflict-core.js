@@ -92,20 +92,32 @@
     return { ok: missing.length === 0, value, missing };
   }
 
-  const recordKey = section => 'fin:' + section;
+  // ---------- Scope (opdracht 5) ----------
+  // Elk record hoort bij precies één scope:
+  //   '<accountId>:<huishoudenId>'  identiteit (zelfde notatie als slot() in account-sync.js)
+  //   'device'                      tabbladconflict ontstaan zonder bekende identiteit (niet aangemeld / geen huishouden)
+  //   'legacy-unknown'              oud record waarvan de identiteit niet vast te stellen is (quarantaine, nooit verwerkt)
+  // Een syncronde ziet uitsluitend records van de eigen identiteit; 'device'-records alleen zolang ze openstaan (dan wordt
+  // het onderdeel uit voorzorg niet verstuurd, omdat de lokale waarde een onopgeloste keuze bevat).
+  const DEVICE_SCOPE = 'device', LEGACY_SCOPE = 'legacy-unknown';
+  const isIdentityScope = s => typeof s === 'string' && /^[^|:\s]+:[^|:\s]+$/.test(s);
+  const isValidScope = s => s === DEVICE_SCOPE || isIdentityScope(s);
+  const scopeFor = (accountId, householdId) => (accountId && householdId ? `${accountId}:${householdId}` : null);
+  const recordKey = (scope, section) => 'fin|' + scope + '|' + section;
+  const guardKey = (scope, section) => 'fing|' + scope + '|' + section;
   const choicesHash = (hashValue, choices) => hashValue(Object.keys(choices || {}).sort().map(k => [k, choices[k]]));
 
-  function newRecord({ section, origin, base, local, remote, remoteVersion = null, remoteUpdatedBy = null, remoteUpdatedAt = null, localUser = null, householdId = null, forcedPaths = [], now }) {
+  function newRecord({ scope, section, origin, base, local, remote, remoteVersion = null, remoteUpdatedBy = null, remoteUpdatedAt = null, localUser = null, householdId = null, forcedPaths = [], now }) {
     const at = now();
     return {
-      key: recordKey(section), slot: 'device', kind: 'finance', section, origin, status: 'open', rev: 1,
+      key: recordKey(scope, section), slot: scope, scope, kind: 'finance', section, origin, status: 'open', rev: 1,
       base: clone(base) ?? null, local: clone(local) ?? null, remote: clone(remote) ?? null,
       remoteVersion, remoteUpdatedBy, remoteUpdatedAt, localUser, householdId, forcedPaths: [...forcedPaths],
       detectedAt: at, updatedAt: at, resolution: null, confirmedVersion: null
     };
   }
 
-  // Audit zonder bedragen: alleen paden, hashes, versies, gebruikers-id's en tijdstippen.
+  // Audit zonder bedragen: alleen paden, hashes, versies, gebruikers-id's, scope en tijdstippen.
   function auditEntry({ hashValue, action, record, paths = [], choices = null, actor = null, version = null, note = '', now }) {
     const at = now();
     const hashes = {};
@@ -113,7 +125,7 @@
       hashes[p.path] = { base: hashValue(p.base ?? null), local: hashValue(p.local ?? null), remote: hashValue(p.remote ?? null), ...(choices && choices[p.path] ? { chosen: choices[p.path] } : {}) };
     }
     return {
-      key: 'fina:' + at + ':' + Math.random().toString(36).slice(2, 8), slot: 'device', kind: 'finance-audit', at,
+      key: 'fina:' + at + ':' + Math.random().toString(36).slice(2, 8), slot: record.scope || null, scope: record.scope || null, kind: 'finance-audit', at,
       action, section: record.section, origin: record.origin, paths: paths.map(p => p.path), hashes,
       actor, remoteUser: record.remoteUpdatedBy || null, remoteVersion: record.remoteVersion ?? null, version, note
     };
@@ -121,21 +133,59 @@
 
   function createFinanceConflicts({ store, merge3, hashValue, now = () => new Date().toISOString(), nowMs = () => Date.now() }) {
     if (!store || typeof merge3 !== 'function' || typeof hashValue !== 'function') throw new Error('createFinanceConflicts: store, merge3 en hashValue zijn vereist');
+    const requireScope = (scope, { identity = false } = {}) => {
+      if (identity ? !isIdentityScope(scope) : !isValidScope(scope)) throw new Error('Ongeldige of ontbrekende scope voor financiële conflicten: ' + scope);
+    };
 
     async function audit(entry) {
       await store.putRecord(entry);
       const all = (await store.listRecords('finance-audit')).sort((a, b) => String(a.at).localeCompare(String(b.at)));
       if (all.length > MAX_AUDIT) for (const r of all.slice(0, all.length - MAX_AUDIT)) await store.deleteRecord(r.key);
     }
-    const list = () => store.listRecords('finance');
-    const get = section => store.getRecord(recordKey(section));
 
-    // Opent een conflict (of laat een bestaand record staan). Idempotent: hetzelfde conflict twee keer → één record.
+    // ---- Migratie van records zonder scope (opdracht 4: key 'fin:'+onderdeel) ----
+    // Nooit stil verwijderen: eerst onder de nieuwe key bewaren, dan pas de oude key weghalen (alleen dezelfde revisie).
+    // Identiteit uit het record zelf (localUser + householdId). Onbekend: tabbladconflict → 'device', anders quarantaine.
+    let migration = null;
+    function migrate() {
+      return (migration ||= (async () => {
+        for (const r of await store.listRecords('finance')) {
+          if (r.scope) continue;
+          const identity = scopeFor(r.localUser, r.householdId);
+          let scope = identity && isIdentityScope(identity) ? identity : (r.origin === 'tab' ? DEVICE_SCOPE : LEGACY_SCOPE);
+          let key = recordKey(scope, r.section);
+          let placed = await store.updateRecord(key, cur => (cur ? undefined : { ...r, key, slot: scope, scope, migratedFrom: r.key, migratedAt: now() }));
+          if (!placed) { // doelkey bestaat al (nieuwer record): oud record apart in quarantaine, niets overschrijven
+            scope = LEGACY_SCOPE; key = recordKey(scope, r.section + '#' + Math.random().toString(36).slice(2, 8));
+            placed = await store.updateRecord(key, () => ({ ...r, key, slot: scope, scope, migratedFrom: r.key, migratedAt: now() }));
+          }
+          if (placed) {
+            await store.deleteRecord(r.key, cur => cur && !cur.scope && cur.rev === r.rev);
+            await audit(auditEntry({ hashValue, action: 'migrated', record: placed, note: 'van ' + r.key + ' naar ' + key, now }));
+          }
+        }
+        // Oude guards hebben geen identiteit: inert bewaren (quarantaine), niet verwijderen en niet toepassen.
+        for (const g of await store.listRecords('finance-guard')) {
+          if (g.scope) continue;
+          const key = guardKey(LEGACY_SCOPE, g.section);
+          const placed = await store.updateRecord(key, cur => (cur ? undefined : { ...g, key, slot: LEGACY_SCOPE, scope: LEGACY_SCOPE, migratedFrom: g.key }));
+          if (placed) await store.deleteRecord(g.key, cur => cur && !cur.scope);
+        }
+      })().catch(error => { migration = null; throw error; }));
+    }
+
+    const all = async () => { await migrate(); return store.listRecords('finance'); };
+    const list = async scope => { requireScope(scope === LEGACY_SCOPE ? DEVICE_SCOPE : scope); return (await all()).filter(r => r.scope === scope); };
+    const get = async (scope, section) => { requireScope(scope); await migrate(); const r = await store.getRecord(recordKey(scope, section)); return r && r.scope === scope ? r : null; };
+
+    // Opent een conflict binnen een scope (of laat een bestaand record van die scope staan). Idempotent.
     async function open(input) {
+      requireScope(input.scope);
+      await migrate();
       const rec = newRecord({ ...input, now });
       let created = false;
       const stored = await store.updateRecord(rec.key, cur => {
-        if (cur) return undefined; // bestaand record (open of wachtend) blijft leidend; geen tweede record
+        if (cur) return undefined; // bestaand record van dezelfde scope blijft leidend
         created = true; return rec;
       });
       const current = stored || await store.getRecord(rec.key);
@@ -146,17 +196,16 @@
       return { record: current, created };
     }
 
-    // Live weergave voor de interface en voor oplossen: paden op basis van de actuele lokale waarde.
     function view(record, currentLocal) {
       const local = currentLocal === undefined ? record.local : currentLocal;
       return livePaths({ merge3, hashValue, base: record.base, local, remote: record.remote, forcedPaths: record.forcedPaths || [] });
     }
 
-    // Expliciete keuze. Stap 1 (atomair in IndexedDB): open → resolved-pending met de gekozen waarde. De aanroeper slaat
-    // daarna de waarde lokaal op (applyLocal) en draait bij een fout terug (rollback). Twee tabbladen: de tweede krijgt
-    // hetzelfde resultaat bij dezelfde keuze (idempotent) of een weigering bij een andere keuze.
-    async function resolve({ section, choices, currentLocal, actor, pushBase = null }) {
-      const rec = await get(section);
+    // Expliciete keuze binnen een scope. Identiteit: open → resolved-pending (daarna versturen en serverbevestiging).
+    // 'device': open → resolved-local (geen server die kan bevestigen; daarna synchroniseert de lokale waarde gewoon).
+    async function resolve({ scope, section, choices, currentLocal, actor, pushBase = null }) {
+      requireScope(scope);
+      const rec = await get(scope, section);
       if (!rec) return { ok: false, reason: 'not-found' };
       const ch = choicesHash(hashValue, choices);
       if (rec.status !== 'open') {
@@ -171,40 +220,58 @@
         pushBase: rec.origin === 'tab' || rec.origin === 'reintroduction' ? pushBase : { version: rec.remoteVersion || 0, value: rec.remote },
         resolvedBy: actor || null, resolvedAt: now()
       };
+      const nextStatus = scope === DEVICE_SCOPE ? 'resolved-local' : 'resolved-pending';
       let won = false;
       const after = await store.updateRecord(rec.key, cur => {
-        if (!cur || cur.status !== 'open' || cur.rev !== rec.rev) return undefined;
-        won = true; return { ...cur, status: 'resolved-pending', resolution, rev: cur.rev + 1, updatedAt: now() };
+        if (!cur || cur.scope !== scope || cur.status !== 'open' || cur.rev !== rec.rev) return undefined;
+        won = true; return { ...cur, status: nextStatus, resolution, rev: cur.rev + 1, updatedAt: now() };
       });
-      if (!won) { // intussen door een ander tabblad opgelost of bijgewerkt: opnieuw beoordelen
-        const cur = await get(section);
+      if (!won) {
+        const cur = await get(scope, section);
         if (cur && cur.resolution && cur.resolution.choicesHash === ch) return { ok: true, idempotent: true, record: cur, value: cur.resolution.value };
         return { ok: false, reason: cur && cur.status === 'open' ? 'changed' : 'already-resolved', record: cur };
       }
-      const paths = view(rec, currentLocal);
-      await audit(auditEntry({ hashValue, action: 'resolved', record: rec, paths, choices, actor, now }));
+      await audit(auditEntry({ hashValue, action: 'resolved', record: rec, paths: view(rec, currentLocal), choices, actor, now }));
       return { ok: true, record: after, value: r.value };
     }
 
-    // Lokaal opslaan mislukt na resolve: terug naar open (alleen als dit dezelfde oplossing is).
-    async function rollback(section, resolutionId) {
-      await store.updateRecord(recordKey(section), cur => (cur && cur.resolution && cur.resolution.id === resolutionId && cur.status === 'resolved-pending')
+    // 'device'-keuze lokaal opgeslagen: financiële waarden uit het record halen (minimale opslag); keuze en hashes blijven.
+    async function completeLocal(scope, section, resolutionId) {
+      if (scope !== DEVICE_SCOPE) return null;
+      return store.updateRecord(recordKey(scope, section), cur => (cur && cur.scope === scope && cur.status === 'resolved-local' && cur.resolution && cur.resolution.id === resolutionId && cur.resolution.value !== null)
+        ? { ...cur, base: null, local: null, remote: null, resolution: { ...cur.resolution, value: null, pushBase: null }, rev: cur.rev + 1, updatedAt: now() } : undefined);
+    }
+
+    async function rollback(scope, section, resolutionId) {
+      await store.updateRecord(recordKey(scope, section), cur => (cur && cur.scope === scope && cur.resolution && cur.resolution.id === resolutionId && ['resolved-pending', 'resolved-local'].includes(cur.status))
         ? { ...cur, status: 'open', resolution: null, rev: cur.rev + 1, updatedAt: now() } : undefined);
     }
 
-    // Na een herstart: was de keuze vastgelegd maar de lokale waarde nog niet opgeslagen (crash ertussen), dan alsnog
-    // toepassen. Alleen als de lokale waarde nog precies die van het moment van kiezen is.
+    // Na een herstart: keuze vastgelegd maar lokale waarde nog niet opgeslagen. Alleen records die de aanroeper voor de
+    // huidige scope (en 'device') meegeeft; nooit records van een andere identiteit.
     function interrupted(records, data) {
-      return records.filter(r => r.status === 'resolved-pending' && r.resolution
+      return records.filter(r => ['resolved-pending', 'resolved-local'].includes(r.status) && r.resolution && r.resolution.value !== null
         && hashValue(data[r.section] ?? null) === r.resolution.localHash && r.resolution.localHash !== r.resolution.valueHash)
-        .map(r => ({ section: r.section, value: clone(r.resolution.value) }));
+        .map(r => ({ section: r.section, value: clone(r.resolution.value), scope: r.scope }));
     }
 
     const frozenSections = records => records.filter(r => ['open', 'resolved-pending', 'confirmed'].includes(r.status)).map(r => r.section);
 
-    // Oude kopie op dit apparaat die een afgewezen waarde terugbrengt → nieuw (geforceerd) conflict.
-    async function findReintroductions({ data, baseValues }) {
-      const guards = (await store.listRecords('finance-guard')).filter(g => nowMs() - Date.parse(g.at) < GUARD_TTL_MS);
+    // Lokale waarde die nog die van een (openstaand of wachtend) conflict van een ándere identiteit is: hoort bij dat
+    // account/huishouden en mag nooit in deze scope worden verstuurd of overschreven.
+    async function foreignSections({ scope, data }) {
+      const out = new Set();
+      for (const r of await all()) {
+        if (r.scope === scope || !isIdentityScope(r.scope) || !['open', 'resolved-pending', 'confirmed'].includes(r.status)) continue;
+        const h = hashValue(data[r.section] ?? null);
+        if (h === hashValue(r.local ?? null) || (r.resolution && h === r.resolution.valueHash)) out.add(r.section);
+      }
+      return [...out];
+    }
+
+    async function findReintroductions({ scope, data, baseValues }) {
+      requireScope(scope, { identity: true });
+      const guards = (await store.listRecords('finance-guard')).filter(g => g.scope === scope && nowMs() - Date.parse(g.at) < GUARD_TTL_MS);
       const found = [];
       for (const g of guards) {
         if (!isFinancialSection(g.section)) continue;
@@ -216,26 +283,27 @@
       return found;
     }
 
-    // Na het lezen van de cloud in een ronde: open records bijwerken met de nieuwste cloudstand, keuzes versturen.
-    // Geeft per record een uitkomst; schrijft zelf geen applicatiegegevens of versie-administratie.
-    async function processRound({ records, remoteState, prevBase = {}, prevBaseValues = {}, cloud, householdId, encrypt, classify, data, actor }) {
+    // Verwerkt alleen records van `scope` (andere worden overgeslagen, ook als ze per ongeluk worden meegegeven).
+    async function processRound({ scope, records, remoteState, prevBase = {}, prevBaseValues = {}, cloud, householdId, encrypt, classify, data, actor }) {
+      requireScope(scope, { identity: true });
       const outcomes = [];
       for (const rec of records) {
+        if (rec.scope !== scope) continue;
         const s = rec.section, r = remoteState[s];
         if (rec.status === 'open') {
           if (r && r.version !== rec.remoteVersion && rec.origin === 'sync') {
-            const next = await store.updateRecord(rec.key, cur => (cur && cur.status === 'open' && cur.rev === rec.rev)
+            const next = await store.updateRecord(rec.key, cur => (cur && cur.scope === scope && cur.status === 'open' && cur.rev === rec.rev)
               ? { ...cur, remote: clone(r.value), remoteVersion: r.version, remoteUpdatedBy: r.updatedBy || null, remoteUpdatedAt: r.updatedAt || null, rev: cur.rev + 1, updatedAt: now() } : undefined);
             if (next) await audit(auditEntry({ hashValue, action: 'refreshed', record: next, paths: view(next, data[s]), actor, now }));
-            outcomes.push({ key: rec.key, section: s, kind: 'refreshed' });
-          } else outcomes.push({ key: rec.key, section: s, kind: 'open' });
+            outcomes.push({ key: rec.key, scope, section: s, kind: 'refreshed' });
+          } else outcomes.push({ key: rec.key, scope, section: s, kind: 'open' });
           continue;
         }
-        if (rec.status === 'confirmed') { outcomes.push({ key: rec.key, section: s, kind: 'confirmed', touchBase: false, resolutionId: rec.resolution && rec.resolution.id }); continue; }
+        if (rec.status === 'confirmed') { outcomes.push({ key: rec.key, scope, section: s, kind: 'confirmed', touchBase: false, resolutionId: rec.resolution && rec.resolution.id }); continue; }
         if (rec.status !== 'resolved-pending' || !rec.resolution) continue;
         const res = rec.resolution, val = res.value;
-        if (r && hashValue(r.value) === res.valueHash) { // al door de server verwerkt (bijv. antwoord kwijtgeraakt)
-          outcomes.push({ key: rec.key, section: s, kind: 'confirmed', version: r.version, value: clone(val), touchBase: true, resolutionId: res.id });
+        if (r && hashValue(r.value) === res.valueHash) {
+          outcomes.push({ key: rec.key, scope, section: s, kind: 'confirmed', version: r.version, value: clone(val), touchBase: true, resolutionId: res.id });
           continue;
         }
         const pb = res.pushBase || (prevBase[s] ? { version: prevBase[s].version, value: prevBaseValues[s] } : { version: r ? r.version : 0, value: r ? r.value : undefined });
@@ -243,90 +311,87 @@
         const remoteVersion = r ? r.version : 0;
         if (remoteVersion !== pb.version) {
           const paths = livePaths({ merge3, hashValue, base: pb.value, local: val, remote: r ? r.value : undefined });
-          if (paths.length) { outcomes.push({ key: rec.key, section: s, kind: 'reopen', base: pb.value, local: val, remote: r ? r.value : null, remoteVersion, remoteUpdatedBy: r && r.updatedBy, remoteUpdatedAt: r && r.updatedAt, resolutionId: res.id }); continue; }
+          if (paths.length) { outcomes.push({ key: rec.key, scope, section: s, kind: 'reopen', base: pb.value, local: val, remote: r ? r.value : null, remoteVersion, remoteUpdatedBy: r && r.updatedBy, remoteUpdatedAt: r && r.updatedAt, resolutionId: res.id }); continue; }
           toPush = merge3(pb.value === undefined ? undefined : clone(pb.value), clone(val), clone(r ? r.value : undefined), { conflicts: [] });
           expected = remoteVersion;
         }
         try {
           const version = await cloud.putState(householdId, s, await encrypt(toPush), expected);
-          outcomes.push({ key: rec.key, section: s, kind: 'confirmed', version: Number(version), value: toPush, touchBase: true, pushed: true, resolutionId: res.id });
+          outcomes.push({ key: rec.key, scope, section: s, kind: 'confirmed', version: Number(version), value: toPush, touchBase: true, pushed: true, resolutionId: res.id });
         } catch (error) {
-          outcomes.push({ key: rec.key, section: s, kind: 'pending', reason: (classify ? classify(error).kind : 'other'), resolutionId: res.id });
+          outcomes.push({ key: rec.key, scope, section: s, kind: 'pending', reason: (classify ? classify(error).kind : 'other'), resolutionId: res.id });
         }
       }
       return outcomes;
     }
 
-    // Server heeft bevestigd: duurzaam markeren vóór het vastleggen van de versie-administratie.
+    const sameResolution = (cur, o) => cur && cur.scope === o.scope && cur.resolution && cur.resolution.id === o.resolutionId;
     async function markConfirmed(outcome) {
-      return store.updateRecord(outcome.key, cur => (cur && cur.resolution && cur.resolution.id === outcome.resolutionId && cur.status === 'resolved-pending')
+      return store.updateRecord(outcome.key, cur => (sameResolution(cur, outcome) && cur.status === 'resolved-pending')
         ? { ...cur, status: 'confirmed', confirmedVersion: outcome.version ?? null, rev: cur.rev + 1, updatedAt: now() } : undefined);
     }
-
     async function reopen(outcome, actor) {
-      const rec = await store.getRecord(outcome.key);
-      if (!rec || !rec.resolution || rec.resolution.id !== outcome.resolutionId) return null;
-      const next = await store.updateRecord(outcome.key, cur => (cur && cur.resolution && cur.resolution.id === outcome.resolutionId)
+      const next = await store.updateRecord(outcome.key, cur => sameResolution(cur, outcome)
         ? { ...cur, status: 'open', origin: 'sync', base: clone(outcome.base) ?? null, local: clone(outcome.local) ?? null, remote: clone(outcome.remote) ?? null,
             remoteVersion: outcome.remoteVersion, remoteUpdatedBy: outcome.remoteUpdatedBy || null, remoteUpdatedAt: outcome.remoteUpdatedAt || null,
             forcedPaths: [], resolution: null, rev: cur.rev + 1, updatedAt: now() } : undefined);
       if (next) await audit(auditEntry({ hashValue, action: 'reopened', record: next, paths: view(next), actor, note: 'cloud intussen opnieuw gewijzigd', now }));
       return next;
     }
-
-    // Pas aanroepen nadat de versie-administratie duurzaam is vastgelegd. Verwijdert het record (alleen dezelfde oplossing),
-    // onthoudt de hash van de afgewezen waarden en schrijft de audit.
     async function finalize(outcome, actor) {
       const rec = await store.getRecord(outcome.key);
-      if (!rec || !rec.resolution || rec.resolution.id !== outcome.resolutionId) return false;
+      if (!sameResolution(rec, outcome)) return false;
       const res = rec.resolution;
       const local = rec.local, remote = rec.remote;
       const rejected = Object.entries(res.choices || {}).map(([path, choice]) => ({ path, rejectedHash: hashValue((choice === 'local' ? valueAt(remote, path) : valueAt(local, path)) ?? null) }))
         .filter(p => p.rejectedHash !== hashValue(valueAt(res.value, p.path) ?? null));
       if (rejected.length) {
-        await store.updateRecord('fing:' + rec.section, cur => {
+        const gk = guardKey(rec.scope, rec.section);
+        await store.updateRecord(gk, cur => {
           const keep = (cur && cur.paths || []).filter(p => !rejected.some(x => x.path === p.path));
-          return { key: 'fing:' + rec.section, slot: 'device', kind: 'finance-guard', section: rec.section, at: now(), paths: [...keep, ...rejected] };
+          return { key: gk, slot: rec.scope, scope: rec.scope, kind: 'finance-guard', section: rec.section, at: now(), paths: [...keep, ...rejected] };
         });
       }
-      await store.deleteRecord(outcome.key, cur => cur && cur.resolution && cur.resolution.id === outcome.resolutionId);
+      await store.deleteRecord(outcome.key, cur => sameResolution(cur, outcome));
       await audit(auditEntry({ hashValue, action: 'confirmed', record: rec, paths: Object.keys(res.choices || {}).map(path => ({ path, base: valueAt(rec.base, path), local: valueAt(local, path), remote: valueAt(remote, path) })), choices: res.choices, actor, version: outcome.version ?? rec.confirmedVersion, now }));
       return true;
     }
 
-    // ---------- Volgorde rond een syncronde (gebruikt door account-sync.js en de tests) ----------
-    // 1. beforeRound: onderbroken keuzes vinden (aanroeper past `fixes` toe en slaat op), herintroducties blokkeren,
-    //    bevroren onderdelen bepalen.
-    async function beforeRound({ data, prevBase = {}, prevBaseValues = {}, actor = null, householdId = null }) {
-      let records = await list();
-      const fixes = interrupted(records, data);
-      for (const ri of await findReintroductions({ data, baseValues: prevBaseValues })) {
-        if (records.some(r => r.section === ri.section)) continue;
-        await open({ section: ri.section, origin: 'reintroduction', base: prevBaseValues[ri.section], local: data[ri.section], remote: prevBaseValues[ri.section],
+    // ---------- Volgorde rond een syncronde (scope = '<accountId>:<huishoudenId>' van deze ronde) ----------
+    async function beforeRound({ scope, data, prevBase = {}, prevBaseValues = {}, actor = null, householdId = null }) {
+      requireScope(scope, { identity: true });
+      let own = await list(scope);
+      const device = await list(DEVICE_SCOPE);
+      const fixes = interrupted([...own, ...device], data);
+      for (const ri of await findReintroductions({ scope, data, baseValues: prevBaseValues })) {
+        if (own.some(r => r.section === ri.section)) continue;
+        await open({ scope, section: ri.section, origin: 'reintroduction', base: prevBaseValues[ri.section], local: data[ri.section], remote: prevBaseValues[ri.section],
           remoteVersion: prevBase[ri.section] ? prevBase[ri.section].version : null, forcedPaths: ri.paths, localUser: actor, householdId });
       }
-      records = await list();
-      return { records, frozen: frozenSections(records), fixes };
+      own = await list(scope);
+      const foreign = await foreignSections({ scope, data });
+      const deviceOpen = device.filter(r => r.status === 'open').map(r => r.section);
+      const frozen = [...new Set([...frozenSections(own), ...deviceOpen, ...foreign])];
+      return { scope, records: own, frozen, fixes, foreign, deviceOpen };
     }
-    // 2. afterRound: nieuwe financiële conflicten vastleggen (en uit de gewone conflictlijst halen), open records bijwerken,
-    //    gekozen waarden versturen. Bevestigde waarden worden als pull + basis in het rondresultaat gezet, maar alleen als
-    //    de lokale waarde sinds de keuze niet is veranderd (anders volgt in de volgende ronde een nieuw, expliciet conflict).
-    async function afterRound({ raw, records, snapshot, prevBase = {}, prevBaseValues = {}, cloud, householdId, encrypt, classify, actor }) {
+    async function afterRound({ scope, raw, records, snapshot, prevBase = {}, prevBaseValues = {}, cloud, householdId, encrypt, classify, actor }) {
+      requireScope(scope, { identity: true });
       const result = { ...raw, pulls: { ...raw.pulls }, base: { ...raw.base }, baseValues: { ...raw.baseValues } };
       const financial = (raw.conflicts || []).filter(c => isFinancialSection(c.section));
       result.conflicts = (raw.conflicts || []).filter(c => !isFinancialSection(c.section));
       for (const c of financial) {
         const s = c.section, rs = (raw.remoteState || {})[s] || {};
         const hasBase = prevBase[s] && Object.prototype.hasOwnProperty.call(prevBaseValues, s) && hashValue(prevBaseValues[s]) === prevBase[s].hash;
-        await open({ section: s, origin: 'sync', base: hasBase ? prevBaseValues[s] : null, local: snapshot[s], remote: c.remote,
+        await open({ scope, section: s, origin: 'sync', base: hasBase ? prevBaseValues[s] : null, local: snapshot[s], remote: c.remote,
           remoteVersion: c.remoteVersion, remoteUpdatedBy: rs.updatedBy || null, remoteUpdatedAt: rs.updatedAt || null, localUser: actor, householdId });
       }
-      const outcomes = await processRound({ records, remoteState: raw.remoteState || {}, prevBase, prevBaseValues, cloud, householdId, encrypt, classify, data: snapshot, actor });
+      const own = (records || []).filter(r => r.scope === scope);
+      const outcomes = await processRound({ scope, records: own, remoteState: raw.remoteState || {}, prevBase, prevBaseValues, cloud, householdId, encrypt, classify, data: snapshot, actor });
       for (const o of outcomes) {
         if (o.kind === 'reopen') { await reopen(o, actor); continue; }
         if (o.kind !== 'confirmed') continue;
         if (o.touchBase) {
-          const rec = records.find(r => r.key === o.key);
+          const rec = own.find(r => r.key === o.key);
           await markConfirmed(o);
           if (rec && hashValue(snapshot[o.section] ?? null) === rec.resolution.valueHash) {
             result.pulls[o.section] = clone(o.value);
@@ -336,18 +401,29 @@
         }
         if (o.pushed) result.pushed = [...(result.pushed || []), o.section];
       }
-      const openLeft = (await list()).some(r => r.status === 'open');
+      const openLeft = (await list(scope)).some(r => r.status === 'open');
       if (openLeft && result.status === 'ok') result.status = 'conflict';
       return { result, outcomes };
     }
-    // 3. afterCommit: pas na duurzaam vastgelegde versie-administratie de bevestigde records afronden.
-    async function afterCommit({ outcomes, actor }) {
+    async function afterCommit({ scope, outcomes, actor }) {
+      requireScope(scope, { identity: true });
       let done = 0;
-      for (const o of outcomes) if (o.kind === 'confirmed' && await finalize(o, actor)) done++;
+      for (const o of outcomes) if (o.scope === scope && o.kind === 'confirmed' && await finalize(o, actor)) done++;
       return done;
     }
 
-    return { list, get, open, view, resolve, rollback, interrupted, frozenSections, findReintroductions, processRound, markConfirmed, reopen, finalize, beforeRound, afterRound, afterCommit, audit: () => store.listRecords('finance-audit') };
+    const api = { list, all, get, open, view, resolve, completeLocal, rollback, interrupted, frozenSections, foreignSections, findReintroductions, processRound, markConfirmed, reopen, finalize, beforeRound, afterRound, afterCommit, migrate,
+      audit: async scope => { await migrate(); const a = await store.listRecords('finance-audit'); return scope ? a.filter(x => x.scope === scope) : a; } };
+    // Gebonden aan één scope: dezelfde methodes zonder scope-parameter (voor de aanroepers en tests).
+    api.scoped = scope => ({
+      scope,
+      list: () => list(scope), get: section => get(scope, section), view,
+      open: input => open({ ...input, scope }),
+      resolve: input => resolve({ ...input, scope }), rollback: (section, id) => rollback(scope, section, id), completeLocal: (section, id) => completeLocal(scope, section, id),
+      interrupted, beforeRound: input => beforeRound({ ...input, scope }), afterRound: input => afterRound({ ...input, scope }), afterCommit: input => afterCommit({ ...input, scope }),
+      audit: () => api.audit(scope)
+    });
+    return api;
   }
 
   let sharedInstance = null;
@@ -359,5 +435,5 @@
     return sharedInstance;
   }
 
-  return { shared, FINANCIAL_SECTIONS, isFinancialSection, isFinancialPath, parsePath, valueAt, setAt, livePaths, resolveValue, newRecord, auditEntry, createFinanceConflicts, recordKey, WHOLE };
+  return { shared, FINANCIAL_SECTIONS, isFinancialSection, isFinancialPath, parsePath, valueAt, setAt, livePaths, resolveValue, newRecord, auditEntry, createFinanceConflicts, recordKey, guardKey, scopeFor, isIdentityScope, isValidScope, DEVICE_SCOPE, LEGACY_SCOPE, WHOLE };
 });

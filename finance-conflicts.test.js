@@ -14,8 +14,9 @@ const KEES = '11111111-1111-4111-8111-aaaaaaaaaaaa', DAPHNE = '22222222-2222-422
 
 function device(cloud, user, { idb = fakeIndexedDB(), storage = memoryStorage(), failWriteBases = 0 } = {}) {
   const meta = SM.createSyncMetaStore({ indexedDB: idb, storage, hashValue: HS.hashValue });
-  const fin = FC.createFinanceConflicts({ store: meta, merge3: HS.merge3, hashValue: HS.hashValue });
-  const dev = { user, idb, storage, meta, fin, data: {}, bases: {}, slot: user + ':hh', failWriteBases };
+  const slot = user + ':hh';
+  const fin = FC.createFinanceConflicts({ store: meta, merge3: HS.merge3, hashValue: HS.hashValue }).scoped(slot);
+  const dev = { user, idb, storage, meta, fin, data: {}, bases: {}, slot, failWriteBases };
   const mine = cloudAs(cloud, user);
   dev.sync = async ({ resolutions = {} } = {}) => {
     const prevBase = dev.bases;
@@ -264,7 +265,7 @@ test('F8. financieel conflict wordt nooit ongemerkt overschreven (ook niet via "
   assert.match(acct, /generalResolutions = Object\.fromEntries\(Object\.entries\(resolutions \|\| \{\}\)\.filter\(\(\[s\]\) => !isFinancialSection\(s\)\)\)/);
   assert.match(acct, /frozen: fin\.frozen, protectedSections:/);
   assert.match(acct, /commit\.committed && commit\.durability !== 'session'/, 'afronden alleen na duurzame vastlegging');
-  assert.match(app, /FIN\.open\(\{\s*section, origin: 'tab'/);
+  assert.match(app, /FIN\.open\(\{\s*scope, section, origin: 'tab'/);
 });
 
 test('F9. conflicten blijven na browserherstart behouden en blijven blokkeren', async () => {

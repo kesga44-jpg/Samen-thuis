@@ -41,6 +41,7 @@ Per pad worden de bewaarde waarde, de andere waarde en de basis vastgelegd (`Sam
 | Cloud intussen gewijzigd | Ander veld: samengevoegd versturen. Zelfde veld: opnieuw `open` met een nieuwe keuze |
 | Crash | Na stap 1: bij herstart alsnog lokaal toegepast (alleen als de lokale waarde nog die van het keuzemoment is). Na stap 4: afronden zonder nieuwe versie |
 | Oude kopie | Ander apparaat: 3-wegs merge geeft daar een nieuw, expliciet conflict. Dit apparaat: 30 dagen per veld de hash van de afgewezen waarde; komt die terug, dan volgt een nieuw conflict (`reintroduction`) in plaats van een upload |
+| Scope (opdracht 5) | Elk record hoort bij `'<accountId>:<huishoudenId>'` (key `fin|<scope>|<onderdeel>`). Een ronde ziet alleen records van de eigen scope. Tabbladconflict zonder bekende identiteit: scope `device` (blokkeert uit voorzorg zolang open; opgelost = `resolved-local`, waarden uit het record). Oude records zonder scope worden gemigreerd (identiteit uit het record), anders `device` (tabblad) of quarantaine `legacy-unknown` (bewaard, nooit verwerkt). Lokale budgetwaarde die nog bij een open conflict van een andere identiteit hoort, wordt in deze scope niet verstuurd of overschreven |
 | Idempotent | Hetzelfde conflict → één record. Twee tabbladen met dezelfde keuze → één oplossing (compare-and-set in IndexedDB); een andere keuze wordt geweigerd |
 | Audit | `finance-audit`: actie, onderdeel, paden, hashes, versies, gebruikers-id's, tijdstippen. Geen bedragen. Na afronding staan er geen financiële waarden meer in de conflictopslag |
 

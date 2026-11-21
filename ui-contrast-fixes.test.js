@@ -24,7 +24,7 @@ const contrast = (foreground, background) => {
 test('contrast stylesheet is loaded after user-theme styles and included in offline cache', () => {
   assert.ok(html.indexOf('css/personalization.css') < html.indexOf('css/ui-contrast-fixes.css'));
   assert.match(html, /css\/ui-contrast-fixes\.css\?v=3/);
-  assert.match(sw, /samen-thuis-v52-finance-conflicts/);
+  assert.match(sw, /samen-thuis-v53-finance-scope/);
   assert.match(sw, /\.\/css\/ui-contrast-fixes\.css\?v=3/);
 });
 

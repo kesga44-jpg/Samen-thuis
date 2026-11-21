@@ -334,9 +334,11 @@ function reportTabConflict(result) {
   const FIN = window.SamenThuisFinanceConflicts?.shared();
   if (FIN) {
     [...new Set(financial.map(d => d.section))].forEach(section => {
+      // Scope: de identiteit die nu actief is (account + huishouden); zonder bekende identiteit 'device'.
+      const scope = window.SamenThuisFinanceSync?.scope?.() || window.SamenThuisFinanceConflicts.DEVICE_SCOPE;
       FIN.open({
-        section, origin: 'tab', base: result.base ? result.base[section] : null, local: result.value[section], remote: result.remote[section],
-        localUser: window.SamenThuisAuth25?.session()?.user?.id || null, forcedPaths: financial.filter(d => d.section === section).map(d => d.path.slice(section.length).replace(/^\./, '')).filter(Boolean)
+        scope, section, origin: 'tab', base: result.base ? result.base[section] : null, local: result.value[section], remote: result.remote[section],
+        localUser: window.SamenThuisAuth25?.session()?.user?.id || null, householdId: scope.includes(':') ? scope.split(':')[1] : null, forcedPaths: financial.filter(d => d.section === section).map(d => d.path.slice(section.length).replace(/^\./, '')).filter(Boolean)
       }).then(() => window.SamenThuisFinanceSync?.notify()).catch(error => console.error('Financieel conflict kon niet worden bewaard', error));
     });
   }

@@ -17,6 +17,9 @@
   const FINC = window.SamenThuisFinanceConflicts;
   const FIN = FINC ? FINC.shared() : null;
   const isFinancialSection = s => !!(FINC && FINC.isFinancialSection(s));
+  // Financiële conflicten horen bij één identiteit: '<accountId>:<huishoudenId>' (zelfde notatie als slot()).
+  // Zonder bekende identiteit is er geen scope; dan worden alleen apparaatconflicten ('device') getoond.
+  const financeScope = () => FINC ? FINC.scopeFor(AUTH.session()?.user?.id || '', st.household?.id || load().householdId || '') : null;
   const loadBaseValues = async bases => { try { return await META.loadBaseValues(slot(), bases); } catch (_) { return {}; } };
   // Versie-administratie per slot. Staat de basis alleen in het geheugen (durability 'session'), dan blijft ook de
   // administratie in het geheugen: na herladen geldt dan geen enkele versie als bevestigd zonder duurzame basis.
@@ -41,7 +44,7 @@
   // Accountwissel: nooit huishouden/conflicten van het vorige account blijven gebruiken.
   function syncIdentity() {
     const uid = AUTH.session()?.user?.id || '';
-    if (uid !== st.uid) Object.assign(st, { uid, household: null, conflicts: [], message: '' });
+    if (uid !== st.uid) { Object.assign(st, { uid, household: null, conflicts: [], finance: [], finChoices: {}, message: '' }); refreshFinance(); }
   }
   const load = () => { try { return JSON.parse(localStorage.getItem(KEY) || '{}'); } catch (_) { return {}; } };
   const store = v => { try { localStorage.setItem(KEY, JSON.stringify(v)); return true; } catch (_) { return false; } };
@@ -86,7 +89,10 @@
       const prevBaseValues = await loadBaseValues(prevBase);
       const actor = AUTH.session()?.user?.id || null;
       // Financieel: onderbroken keuzes afronden, herintroducties blokkeren, bevroren onderdelen bepalen.
-      const fin = FIN ? await FIN.beforeRound({ data, prevBase, prevBaseValues, actor, householdId: st.household.id }) : { records: [], frozen: [], fixes: [] };
+      // Financiële conflicten uitsluitend van deze identiteit (account + huishouden) van de ronde.
+      const scope = FINC ? FINC.scopeFor(actor || '', st.household.id) : null;
+      const FS = FIN && scope ? FIN.scoped(scope) : null;
+      const fin = FS ? await FS.beforeRound({ data, prevBase, prevBaseValues, actor, householdId: st.household.id }) : { records: [], frozen: [], fixes: [] };
       if (fin.fixes.length) {
         const previous = data;
         data = { ...data, ...Object.fromEntries(fin.fixes.map(f => [f.section, f.value])) };
@@ -105,8 +111,8 @@
         encrypt, decrypt: p => decryptData(p, code()),
         frozen: fin.frozen, protectedSections: FINC ? [...FINC.FINANCIAL_SECTIONS] : []
       });
-      const finRound = FIN
-        ? await FIN.afterRound({ raw: rawRound, records: fin.records, snapshot, prevBase, prevBaseValues, cloud: tracked, householdId: st.household.id, encrypt, classify: HS.classifyError, actor })
+      const finRound = FS
+        ? await FS.afterRound({ raw: rawRound, records: fin.records, snapshot, prevBase, prevBaseValues, cloud: tracked, householdId: st.household.id, encrypt, classify: HS.classifyError, actor })
         : { result: rawRound, outcomes: [] };
       const raw = finRound.result;
       // Onderdelen die tijdens de ronde lokaal zijn gewijzigd: oudere cloudrespons niet toepassen (volgende ronde voegt samen).
@@ -140,8 +146,8 @@
       });
       st.conflicts = result.conflicts;
       // Financiële records pas afronden (verwijderen) als de versie-administratie duurzaam is vastgelegd.
-      if (FIN && commit.committed && commit.durability !== 'session') {
-        try { await FIN.afterCommit({ outcomes: finRound.outcomes, actor }); } catch (error) { console.error('Financiële conflicten niet afgerond', error); }
+      if (FS && commit.committed && commit.durability !== 'session') {
+        try { await FS.afterCommit({ outcomes: finRound.outcomes, actor }); } catch (error) { console.error('Financiële conflicten niet afgerond', error); }
       }
       await refreshFinance();
       if (!commit.committed) {
@@ -193,7 +199,7 @@
     legacyBadge(message);
     const badge = document.querySelector('#syncState');
     if (!badge || message || !accountMode()) return;
-    badge.textContent = syncing ? 'Synchroniseren…' : !AUTH.session()?.user?.id ? 'Aanmelden vereist · lokaal bewaard' : !navigator.onLine ? 'Offline · later synchroniseren' : st.finance.some(x => x.record.status === 'open') ? 'Financieel conflict · kies waarde' : st.conflicts.length ? 'Conflict · kies versie' : syncError ? 'Sync controleren' : metaDurability === 'session' ? 'Gesynchroniseerd · status niet duurzaam bewaard' : 'Laatst gesynchroniseerd · niet geverifieerd';
+    badge.textContent = syncing ? 'Synchroniseren…' : !AUTH.session()?.user?.id ? 'Aanmelden vereist · lokaal bewaard' : !navigator.onLine ? 'Offline · later synchroniseren' : st.finance.some(x => x.record.status === 'open' && x.record.scope !== FINC.LEGACY_SCOPE) ? 'Financieel conflict · kies waarde' : st.conflicts.length ? 'Conflict · kies versie' : syncError ? 'Sync controleren' : metaDurability === 'session' ? 'Gesynchroniseerd · status niet duurzaam bewaard' : 'Laatst gesynchroniseerd · niet geverifieerd';
     badge.classList.remove('connected');
   };
 
@@ -308,8 +314,11 @@
   async function refreshFinance() {
     if (!FIN) return;
     try {
-      const records = await FIN.list();
-      st.finance = records.map(r => ({ record: r, paths: r.status === 'open' ? FIN.view(r, data[r.section]) : [] }));
+      const scope = financeScope();
+      const own = scope ? await FIN.list(scope) : [];
+      const device = (await FIN.list(FINC.DEVICE_SCOPE)).filter(r => r.status === 'open');
+      const legacy = (await FIN.list(FINC.LEGACY_SCOPE)).filter(r => r.status === 'open');
+      st.finance = [...own, ...device, ...legacy].map(r => ({ record: r, paths: r.status === 'open' && r.scope !== FINC.LEGACY_SCOPE ? FIN.view(r, data[r.section]) : [] }));
     } catch (error) { console.error('Financiële conflicten laden mislukt', error); }
     updateSyncBadge();
   }
@@ -317,20 +326,26 @@
   // lokaal opslaan (bij een fout terugdraaien) → versturen in de volgende ronde → record pas weg na serverbevestiging.
   async function resolveFinance(section, choices) {
     if (!FIN || !isFinancialSection(section)) return { ok: false, reason: 'not-financial' };
+    // Alleen de eigen identiteit of een apparaatconflict; nooit een record van een ander account/huishouden.
+    const own = financeScope();
+    const scope = own && await FIN.get(own, section) ? own : (await FIN.get(FINC.DEVICE_SCOPE, section) ? FINC.DEVICE_SCOPE : null);
+    if (!scope) return { ok: false, reason: 'not-found' };
     const bases = readBases(slot());
-    const pushBase = bases[section] ? { version: bases[section].version, value: (await loadBaseValues(bases))[section] } : null;
-    const r = await FIN.resolve({ section, choices, currentLocal: data[section], actor: AUTH.session()?.user?.id || null, pushBase });
+    const pushBase = scope !== FINC.DEVICE_SCOPE && bases[section] ? { version: bases[section].version, value: (await loadBaseValues(bases))[section] } : null;
+    const r = await FIN.resolve({ scope, section, choices, currentLocal: data[section], actor: AUTH.session()?.user?.id || null, pushBase });
     if (!r.ok) { await refreshFinance(); return r; }
     if (HS.hashValue(data[section] ?? null) !== HS.hashValue(r.value ?? null)) {
       const previous = data[section];
       data[section] = structuredClone(r.value);
       if (save({ sync: false }) === false) {
         data[section] = previous;
-        if (!r.idempotent) await FIN.rollback(section, r.record.resolution.id);
+        if (!r.idempotent) await FIN.rollback(scope, section, r.record.resolution.id);
         await refreshFinance();
         return { ok: false, reason: 'save-failed' };
       }
     }
+    // Apparaatconflict: geen server die kan bevestigen; na lokaal opslaan de financiële waarden uit het record halen.
+    if (scope === FINC.DEVICE_SCOPE && !r.idempotent) await FIN.completeLocal(scope, section, r.record.resolution.id);
     delete st.finChoices[section];
     if (CHANNEL) CHANNEL.post('finance-changed', { section });
     await refreshFinance();
@@ -344,6 +359,7 @@
     const me = AUTH.session()?.user?.id || '';
     return `<p class="eyebrow">FINANCIËN · KEUZE NODIG</p><ul class="list" data-fin-list>${st.finance.map(({ record: r, paths }) => {
       const who = r.origin === 'tab' ? 'in een ander tabblad op dit apparaat' : r.origin === 'reintroduction' ? 'een oude kopie op dit apparaat' : (r.remoteUpdatedBy && r.remoteUpdatedBy !== me ? 'door je huisgenoot' : 'op een ander apparaat');
+      if (r.scope === FINC.LEGACY_SCOPE) return `<li class="list-item"><div class="item-main"><strong>${esc2(label(r.section))}</strong><small>Ouder conflict waarvan niet vaststaat bij welk account of huishouden het hoort. Het wordt bewaard maar niet automatisch verwerkt of verstuurd.</small></div></li>`;
       if (r.status !== 'open') return `<li class="list-item"><div class="item-main"><strong>${esc2(label(r.section))}</strong><small>Keuze bewaard · wordt pas afgerond als de server hem bevestigt. Dit onderdeel wordt tot dan niet anders verstuurd.</small></div></li>`;
       const chosen = st.finChoices[r.section] || {};
       return paths.map(p => `<li class="list-item" data-fin-row="${esc2(r.section)}"><div class="item-main"><strong>${esc2(label(r.section))} · ${esc2(p.path)}</strong><small>Ook gewijzigd ${esc2(who)}${r.remoteUpdatedAt ? ' (' + esc2(new Date(r.remoteUpdatedAt).toLocaleString('nl-NL')) + ')' : ''}. Eerder: ${esc2(short(p.base))}</small></div><button class="${chosen[p.path] === 'local' ? 'primary' : 'secondary'}" data-fin-choose="${esc2(r.section)}" data-fin-path="${esc2(p.path)}" data-fin-side="local">Deze waarde: ${esc2(short(p.local))}</button><button class="${chosen[p.path] === 'remote' ? 'primary' : 'secondary'}" data-fin-choose="${esc2(r.section)}" data-fin-path="${esc2(p.path)}" data-fin-side="remote">Andere waarde: ${esc2(short(p.remote))}</button></li>`).join('');
@@ -419,16 +435,19 @@
 
   // Financiële conflicten voor app.js (tabbladen) en voor tests: lijst, live weergave, expliciete keuze.
   window.SamenThuisFinanceSync = {
-    list: () => FIN ? FIN.list() : Promise.resolve([]),
-    view: async section => { const r = FIN && await FIN.get(section); return r ? FIN.view(r, data[section]) : []; },
+    scope: financeScope,
+    list: async () => { if (!FIN) return []; const scope = financeScope(); return [...(scope ? await FIN.list(scope) : []), ...(await FIN.list(FINC.DEVICE_SCOPE))]; },
+    view: async section => { const scope = financeScope(); const r = FIN && ((scope && await FIN.get(scope, section)) || await FIN.get(FINC.DEVICE_SCOPE, section)); return r ? FIN.view(r, data[section]) : []; },
     resolve: resolveFinance, refresh: refreshFinance,
     notify: () => { if (CHANNEL) CHANNEL.post('finance-changed', {}); return refreshFinance(); }
   };
   // Na een herstart: een keuze die al vastlag maar nog niet lokaal was opgeslagen (crash ertussen) alsnog toepassen.
+  // Alleen voor de huidige identiteit en apparaatconflicten, nooit voor een ander account of huishouden.
   (async () => {
     if (!FIN) return;
     try {
-      const fixes = FIN.interrupted(await FIN.list(), data);
+      const scope = financeScope();
+      const fixes = FIN.interrupted([...(scope ? await FIN.list(scope) : []), ...(await FIN.list(FINC.DEVICE_SCOPE))], data);
       if (fixes.length) {
         const previous = data;
         data = { ...data, ...Object.fromEntries(fixes.map(f => [f.section, f.value])) };
@@ -441,7 +460,7 @@
 
   window.SamenThuisAccountSync = {
     active: accountMode, sync: accountSync,
-    conflicts: () => [...st.conflicts, ...st.finance.filter(x => x.record.status === 'open').map(x => ({ section: x.record.section, fields: x.paths.map(p => p.path), financial: true }))],
+    conflicts: () => [...st.conflicts, ...st.finance.filter(x => x.record.status === 'open' && x.record.scope !== FINC.LEGACY_SCOPE).map(x => ({ section: x.record.section, fields: x.paths.map(p => p.path), financial: true }))],
     pending: pendingSections, inflight: () => META.listInflight(slot()), metaStatus: () => META.status(),
     uploadSportFile, signedSportFileUrl, deleteSportFile
   };
