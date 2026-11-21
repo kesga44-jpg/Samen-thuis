@@ -8,7 +8,8 @@
 | **`samenThuisDataV3|<account>|<huishouden>`**, `samenThuisDataV3|local` 🆕 | Huishoudgegevens per identiteit; lokaal profiel na koppeling | Per identiteit | Ja, met herkomst (`meta.exportIdentity`) |
 | **`samenThuisDataMigrationV1`** 🆕 | Migratiejournaal | Nee | Nee |
 | `samenThuisDataV1` | Oude versie, alleen migratiebron | Nee | — |
-| `samenThuisSyncV1` | Huishoudcode, laatste synctijd (legacy-route) | Nee | Nee |
+| `samenThuisSyncV1` | Huishoudcode, laatste synctijd (legacy-route en lokaal profiel; nooit door een account geschreven) | Nee | Nee |
+| `samenThuisHouseholdCodesV1` | Huishoudcode per `<account>|<huishouden>` (opdracht 7) | Nee | Nee |
 | `samenThuisSyncConflictV1`, `samenThuisRestoreHold` | Conflict- en herstelstatus | Nee | Nee |
 | `samenThuisPreV23Backup`, `samenThuisCorruptBackup`, `samenThuisPreRestoreBackup` | Veiligheidskopieën | Nee | — |
 | `samenThuisPersonalAuthV1` | Supabase-sessie (persoonlijk account) | Nee | Nee |

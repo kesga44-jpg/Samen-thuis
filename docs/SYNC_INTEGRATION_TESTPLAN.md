@@ -54,6 +54,8 @@ Grenzen: zonder accountsync blijft een opgelost tabbladconflict op `resolved-pen
 | Echte browser, echte opslag | `e2e/sync-tabs.mjs` (Chromium) | Echte tabbladen, storage-events, IndexedDB, Web Locks, BroadcastChannel, herladen |
 | Nagebootste opslag | `sync-tab-safety.test.js` | Nagebootste IndexedDB (incl. blocked, quota, time-out) en localStorage met vertraagde zichtbaarheid |
 | Nagebootste Supabase | `sync-tab-safety.test.js` (fakeCloud), `e2e/sync-tabs.mjs` (route-mock) | Versiecontrole, netwerkverlies vóór en na commit, gelijktijdige schrijvers |
+| Echte PostgreSQL (lokaal, echte migraties + RLS) | `migrations-pg.test.js` | Opdracht 7: voorwaardelijke `finance_config`-update met twee echte gelijktijdige sessies (precies één schrijver), ander account kan de rij niet zien of bijwerken; restrisico ABA vastgelegd |
+| Echte browser, nagebootste Supabase | `e2e/isolation-v7.mjs` | Opdracht 7: back-upmatrix, bewaarde gegevens/conflicten per identiteit, twee huishoudcodes op één apparaat met herstart, fail-closed eerste push, vertraagde `finance_config`-verzoeken rond een (in het geheugen gesimuleerde) sessiewissel, upload verzonden vóór een accountwissel, huishoudwissel tijdens een vertraagde ronde, localStorage-fallback zonder IndexedDB |
 | **Vereist echte Supabase** | Dit plan, § 5 | RLS, echte versieconflicten, Auth-tokens, rate-limits, latentie, twee echte accounts |
 | Niet getest | — | Safari/WebKit en Firefox (andere storage-event- en IndexedDB-implementaties), iOS-PWA, achtergrondbeperking (timer-throttling) op mobiel |
 
@@ -85,3 +87,13 @@ Grenzen: zonder accountsync blijft een opgelost tabbladconflict op `resolved-pen
 | I13 | Crash tijdens ronde | Tijdens een vertraagde ronde (throttling "Slow 3G") het tabblad of proces killen | Na herstarten: lokale gegevens intact, inflight zichtbaar, volgende ronde rondt af | Zoals I5 |
 
 **Afronding per run:** vergelijk de eindstand van alle browsers met de gedecodeerde cloudstand (via de app-export). Leg de resultaten vast in `docs/RC_VALIDATION.md` met datum, versies en browsers.
+
+### 5b. Aanvullende scenario's na opdracht 7 (echte Supabase-staging, twee echte accounts)
+
+1. Twee apparaten slaan tegelijk `finance_config` op vanaf dezelfde versie → precies één PATCH geeft één rij terug; de ander krijgt een conflictkeuze (via echte PostgREST).
+2. Upload (`put_household_state`) verzonden vlak vóór afmelden; antwoord pas daarna → de rij staat in het huishouden van het oude account met `updated_by` = oud account; de nieuwe identiteit past niets toe.
+3. Lezen van `personal_preferences` verzonden vlak vóór een wissel → het late antwoord wordt niet toegepast (DevTools: netwerkvertraging).
+4. Nieuw account in een leeg huishouden zonder ingevulde code → geen enkel `put_household_state`-verzoek.
+5. Bestaand account met de oude globale code → code pas overgenomen na ontsleutelen van bestaande rijen (`samenThuisHouseholdCodesV1.source = legacy-verified`).
+6. Back-up van huishouden A terugzetten in huishouden B (zelfde en ander account) → geweigerd, geen herstelvlag gezet.
+
