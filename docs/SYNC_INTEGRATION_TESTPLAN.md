@@ -56,6 +56,8 @@ Grenzen: zonder accountsync blijft een opgelost tabbladconflict op `resolved-pen
 | Nagebootste Supabase | `sync-tab-safety.test.js` (fakeCloud), `e2e/sync-tabs.mjs` (route-mock) | Versiecontrole, netwerkverlies vóór en na commit, gelijktijdige schrijvers |
 | Echte PostgreSQL (lokaal, echte migraties + RLS) | `migrations-pg.test.js` | Opdracht 7: voorwaardelijke `finance_config`-update met twee echte gelijktijdige sessies (precies één schrijver), ander account kan de rij niet zien of bijwerken; restrisico ABA vastgelegd |
 | Echte browser, nagebootste Supabase | `e2e/isolation-v7.mjs` | Opdracht 7: back-upmatrix, bewaarde gegevens/conflicten per identiteit, twee huishoudcodes op één apparaat met herstart, fail-closed eerste push, vertraagde `finance_config`-verzoeken rond een (in het geheugen gesimuleerde) sessiewissel, upload verzonden vóór een accountwissel, huishoudwissel tijdens een vertraagde ronde, localStorage-fallback zonder IndexedDB |
+| Nagebootste opslag en cloud | `isolation-m1.test.js` | M1: oud apparaatconflict zonder `localKey`, automatische migratie, onzekere herkomst, geblokkeerde upload, bewuste keuze en vrijgave |
+| Echte browser, nagebootste Supabase | `e2e/isolation-v7.mjs` (M1-a t/m M1-d, A1, A2, G1) | M1 met echte IndexedDB en automatische migratie bij het laden (het oude record is met een tijdstip in het verleden in IndexedDB gezet), allowlist bij herstellen en samenvoegen via de echte importpagina, lokale quarantaine van onbekende onderdelen, afscherming tegen opvragen met een parameter via de console |
 | **Vereist echte Supabase** | Dit plan, § 5 | RLS, echte versieconflicten, Auth-tokens, rate-limits, latentie, twee echte accounts |
 | Niet getest | — | Safari/WebKit en Firefox (andere storage-event- en IndexedDB-implementaties), iOS-PWA, achtergrondbeperking (timer-throttling) op mobiel |
 
@@ -96,4 +98,5 @@ Grenzen: zonder accountsync blijft een opgelost tabbladconflict op `resolved-pen
 4. Nieuw account in een leeg huishouden zonder ingevulde code → geen enkel `put_household_state`-verzoek.
 5. Bestaand account met de oude globale code → code pas overgenomen na ontsleutelen van bestaande rijen (`samenThuisHouseholdCodesV1.source = legacy-verified`).
 6. Back-up van huishouden A terugzetten in huishouden B (zelfde en ander account) → geweigerd, geen herstelvlag gezet.
+7. Apparaat met een oud financieel apparaatconflict (van vóór opdracht 7) en automatische migratie naar een account → conflict verschijnt bij dat account, onderdeel wordt niet verstuurd tot een keuze; bij een ander account op hetzelfde apparaat verschijnt alleen de waarschuwing zonder bedragen.
 
