@@ -1705,9 +1705,15 @@ async function importBackup(file) {
     }
     if (identitySwitching) return;
     if (storageProtected) { toast('Opslaan is geblokkeerd; back-up niet geladen. Maak ruimte vrij.'); return; }
+    // Alleen toegestane onderdelen herstellen. In een account is een onbekend onderdeel al geweigerd; in het lokale
+    // profiel gaan onbekende onderdelen eerst naar een aparte quarantaine (niet geladen, niet gesynchroniseerd).
+    const { known, unknown } = IDENTITY_STORE.splitBackup(JSON.parse(text));
+    let quarantined = null;
+    try { quarantined = IDENTITY_STORE.quarantineUnknown(localStorage, unknown, { source: file.name || 'back-up' }); }
+    catch { toast('Geen ruimte om onbekende onderdelen apart te bewaren; back-up niet geladen. Er is niets gewijzigd.'); return; }
     // Herstelvlag en kopie van de huidige gegevens worden vóór het overschrijven vastgelegd.
     try {
-      data = SamenThuisCore.restoreBackupText(localStorage, { ...recoveryOptions(), holdKey: RESTORE_HOLD_KEY }, text);
+      data = SamenThuisCore.restoreBackupText(localStorage, { ...recoveryOptions(), holdKey: RESTORE_HOLD_KEY }, JSON.stringify(known));
       if (data.meta) delete data.meta.exportIdentity;
     } catch {
       toast('Back-up laden mislukt; je huidige gegevens zijn ongewijzigd');
@@ -1715,7 +1721,8 @@ async function importBackup(file) {
     }
     save({ touch: false, sync: false });
     render();
-    toast(syncConfigured() ? 'Back-up hersteld · bij de volgende synchronisatie kies je zelf welke versie geldt' : 'Back-up hersteld');
+    toast((syncConfigured() ? 'Back-up hersteld · bij de volgende synchronisatie kies je zelf welke versie geldt' : 'Back-up hersteld')
+      + (quarantined ? ` · onbekende onderdelen (${Object.keys(unknown).join(', ')}) apart bewaard, niet geladen` : ''));
   } catch {
     toast('Dit bestand is geen geldige back-up');
   }
@@ -1725,6 +1732,7 @@ function backupRefusal(reason) {
   if (reason === 'locked') return identityLockMessage();
   if (reason === 'version') return 'Deze back-up komt uit een nieuwere of onbekende versie van de app en wordt niet teruggezet. Er is niets gewijzigd.';
   if (reason === 'schema') return 'Deze back-up heeft een onverwachte opbouw en wordt niet teruggezet. Er is niets gewijzigd.';
+  if (reason === 'unknown-sections') return 'Deze back-up bevat onderdelen die niet in een account mogen worden hersteld. Er is niets gewijzigd.';
   if (reason === 'unverified') return 'Van deze back-up staat niet vast bij welk account en huishouden hij hoort. Hij wordt daarom niet in dit account teruggezet. Zet hem terug zonder accountsync (lokaal profiel) en koppel daarna bewust. Er is niets gewijzigd.';
   return 'Deze back-up hoort bij een ander account of huishouden en wordt hier niet teruggezet. Meld je aan met dat account. Er is niets gewijzigd.';
 }
@@ -6298,12 +6306,25 @@ function fuelMate243(obj){
 }
 function sigImport246(x,kind=''){if(!x||typeof x!=='object')return String(x);if(kind==='cars')return plateImport243(x.plate||'')||String(x.id||'');if(kind==='fuelEntries')return [x.carId||'',String(x.date||'').slice(0,10),num243(x.odometer),num243(x.liters||x.volume),num243(x.total||x.totalCost)].join('|');if(kind==='planning')return [x.title||'',x.date||'',x.time||'',x.person||''].join('|').toLowerCase();return String(x.id||[x.title||x.name||'',x.date||x.due||'',x.category||''].join('|')).toLowerCase()}
 function mergeArray246(a,b,kind=''){return SamenThuisCore.mergeUnique(a,b,x=>sigImport246(x,kind))}
+// Opdracht 7 (vervolg): samenvoegen van een volledige back-up volgt dezelfde regels als herstellen: herkomst per
+// identiteit, schema/versie, strikte allowlist in een account, onbekende onderdelen lokaal in quarantaine, nooit
+// apparaatinstellingen, SportCoach of meta (herkomst) uit het bestand.
+function mergeBackupChecked(text){
+  if(DATA_LOCKED||identitySwitching)throw new Error(identityLockMessage());
+  const allowed=IDENTITY_STORE.backupAllowed(text,ACTIVE_IDENTITY);
+  if(!allowed.ok)throw new Error(backupRefusal(allowed.reason));
+  const { known, unknown }=IDENTITY_STORE.splitBackup(JSON.parse(text));
+  delete known.meta;
+  const quarantined=IDENTITY_STORE.quarantineUnknown(localStorage,unknown,{source:'samenvoegen'});
+  mergeBackup246(known);save();render();
+  toast('Back-up samengevoegd · bestaande gegevens behouden'+(quarantined?` · onbekende onderdelen (${Object.keys(unknown).join(', ')}) apart bewaard, niet geladen`:''));
+}
 function mergeBackup246(raw){const incoming=typeof migrateData==='function'?migrateData(raw):raw;if(!incoming||typeof incoming!=='object')throw new Error('Ongeldige Samen Thuis back-up');const keys=['planning','meals','groceries','chores','stock','trips','ideas','home','freezer','cars','fuelEntries'];keys.forEach(k=>{if(Array.isArray(incoming[k]))data[k]=mergeArray246(data[k],incoming[k],k)});Object.entries(incoming).forEach(([k,v])=>{if(keys.includes(k)||k==='sportCoach'||v==null)return;if(v&&typeof v==='object'&&!Array.isArray(v)){data[k]={...v,...((data[k]&&typeof data[k]==='object'&&!Array.isArray(data[k]))?data[k]:{})}}else if(data[k]===undefined||data[k]===null||data[k]==='')data[k]=v})}
 async function runImport243(){
  if(!importFile243)return toast('Kies eerst een bestand');
  try{
   const ext=importFile243.name.split('.').pop().toLowerCase(), text=(ext==='xlsx'||ext==='xls')?'':await importFile243.text();
-  if(importTarget243==='backup'){if(ext!=='json')throw new Error('Voor een volledige back-up is JSON nodig');mergeBackup246(JSON.parse(text));save();render();toast('Back-up samengevoegd · bestaande gegevens behouden');return}
+  if(importTarget243==='backup'){if(ext!=='json')throw new Error('Voor een volledige back-up is JSON nodig');mergeBackupChecked(text);return}
   if(importTarget243==='budget'){const o=JSON.parse(text);data.budgetV23={...o,...(data.budgetV23||{})};save();render();toast('Budget samengevoegd · bestaande waarden behouden');return}
   if(importTarget243==='auto'){
    if(ext==='json'){fuelMate243(JSON.parse(text))}

@@ -366,6 +366,10 @@
       requireScope(scope, { identity: true });
       let own = await list(scope);
       const fixes = interrupted(own, data);
+      // M1: een open apparaatconflict zonder vaststaand profiel (geen localKey) blokkeert uit voorzorg de upload van dat
+      // onderdeel in elke accountronde, tot het aan de juiste identiteit is gekoppeld of in deze identiteit bewust is
+      // vrijgegeven. Er wordt nooit een waarde gekozen.
+      const guards = (await list(DEVICE_SCOPE)).filter(r => r.status === 'open' && !r.localKey && !(Array.isArray(r.releasedFor) && r.releasedFor.includes(scope)));
       for (const ri of await findReintroductions({ scope, data, baseValues: prevBaseValues })) {
         if (own.some(r => r.section === ri.section)) continue;
         await open({ scope, section: ri.section, origin: 'reintroduction', base: prevBaseValues[ri.section], local: data[ri.section], remote: prevBaseValues[ri.section],
@@ -373,8 +377,8 @@
       }
       own = await list(scope);
       const foreign = await foreignSections({ scope, data });
-      const frozen = [...new Set([...frozenSections(own), ...foreign])];
-      return { scope, records: own, frozen, fixes, foreign, deviceOpen: [] };
+      const frozen = [...new Set([...frozenSections(own), ...foreign, ...guards.map(r => r.section)])];
+      return { scope, records: own, frozen, fixes, foreign, deviceOpen: [], guarded: guards.map(r => r.section) };
     }
     async function afterRound({ scope, raw, records, snapshot, prevBase = {}, prevBaseValues = {}, cloud, householdId, encrypt, classify, actor }) {
       requireScope(scope, { identity: true });
@@ -435,7 +439,51 @@
       return moved;
     }
 
-    const api = { adoptDevice, list, all, get, open, view, resolve, completeLocal, rollback, interrupted, frozenSections, foreignSections, findReintroductions, processRound, markConfirmed, reopen, finalize, beforeRound, afterRound, afterCommit, migrate,
+    // M1: oude apparaatconflicten (zonder localKey) aan het juiste profiel koppelen. ownerOf(record) komt van
+    // identity-store-core.js legacyRecordOwner. Lokaal profiel → localKey vastleggen; aantoonbaar gekoppeld account →
+    // record naar die identiteit (eerst nieuw record, daarna pas het oude weg; bestaat daar al een record, dan blijft
+    // het apparaatrecord staan en blijft het blokkeren); onbekend → markeren, blijft blokkeren. Nooit een waarde kiezen.
+    async function classifyUntaggedDevice(ownerOf) {
+      const out = { local: [], adopted: [], unknown: [] };
+      for (const r of await list(DEVICE_SCOPE)) {
+        if (r.localKey || r.status !== 'open' || r.ownerCheckedAt) continue;
+        let owner;
+        try { owner = ownerOf(r) || { kind: 'unknown', reason: 'geen-uitkomst' }; } catch (_) { owner = { kind: 'unknown', reason: 'fout' }; }
+        if (owner.kind === 'local' && typeof owner.key === 'string' && owner.key) {
+          const done = await store.updateRecord(r.key, cur => (cur && cur.scope === DEVICE_SCOPE && !cur.localKey && cur.rev === r.rev ? { ...cur, localKey: owner.key, ownerCheckedAt: now() } : undefined));
+          if (done) { out.local.push(r.section); await audit(auditEntry({ hashValue, action: 'owner-local', record: done, note: owner.key, now })); }
+          continue;
+        }
+        if (owner.kind === 'account' && isIdentityScope(scopeFor(owner.accountId, owner.householdId))) {
+          const scope = scopeFor(owner.accountId, owner.householdId), key = recordKey(scope, r.section);
+          const placed = await store.updateRecord(key, cur => (cur ? undefined : { ...r, key, slot: scope, scope, localKey: null, householdId: owner.householdId, adoptedFrom: r.key, adoptedAt: now(), adoptedBy: 'identiteitsmigratie' }));
+          if (placed) {
+            await store.deleteRecord(r.key, cur => cur && cur.scope === DEVICE_SCOPE && cur.rev === r.rev);
+            await audit(auditEntry({ hashValue, action: 'adopted', record: placed, note: 'identiteitsmigratie van ' + r.key + ' naar ' + key, now }));
+            out.adopted.push(r.section);
+            continue;
+          }
+          owner = { kind: 'unknown', reason: 'doel-heeft-al-conflict' };
+        }
+        const marked = await store.updateRecord(r.key, cur => (cur && cur.scope === DEVICE_SCOPE && !cur.localKey && cur.rev === r.rev ? { ...cur, ownerUnknown: true, ownerReason: owner.reason || 'onbekend', ownerCheckedAt: now() } : undefined));
+        if (marked) { out.unknown.push(r.section); await audit(auditEntry({ hashValue, action: 'owner-unknown', record: marked, note: owner.reason || '', now })); }
+      }
+      return out;
+    }
+    // Bewuste vrijgave door de gebruiker in één identiteit: dit oude conflict hoort niet bij dit account + huishouden.
+    // Er wordt geen waarde gekozen of verstuurd; de eigen gegevens blijven zoals ze zijn. Het record blijft bewaard en
+    // blijft blokkeren voor elke andere identiteit.
+    async function releaseUnknown({ scope, section, actor = null }) {
+      requireScope(scope, { identity: true });
+      const key = recordKey(DEVICE_SCOPE, section);
+      const after = await store.updateRecord(key, cur => (cur && cur.scope === DEVICE_SCOPE && !cur.localKey && cur.status === 'open'
+        ? { ...cur, releasedFor: [...new Set([...(Array.isArray(cur.releasedFor) ? cur.releasedFor : []), scope])], rev: cur.rev + 1, updatedAt: now() } : undefined));
+      if (!after) return { ok: false, reason: 'not-found' };
+      await audit(auditEntry({ hashValue, action: 'released', record: { ...after, scope }, actor, note: 'vrijgegeven voor ' + scope, now }));
+      return { ok: true, record: after };
+    }
+
+    const api = { classifyUntaggedDevice, releaseUnknown, adoptDevice, list, all, get, open, view, resolve, completeLocal, rollback, interrupted, frozenSections, foreignSections, findReintroductions, processRound, markConfirmed, reopen, finalize, beforeRound, afterRound, afterCommit, migrate,
       audit: async scope => { await migrate(); const a = await store.listRecords('finance-audit'); return scope ? a.filter(x => x.scope === scope) : a; } };
     // Gebonden aan één scope: dezelfde methodes zonder scope-parameter (voor de aanroepers en tests).
     api.scoped = scope => ({

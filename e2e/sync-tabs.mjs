@@ -110,7 +110,7 @@ try {
     await a.page.waitForTimeout(300);
     // Opdracht 7: tabbladconflicten staan per identiteit; het oude apparaatbrede slot blijft leeg.
     const log = await a.page.evaluate(() => SamenThuisTabConflicts.list());
-    check('tabbladconflict per identiteit opgeslagen, niet apparaatbreed', (await a.page.evaluate(async () => (await SamenThuisSyncMeta.shared().listTabConflicts()).length)) === 0);
+    check('tabbladconflict per identiteit opgeslagen, niet apparaatbreed', (await a.page.evaluate(async () => (await SamenThuisSyncMeta.shared().listTabConflicts({ scope: 'samenThuisDataV3|ander-account|ander-huishouden' })).length)) === 0 && log.length === 1);
     const rec = log.find(c => c.path === 'groceries[e2e-Kaas].title');
     check('zelfde veld in twee tabbladen: één conflictrecord met beide waarden', log.length === 1 && rec && [rec.kept, rec.other].sort().join('|') === 'Geitenkaas|Oude kaas' && rec.financial === false, JSON.stringify(log.map(c => [c.path, c.kept, c.other, c.count])));
     const restored = await a.page.evaluate(async key => { const ok = await SamenThuisTabConflicts.restore(key, 'other'); return { ok, title: data.groceries.find(g => g.id === 'e2e-Kaas').title }; }, rec && rec.key);
@@ -147,12 +147,12 @@ try {
     const ctx = await newContext({ legacyBase: { 'x:y': { groceries: [{ id: 'g1', title: 'Tomaten' }] } } });
     const a = await open(ctx);
     const before = await a.page.evaluate(() => localStorage.getItem('samenThuisDataV2'));
-    const moved = await a.page.evaluate(async () => (await SamenThuisSyncMeta.shared().loadBaseValues('x:y')).groceries?.[0]?.title);
+    const moved = await a.page.evaluate(async () => (await SamenThuisSyncMeta.createSyncMetaStore({ indexedDB, storage: localStorage, hashValue: SamenThuisHouseholdSync.hashValue }).loadBaseValues('x:y')).groceries?.[0]?.title);
     const legacy = await a.page.evaluate(() => localStorage.getItem('samenThuisAccountSyncBaseValuesV1'));
     check('oude basiswaarden overgezet naar IndexedDB en oude sleutel opgeruimd', moved === 'Tomaten' && legacy === null, `${moved} / ${legacy}`);
     await a.page.reload({ waitUntil: 'load' }); await a.page.waitForTimeout(500);
     const after = await a.page.evaluate(() => localStorage.getItem('samenThuisDataV2'));
-    const again = await a.page.evaluate(async () => (await SamenThuisSyncMeta.shared().loadBaseValues('x:y')).groceries?.[0]?.title);
+    const again = await a.page.evaluate(async () => (await SamenThuisSyncMeta.createSyncMetaStore({ indexedDB, storage: localStorage, hashValue: SamenThuisHouseholdSync.hashValue }).loadBaseValues('x:y')).groceries?.[0]?.title);
     check('na herladen: applicatiegegevens ongewijzigd, basis nog aanwezig', JSON.parse(after).groceries.length === JSON.parse(before).groceries.length && again === 'Tomaten');
     await ctx.close();
   }

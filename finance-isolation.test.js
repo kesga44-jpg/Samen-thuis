@@ -194,10 +194,11 @@ test('S8. oude records zonder scope worden veilig gemigreerd of in quarantaine g
   const guards = await meta.listRecords('finance-guard');
   assert.equal(guards.length, 1); assert.equal(guards[0].scope, FC.LEGACY_SCOPE, 'oude guard inert bewaard, niet verwijderd');
   assert.ok((await core.audit()).filter(a => a.action === 'migrated').length === 3);
-  // Quarantaine wordt in geen enkele ronde verwerkt. Opdracht 7: een apparaatconflict hoort bij het lokale profiel en
-  // heeft geen invloed op (en is niet zichtbaar in) de ronde van een account; het gaat alleen mee bij expliciete koppeling.
+  // Quarantaine wordt in geen enkele ronde verwerkt. M1 (opdracht 7, vervolg): een oud apparaatconflict zonder vaststaand
+  // profiel (geen localKey) blokkeert uit voorzorg in elke accountronde de upload van dat onderdeel; het is daar niet
+  // zichtbaar en er wordt niets toegepast (geen fixes).
   const pre = await core.scoped(`${B}:${H2}`).beforeRound({ data: { budget: { pct: 60 }, budget19: { pct: 60 } } });
-  assert.deepEqual(pre.records, []); assert.deepEqual(pre.frozen, []); assert.deepEqual(pre.fixes, []);
+  assert.deepEqual(pre.records, []); assert.deepEqual(pre.frozen, ['budget19']); assert.deepEqual(pre.fixes, []);
 });
 
 test('S8b. migratie overschrijft nooit een nieuwer record met dezelfde doelkey (oud record apart in quarantaine)', async () => {

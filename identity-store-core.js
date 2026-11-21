@@ -184,9 +184,46 @@
       for (let i = 0; i < storage.length; i++) {
         const k = storage.key(i);
         if (k && k.startsWith(`${V3}|local-archive|`)) out.push({ key: k, status: 'archief', target: typeof archives[k] === 'string' ? archives[k] : null });
+        else if (k && k.startsWith(`${V3}|quarantine|`)) out.push({ key: k, status: 'quarantaine', reason: 'onbekende-onderdelen', target: null });
       }
     } catch (_) {}
     return out;
+  }
+
+  // ---------- Eigenaar van een oud financieel apparaatconflict (M1) ----------
+  // Een apparaatconflict zonder localKey (van vóór opdracht 7) ontstond in het lokale profiel dat er op dat moment was.
+  // Welk profiel dat was, volgt uit het migratiejournaal en de archieven, vergeleken met het tijdstip van het conflict
+  // (dezelfde apparaatklok). Uitkomst:
+  //   { kind: 'local', key }                       het profiel is nog steeds het lokale profiel met die sleutel;
+  //   { kind: 'account', key, accountId, householdId } de gegevens zijn aantoonbaar aan die identiteit gekoppeld;
+  //   { kind: 'unknown', reason }                  niet betrouwbaar vast te stellen (quarantaine, onbekend archief,
+  //                                                migratie bezig, geen of ongeldig tijdstip).
+  function parseAccountKey(key) {
+    const parts = String(key || '').split('|');
+    return parts.length === 3 && parts[0] === V3 && ID.test(parts[1]) && ID.test(parts[2]) ? { accountId: parts[1], householdId: parts[2] } : null;
+  }
+  function legacyRecordOwner(storage, detectedAt) {
+    const t = Date.parse(detectedAt || '');
+    if (!Number.isFinite(t)) return { kind: 'unknown', reason: 'geen-tijdstip' };
+    const j = journal(storage);
+    const toOwner = target => { const p = parseAccountKey(target); return p ? { kind: 'account', key: target, ...p } : { kind: 'unknown', reason: 'doel-onbekend' }; };
+    if (!j.v2 || j.v2 === 'local') return { kind: 'local', key: LEGACY_KEY };
+    if (!['bound', 'quarantined'].includes(j.v2)) return { kind: 'unknown', reason: 'migratie-niet-afgerond' };
+    const at = Date.parse(j.at || '');
+    if (!Number.isFinite(at)) return { kind: 'unknown', reason: 'migratietijdstip-onbekend' };
+    if (t < at) return j.v2 === 'bound' ? toOwner(j.target) : { kind: 'unknown', reason: 'quarantaine' };
+    // Ontstaan in samenThuisDataV3|local. Is dat profiel daarna gearchiveerd, dan hoort het conflict bij dat archief.
+    const archives = j.archives || {};
+    let first = null;
+    try {
+      for (let i = 0; i < storage.length; i++) {
+        const k = storage.key(i);
+        const m = k && k.startsWith(`${V3}|local-archive|`) ? Number(k.slice(`${V3}|local-archive|`.length)) : NaN;
+        if (Number.isFinite(m) && m > t && (!first || m < first.ms)) first = { ms: m, key: k };
+      }
+    } catch (_) { return { kind: 'unknown', reason: 'opslag-onleesbaar' }; }
+    if (first) return typeof archives[first.key] === 'string' ? toOwner(archives[first.key]) : { kind: 'unknown', reason: 'archief-zonder-doel' };
+    return { kind: 'local', key: LOCAL_V3 };
   }
 
   // Bewaarde gegevens die de actieve identiteit mag zien (opdracht 7):
@@ -216,6 +253,37 @@
   const LIST_SECTIONS = Object.freeze(['planning', 'calendars', 'excludedCalendars', 'meals', 'groceries', 'freezer', 'chores', 'stock', 'ideas', 'home', 'tripFolders', 'tripSections', 'trips', 'fuelEntries', 'cars']);
   const OBJECT_SECTIONS = Object.freeze(['dailyAnswers', 'budget', 'budget19', 'budget219', 'budgetV22', 'budgetV23']);
   const BACKUP_RESERVED = Object.freeze(['__proto__', 'constructor', 'prototype', 'legacy_full']);
+  // Strikte allowlist (opdracht 7, vervolg): alleen deze onderdelen mogen via een back-up in een account terechtkomen.
+  // Afgeleid uit de onderdelen die de app zelf leest en schrijft. Apparaatvelden en meta worden apart behandeld
+  // (nooit overgenomen). Een back-up met een ander onderdeel wordt in een account in zijn geheel geweigerd.
+  const ACCOUNT_SECTIONS = Object.freeze([
+    'planning', 'calendars', 'excludedCalendars', 'meals', 'groceries', 'freezer', 'chores', 'stock', 'ideas', 'home',
+    'tripFolders', 'tripSections', 'trips', 'tasks', 'dailyAnswers',
+    'budget', 'budget19', 'budget219', 'budgetV22', 'budgetV23', 'fuelEntries', 'cars',
+    'nutrition', 'challengeDataV26',
+    'offers25', 'offerSearchCache25', 'offerArchive25', 'offerCategoryCache25', 'offerCurrentQuery25', 'offerScheduled25', 'favoriteOffers25',
+    'priceReferences', 'priceReferenceUpdatedAt', 'priceReferenceSource'
+  ]);
+  const NON_DATA_FIELDS = Object.freeze(['meta', ...DEVICE_FIELDS]);
+  const unknownSections = value => Object.keys(isPlain(value) ? value : {}).filter(k => !ACCOUNT_SECTIONS.includes(k) && !NON_DATA_FIELDS.includes(k));
+  // Splitst een back-up in toegestane gegevens (zonder apparaatvelden) en onbekende onderdelen.
+  function splitBackup(value) {
+    const known = {}, unknown = {};
+    for (const [k, v] of Object.entries(isPlain(value) ? value : {})) {
+      if (DEVICE_FIELDS.includes(k)) continue;
+      if (k === 'meta' || ACCOUNT_SECTIONS.includes(k)) known[k] = v; else unknown[k] = v;
+    }
+    return { known, unknown };
+  }
+  // Onbekende onderdelen uit een back-up in het lokale profiel: apart bewaard (quarantaine), nooit geladen of
+  // gesynchroniseerd; alleen te downloaden in de lokale herstelmodus.
+  const RESTORE_QUARANTINE_PREFIX = `${V3}|quarantine|`;
+  function quarantineUnknown(storage, unknown, { source = 'back-up', now = () => new Date().toISOString() } = {}) {
+    if (!unknown || !Object.keys(unknown).length) return null;
+    const key = `${RESTORE_QUARANTINE_PREFIX}${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    storage.setItem(key, JSON.stringify({ meta: { quarantinedAt: now(), source }, ...unknown }));
+    return key;
+  }
   const isPlain = v => !!v && typeof v === 'object' && !Array.isArray(v);
   function validateBackup(value) {
     if (!isPlain(value)) return { ok: false, reason: 'schema', detail: 'geen object' };
@@ -242,14 +310,19 @@
     const valid = validateBackup(value);
     if (!valid.ok) return valid;
     const origin = isPlain(value.meta) && isPlain(value.meta.exportIdentity) ? value.meta.exportIdentity : null;
+    let result;
     if (origin && origin.mode === 'account') {
-      return identity.mode === 'account' && origin.accountId === identity.accountId && origin.householdId === identity.householdId
+      result = identity.mode === 'account' && origin.accountId === identity.accountId && origin.householdId === identity.householdId
         ? { ok: true, origin: 'account' } : { ok: false, reason: 'other-identity' };
-    }
-    if (origin && origin.mode === 'retained' && typeof origin.target === 'string' && origin.target) {
-      return origin.target === identity.key ? { ok: true, origin: 'retained' } : { ok: false, reason: 'other-identity' };
-    }
-    return identity.mode === 'local' ? { ok: true, origin: 'unverified' } : { ok: false, reason: 'unverified' };
+    } else if (origin && origin.mode === 'retained' && typeof origin.target === 'string' && origin.target) {
+      result = origin.target === identity.key ? { ok: true, origin: 'retained' } : { ok: false, reason: 'other-identity' };
+    } else result = identity.mode === 'local' ? { ok: true, origin: 'unverified' } : { ok: false, reason: 'unverified' };
+    if (!result.ok) return result;
+    // Strikte allowlist: in een account wordt een back-up met een onbekend onderdeel geweigerd (niets gewijzigd). In het
+    // lokale profiel gaan onbekende onderdelen naar een aparte quarantaine (zie splitBackup/quarantineUnknown).
+    const unknown = unknownSections(value);
+    if (unknown.length && identity.mode === 'account') return { ok: false, reason: 'unknown-sections', sections: unknown };
+    return { ...result, unknown };
   }
 
   // ---------- Huishoudcode per account + huishouden (opdracht 7) ----------
@@ -299,6 +372,6 @@
     return code.length >= MIN_CODE ? code : null;
   }
 
-  return { backupAllowed, validateBackup, retainedFor, readCode, setCode, markCodeVerified, codeTrustedForEmpty, legacyCodeCandidate, CODES_KEY, SUPPORTED_VERSION, LEGACY_KEY, V1_KEY, V3, LOCAL_V3, CFG_KEY, AUTH_KEY, JOURNAL_KEY, DEVICE_FIELDS, accountKey, resolve, keysFor, readConfig, setAccount,
+  return { legacyRecordOwner, ACCOUNT_SECTIONS, unknownSections, splitBackup, quarantineUnknown, backupAllowed, validateBackup, retainedFor, readCode, setCode, markCodeVerified, codeTrustedForEmpty, legacyCodeCandidate, CODES_KEY, SUPPORTED_VERSION, LEGACY_KEY, V1_KEY, V3, LOCAL_V3, CFG_KEY, AUTH_KEY, JOURNAL_KEY, DEVICE_FIELDS, accountKey, resolve, keysFor, readConfig, setAccount,
     migrateLegacy, bindLocalToAccount, retained, readDeviceFields, withoutDeviceFields, hashValue, journal };
 });

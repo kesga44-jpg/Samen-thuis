@@ -125,6 +125,18 @@ async function enterCode(page, code) {
   await page.waitForTimeout(300); await waitIdle(page);
 }
 const importText = (page, text) => page.evaluate(t => importBackup(new File([t], 'b.json', { type: 'application/json' })), text).then(() => page.waitForTimeout(300));
+// Samenvoegen van een volledige back-up via de echte importpagina (Importeren → Volledige back-up).
+async function mergeViaUi(page, text) {
+  await page.evaluate(() => { current = 'imports243'; render(); });
+  await page.evaluate(() => { const b = document.createElement('button'); b.dataset.import243Jump = 'backup'; document.body.appendChild(b); b.click(); b.remove(); });
+  const input = await page.waitForSelector('[data-import243-file]', { state: 'attached', timeout: 5000 });
+  await input.setInputFiles({ name: 'b.json', mimeType: 'application/json', buffer: Buffer.from(text) });
+  await page.waitForTimeout(200);
+  await page.click('[data-import243-run]'); await page.waitForTimeout(400);
+  const t = await page.evaluate(() => document.querySelector('#toast')?.textContent || '');
+  await page.evaluate(() => { current = 'today'; render(); });
+  return t;
+}
 const toastText = page => page.evaluate(() => document.querySelector('#toast')?.textContent || '');
 const decryptWith = (page, payload, code) => page.evaluate(async ({ p, c }) => { try { return await decryptData(p, c); } catch { return null; } }, { p: payload, c: code });
 
@@ -190,6 +202,21 @@ try {
   await importText(page, JSON.stringify({ meta: { version: 2, exportIdentity: { mode: 'account', accountId: B, householdId: H2 } }, groceries: [{ id: 'own', title: 'Eigen back-up B', category: 'Overig', done: false }], settings: { weatherPlace: 'Maastricht' }, sportCoach: { library: [] } }));
   const own = await page.evaluate(() => ({ t: data.groceries.map(g => g.title), settings: data.settings, stored: JSON.parse(localStorage.getItem('samenThuisDataV2')).settings, sport: JSON.parse(localStorage.getItem('samenThuisDataV2')).sportCoach }));
   check('C7. eigen back-up van B hersteld; apparaatinstellingen en SportCoach niet overgenomen', JSON.stringify(own.t) === '["Eigen back-up B"]' && own.settings?.weatherPlace === 'Utrecht' && own.stored?.weatherPlace === 'Utrecht' && own.sport?.library?.[0]?.title === 'Hardlopen', JSON.stringify(own));
+
+  // ---- Vervolg: strikte allowlist (herstellen én samenvoegen) en afgeschermde opslag via de console ----
+  const beforeAl = await page.evaluate(() => ({ g: JSON.stringify(data.groceries), s: JSON.stringify(data.settings) }));
+  await importText(page, JSON.stringify({ meta: { version: 2, exportIdentity: { mode: 'account', accountId: B, householdId: H2 } }, groceries: [{ id: 'z', title: 'Met onbekend onderdeel', category: 'Overig', done: false }], evilSection: { x: 'A-data' } }));
+  const tAl = await toastText(page);
+  const mergeA = await mergeViaUi(page, JSON.stringify({ meta: { version: 2, exportIdentity: { mode: 'account', accountId: A, householdId: H1 } }, groceries: [{ id: 'm', title: 'Samengevoegd van A', category: 'Overig', done: false }] }));
+  const mergeU = await mergeViaUi(page, JSON.stringify({ meta: { version: 2, exportIdentity: { mode: 'account', accountId: B, householdId: H2 } }, groceries: [], evilSection: {} }));
+  const mergeOld = await mergeViaUi(page, JSON.stringify({ groceries: [{ id: 'o', title: 'Oude back-up', category: 'Overig', done: false }] }));
+  const afterAl = await page.evaluate(() => ({ g: JSON.stringify(data.groceries), s: JSON.stringify(data.settings), q: Object.keys(localStorage).filter(k => k.startsWith('samenThuisDataV3|quarantine|')).length }));
+  check('A1. allowlist in account: herstel en samenvoegen met onbekend onderdeel, van A of zonder herkomst geweigerd; niets gewijzigd', afterAl.g === beforeAl.g && afterAl.s === beforeAl.s && afterAl.q === 0 && /onderdelen/.test(tAl) && /ander account/.test(mergeA) && /onderdelen/.test(mergeU) && /niet vast/.test(mergeOld), JSON.stringify({ tAl, mergeA, mergeU, mergeOld }));
+  const consoleProbe = await page.evaluate(async ({ A, H1, keyA }) => {
+    const m = SamenThuisSyncMeta.shared();
+    return { tab: (await m.listTabConflicts({ scope: keyA })).length, tabRecords: (await m.listRecords('tab')).length, base: Object.keys(await m.loadBaseValues(`${A}:${H1}`, {})).length, fin: (await SamenThuisFinanceConflicts.shared().list(`${A}:${H1}`)).length };
+  }, { A, H1, keyA: `samenThuisDataV3|${A}|${H1}` });
+  check('G1. console (gesimuleerde aanvaller in de pagina): conflicten, basiswaarden en financiële records van A niet op te vragen met een parameter', consoleProbe.tab === 0 && consoleProbe.tabRecords === 0 && consoleProbe.base === 0 && consoleProbe.fin === 0, JSON.stringify(consoleProbe));
 
   // ---- Twee huishoudens met eigen codes op één apparaat; terug naar A en browserherstart ----
   await switchTo(page, A); await sync(page);
@@ -289,6 +316,51 @@ try {
   MEMBER[A] = H1;
   await other.close();
   await ctx.close();
+
+  // ======== Apparaat 3: M1 — oude financiële apparaatconflicten en automatische migratie (echte IndexedDB) ========
+  const ctx3 = await device();
+  let p3 = await openPage(ctx3);
+  await p3.evaluate(({ A, H1 }) => {
+    localStorage.clear();
+    localStorage.setItem('samenThuisDataV2', JSON.stringify({ meta: { version: 2, updatedAt: new Date().toISOString() }, groceries: [{ id: 'm1', title: 'M1-melk', category: 'Overig', done: false }], budgetV23: { pct: 61 }, sportCoach: { library: [{ id: 'sc', title: 'Hardlopen' }] } }));
+    localStorage.setItem('samenThuisSyncV1', JSON.stringify({ householdCode: 'code-van-huishouden-1' }));
+    // Accountsync stond aan voor A in H1 (één aantoonbare identiteit): automatische migratie bij het laden.
+    localStorage.setItem('samenThuisAccountSyncV1', JSON.stringify({ enabled: true, householdId: H1, bases: { [`${A}:${H1}`]: { base: {} } } }));
+  }, { A, H1 });
+  await p3.reload({ waitUntil: 'load' }); await p3.waitForTimeout(800);
+  // Oud record zoals opdracht 5 het schreef (device, geen localKey). Het tijdstip ligt vóór de koppeling (journaal 'at'):
+  // nagebootst door het record achteraf met een tijdstip van gisteren in de echte IndexedDB te zetten.
+  const oldRec = (section, detectedAt) => ({ key: `fin|device|${section}`, slot: 'device', scope: 'device', kind: 'finance', section, origin: 'tab', status: 'open', rev: 1, base: { pct: 50 }, local: { pct: 61 }, remote: { pct: 39 }, forcedPaths: ['pct'], localUser: null, householdId: null, detectedAt, updatedAt: detectedAt, resolution: null });
+  await p3.evaluate(r => SamenThuisSyncMeta.shared().putRecord(r), oldRec('budgetV23', new Date(Date.now() - 864e5).toISOString()));
+  const putsM1 = ctl.puts.length;
+  await switchTo(p3, A);
+  const roundM1 = await sync(p3);
+  const m1 = await p3.evaluate(async () => ({ id: SamenThuisIdentity.current().key, journal: JSON.parse(localStorage.getItem('samenThuisDataMigrationV1')).v2, fin: (await SamenThuisFinanceSync.list()).map(r => [r.scope, r.section, r.status, r.local?.pct]), card: !!document.querySelector('[data-fin-guard]') }));
+  check('M1-a. automatische migratie: oud conflict gekoppeld aan A (behouden, open, waarden intact); budget niet verstuurd', m1.journal === 'bound' && JSON.stringify(m1.fin) === JSON.stringify([[`${A}:${H1}`, 'budgetV23', 'open', 61]]) && !ctl.puts.slice(putsM1).some(p => p.section === 'budgetV23') && ['ok', 'conflict', 'partial'].includes(roundM1?.status), JSON.stringify({ m1, roundM1, puts: ctl.puts.slice(putsM1) }));
+  // Onbekende herkomst (geen tijdstip): blokkeert elke identiteit; B ziet geen waarden en kan bewust vrijgeven.
+  await p3.evaluate(r => SamenThuisSyncMeta.shared().putRecord(r), oldRec('fuelEntries', ''));
+  await switchTo(p3, B, { enable: { uid: B, hid: H2 } });
+  await enterCode(p3, CODE2);
+  await p3.evaluate(() => { data.fuelEntries = [{ id: 'f-b', total: 70 }]; save({ sync: false }); });
+  const putsU = ctl.puts.length;
+  await sync(p3);
+  await p3.evaluate(() => { location.hash = '#/settings/synchronisatie'; }); await p3.waitForTimeout(500);
+  const guardUi = await p3.evaluate(() => ({ row: document.querySelector('[data-fin-guard]')?.textContent || '', btn: !!document.querySelector('[data-fin-release="fuelEntries"]'), budgetForB: !!document.querySelector('[data-fin-row="budgetV23"]') }));
+  check('M1-b. onbekende herkomst: upload van B geblokkeerd, waarschuwing zonder bedragen, conflict van A niet zichtbaar voor B', !ctl.puts.slice(putsU).some(p => p.section === 'fuelEntries') && guardUi.btn && !/61|39/.test(guardUi.row) && !guardUi.budgetForB, JSON.stringify({ guardUi, puts: ctl.puts.slice(putsU) }));
+  await p3.click('[data-fin-release="fuelEntries"]'); await p3.waitForTimeout(500);
+  const putsR = ctl.puts.length;
+  await sync(p3);
+  const kept = await p3.evaluate(async () => (await SamenThuisFinanceConflicts.shared().list('device')).map(r => [r.section, r.status, r.local?.pct, r.releasedFor?.length]));
+  check('M1-c. bewuste vrijgave door B: daarna eigen waarde van B verstuurd (geen waarde uit het conflict gekozen); conflict bewaard', ctl.puts.slice(putsR).some(p => p.section === 'fuelEntries' && p.user === B) && JSON.stringify(kept) === JSON.stringify([['fuelEntries', 'open', 61, 1]]), JSON.stringify({ kept, puts: ctl.puts.slice(putsR) }));
+  await switchTo(p3, A); await sync(p3);
+  const aStill = await p3.evaluate(async () => ({ guard: !!(await SamenThuisFinanceSync.list()).length }));
+  check('M1-d. vrijgave geldt alleen voor B: A blijft geblokkeerd (eigen gekoppeld conflict + niet vrijgegeven oud conflict)', !ctl.puts.slice(putsR).some(p => p.user === A && ['budgetV23', 'fuelEntries'].includes(p.section)) && aStill.guard);
+  // Lokaal profiel: onbekende onderdelen uit een back-up gaan naar quarantaine, niet naar de dataset.
+  await switchTo(p3, null);
+  await importText(p3, JSON.stringify({ meta: { version: 2 }, groceries: [{ id: 'l', title: 'Lokaal hersteld', category: 'Overig', done: false }], evilSection: { geheim: 1 }, settings: { weatherPlace: 'Maastricht' } }));
+  const local = await p3.evaluate(() => ({ t: data.groceries.map(g => g.title), evil: 'evilSection' in data, q: Object.keys(localStorage).filter(k => k.startsWith('samenThuisDataV3|quarantine|')).map(k => JSON.parse(localStorage.getItem(k)).evilSection), w: data.settings?.weatherPlace || null }));
+  check('A2. lokaal profiel: bekende onderdelen hersteld, onbekend onderdeel apart in quarantaine (niet geladen), instellingen niet overgenomen', JSON.stringify(local.t) === '["Lokaal hersteld"]' && !local.evil && JSON.stringify(local.q) === '[{"geheim":1}]' && local.w !== 'Maastricht', JSON.stringify(local));
+  await ctx3.close();
 
   // ======== Apparaat 2: zonder IndexedDB (localStorage-fallback) ========
   const ctx2 = await device({ noIndexedDB: true });

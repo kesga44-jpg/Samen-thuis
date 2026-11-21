@@ -166,7 +166,57 @@
   const MAX_TAB_CONFLICTS = 500;     // harde bovengrens; opgeloste conflicten worden eerst opgeruimd
   const KEEP_RESOLVED = 50;
 
-  function createSyncMetaStore({ indexedDB, storage, hashValue, now = () => new Date().toISOString(), timers } = {}) {
+  // ---------- Afscherming per identiteit (opdracht 7, vervolg) ----------
+  // activeScope() → { tab: <dataset van de actieve identiteit> | null, slot: '<account>:<huishouden>' | null }.
+  // Met afscherming geldt elke aanroep standaard voor de actieve identiteit; een parameter met een andere identiteit
+  // levert niets op (lezen: leeg; schrijven: geweigerd). Tabbladconflicten zijn alleen via de tabblad-API bereikbaar.
+  // Financiële records alleen voor de eigen identiteit, 'device' en 'legacy-unknown' (finance-conflict-core.js en
+  // account-sync.js bepalen daarbinnen de zichtbaarheid). Er wordt niets verwijderd. Dit is lokale afscherming tegen
+  // vergissingen, geen vervanging voor de serverbeveiliging: wie het browserprofiel kan openen, kan de opslag lezen.
+  const FIN_SHARED_SCOPES = ['device', 'legacy-unknown'];
+  function guardStore(store, activeScope) {
+    const cur = () => { try { return activeScope() || {}; } catch (_) { return {}; } };
+    const okSlot = slot => { const c = cur(); return !!c.slot && slot === c.slot; };
+    const tabScope = scope => { const c = cur(); return c.tab && (scope == null || scope === c.tab) ? c.tab : null; };
+    const denied = () => Object.assign(new Error('Deze synchronisatiegegevens horen bij een andere identiteit.'), { name: 'ScopeDenied' });
+    const deny = () => Promise.reject(denied());
+    const hidden = r => {
+      if (!r) return false;
+      const c = cur();
+      if (r.kind === 'tab') return true;
+      if (r.kind === 'sync') return !c.slot || r.slot !== c.slot;
+      if (/^finance/.test(String(r.kind || '')) && r.scope) return !(FIN_SHARED_SCOPES.includes(r.scope) || (c.slot && r.scope === c.slot));
+      return false;
+    };
+    return {
+      ...store,
+      guarded: true,
+      loadBaseValues: (slot, bases) => (okSlot(slot) ? store.loadBaseValues(slot, bases) : Promise.resolve({})),
+      saveBaseValues: (slot, values) => (okSlot(slot) ? store.saveBaseValues(slot, values) : deny()),
+      beginUpload: (slot, section, info) => (okSlot(slot) ? store.beginUpload(slot, section, info) : deny()),
+      endUpload: (slot, section) => (okSlot(slot) ? store.endUpload(slot, section) : deny()),
+      listInflight: slot => (okSlot(slot) ? store.listInflight(slot) : Promise.resolve([])),
+      clearInflight: (slot, sections) => (okSlot(slot) ? store.clearInflight(slot, sections) : deny()),
+      saveConflicts: (slot, conflicts) => (okSlot(slot) ? store.saveConflicts(slot, conflicts) : deny()),
+      loadConflicts: slot => (okSlot(slot) ? store.loadConflicts(slot) : Promise.resolve([])),
+      recordTabConflict: (input = {}) => { const s = tabScope(input.scope); return s ? store.recordTabConflict({ ...input, scope: s }) : deny(); },
+      listTabConflicts: (opts = {}) => { const s = tabScope(opts.scope); return s ? store.listTabConflicts({ ...opts, scope: s }) : Promise.resolve([]); },
+      getTabConflict: (key, opts = {}) => { const s = tabScope(opts.scope); return s ? store.getTabConflict(key, { scope: s }) : Promise.resolve(null); },
+      resolveTabConflict: (key, resolution, opts = {}) => { const s = tabScope(opts.scope); return s ? store.resolveTabConflict(key, resolution, { scope: s }) : Promise.resolve(false); },
+      async getRecord(key) { const r = await store.getRecord(key); return hidden(r) ? null : r; },
+      async listRecords(kind) { return (await store.listRecords(kind)).filter(r => !hidden(r)); },
+      putRecord: record => (record && (record.kind === 'tab' || record.kind === 'sync') ? deny() : store.putRecord(record)),
+      // Een bestaand record van een andere identiteit wordt nooit overschreven of als 'afwezig' behandeld.
+      updateRecord: (key, fn) => store.updateRecord(key, value => (hidden(value) ? undefined : fn(value))),
+      deleteRecord: (key, predicate) => store.deleteRecord(key, value => !!value && !hidden(value) && (!predicate || predicate(value)))
+    };
+  }
+
+  function createSyncMetaStore({ indexedDB, storage, hashValue, now = () => new Date().toISOString(), timers, activeScope } = {}) {
+    const store = createUnguardedStore({ indexedDB, storage, hashValue, now, timers });
+    return typeof activeScope === 'function' ? guardStore(store, activeScope) : store;
+  }
+  function createUnguardedStore({ indexedDB, storage, hashValue, now = () => new Date().toISOString(), timers } = {}) {
     if (typeof hashValue !== 'function') throw new Error('createSyncMetaStore: hashValue is vereist');
     let backendPromise = null;
     let warning = '';
@@ -383,7 +433,15 @@
     let storage = null, idb = null;
     try { storage = globalThis.localStorage || null; } catch (_) { storage = null; }
     try { idb = globalThis.indexedDB || null; } catch (_) { idb = null; }
-    sharedStore = createSyncMetaStore({ indexedDB: idb, storage, hashValue: globalThis.SamenThuisHouseholdSync.hashValue });
+    // In de app altijd afgeschermd op de identiteit van deze paginalading (app.js SamenThuisIdentity). Ontbreekt die of
+    // wordt er gewisseld, dan geen toegang tot identiteitsgebonden gegevens.
+    const activeScope = () => {
+      const I = globalThis.SamenThuisIdentity;
+      if (!I || typeof I.current !== 'function' || (typeof I.switching === 'function' && I.switching())) return null;
+      const id = I.current() || {};
+      return { tab: id.key || null, slot: id.mode === 'account' && id.accountId && id.householdId ? `${id.accountId}:${id.householdId}` : null };
+    };
+    sharedStore = createSyncMetaStore({ indexedDB: idb, storage, hashValue: globalThis.SamenThuisHouseholdSync.hashValue, activeScope });
     return sharedStore;
   }
 

@@ -26,12 +26,20 @@
   const isFinancialSection = s => !!(FINC && FINC.isFinancialSection(s));
   // Financiële conflicten horen bij één identiteit: '<accountId>:<huishoudenId>' (zelfde notatie als slot()); zie ownScope.
   // Apparaatconflicten ('device') horen bij het lokale profiel waarin ze ontstonden (opdracht 7). Alleen zichtbaar en
-  // herstelbaar in die lokale identiteit; records zonder localKey (van vóór opdracht 7) alleen zolang de oorspronkelijke
-  // dataset (samenThuisDataV2) nog het lokale profiel is. In een account nooit.
+  // herstelbaar (met waarden) in die lokale identiteit; in een account nooit. Records zonder localKey (van vóór
+  // opdracht 7) worden eerst aan hun profiel gekoppeld (M1, classifyUntaggedDevice); lukt dat niet betrouwbaar, dan
+  // tonen we nergens waarden, maar blokkeren ze in elke accountronde de upload van dat onderdeel (beforeRound).
   const deviceVisible = r => {
     const id = IDENT.current();
     if (id.mode !== 'local' || IDENT.switching()) return false;
-    return r.localKey ? r.localKey === id.key : id.key === IDS.LEGACY_KEY;
+    return !!r.localKey && r.localKey === id.key;
+  };
+  // Open apparaatconflict zonder vaststaand profiel dat in deze accountidentiteit nog niet bewust is vrijgegeven.
+  const unknownGuard = (r, scope) => r.scope === FINC.DEVICE_SCOPE && r.status === 'open' && !r.localKey && !(Array.isArray(r.releasedFor) && r.releasedFor.includes(scope));
+  const classifyLegacyDevice = async () => {
+    if (!FIN) return;
+    try { await FIN.classifyUntaggedDevice(r => IDS.legacyRecordOwner(localStorage, r.detectedAt)); }
+    catch (error) { console.error('Oude financiële apparaatconflicten niet gekoppeld; ze blijven de upload blokkeren', error); }
   };
   const deviceRecords = async () => (FIN ? (await FIN.list(FINC.DEVICE_SCOPE)).filter(deviceVisible) : []);
   // Eigen financiële scope = de identiteit van deze paginalading (niet een later gelezen sessie of configuratie).
@@ -124,6 +132,7 @@
       // Financiële conflicten uitsluitend van deze identiteit (account + huishouden) van de ronde.
       const scope = FINC ? FINC.scopeFor(actor || '', st.household.id) : null;
       const FS = FIN && scope ? FIN.scoped(scope) : null;
+      await classifyLegacyDevice(); // idempotent; mislukt dit, dan blokkeren de oude records toch (geen localKey)
       const fin = FS ? await FS.beforeRound({ data, prevBase, prevBaseValues, actor, householdId: st.household.id }) : { records: [], frozen: [], fixes: [] };
       assertIdentity();
       if (fin.fixes.length) {
@@ -383,9 +392,12 @@
       const scope = ownScope();
       const own = scope ? await FIN.list(scope) : [];
       const device = (await deviceRecords()).filter(r => r.status === 'open');
+      // M1: in een account ook de oude apparaatconflicten zonder vaststaand profiel (zonder waarden; upload geblokkeerd).
+      const guards = scope ? (await FIN.list(FINC.DEVICE_SCOPE)).filter(r => unknownGuard(r, scope)) : [];
       // Oude records zonder vaststaande identiteit: alleen de naam van het onderdeel, en alleen in het lokale profiel.
       const legacy = IDENT.current().mode === 'local' ? (await FIN.list(FINC.LEGACY_SCOPE)).filter(r => r.status === 'open') : [];
-      st.finance = [...own, ...device, ...legacy].map(r => ({ record: r, paths: r.status === 'open' && r.scope !== FINC.LEGACY_SCOPE ? FIN.view(r, data[r.section]) : [] }));
+      st.finance = [...own, ...device, ...legacy].map(r => ({ record: r, paths: r.status === 'open' && r.scope !== FINC.LEGACY_SCOPE ? FIN.view(r, data[r.section]) : [] }))
+        .concat(guards.map(r => ({ record: r, paths: [], guard: true })));
     } catch (error) { console.error('Financiële conflicten laden mislukt', error); }
     updateSyncBadge();
   }
@@ -428,7 +440,8 @@
   function financeList() {
     if (!st.finance.length) return '';
     const me = AUTH.session()?.user?.id || '';
-    return `<p class="eyebrow">FINANCIËN · KEUZE NODIG</p><ul class="list" data-fin-list>${st.finance.map(({ record: r, paths }) => {
+    return `<p class="eyebrow">FINANCIËN · KEUZE NODIG</p><ul class="list" data-fin-list>${st.finance.map(({ record: r, paths, guard }) => {
+      if (guard) return `<li class="list-item" data-fin-guard="${esc2(r.section)}"><div class="item-main"><strong>${esc2(label(r.section))}</strong><small>Ouder financieel conflict op dit apparaat waarvan niet vaststaat bij welk account of huishouden het hoort. Daarom wordt ${esc2(label(r.section))} niet verstuurd. Hoort het niet bij dit account, geef het dan vrij: je eigen gegevens blijven ongewijzigd en er wordt geen waarde gekozen. Het conflict blijft bewaard.</small></div><button class="secondary" data-fin-release="${esc2(r.section)}">Vrijgeven voor dit account</button></li>`;
       const who = r.origin === 'tab' ? 'in een ander tabblad op dit apparaat' : r.origin === 'reintroduction' ? 'een oude kopie op dit apparaat' : (r.remoteUpdatedBy && r.remoteUpdatedBy !== me ? 'door je huisgenoot' : 'op een ander apparaat');
       if (r.scope === FINC.LEGACY_SCOPE) return `<li class="list-item"><div class="item-main"><strong>${esc2(label(r.section))}</strong><small>Ouder conflict waarvan niet vaststaat bij welk account of huishouden het hoort. Het wordt bewaard maar niet automatisch verwerkt of verstuurd.</small></div></li>`;
       if (r.status !== 'open') return `<li class="list-item"><div class="item-main"><strong>${esc2(label(r.section))}</strong><small>Keuze bewaard · wordt pas afgerond als de server hem bevestigt. Dit onderdeel wordt tot dan niet anders verstuurd.</small></div></li>`;
@@ -456,7 +469,19 @@
     if (current === 'settings') { const v = document.querySelector('#view'); if (v && !v.querySelector('[data-acct-card]')) v.insertAdjacentHTML('beforeend', card()); }
     return r;
   };
+  async function releaseGuard(section) {
+    const scope = ownScope();
+    if (!FIN || !scope || IDENT.switching()) return { ok: false, reason: 'identity-changed' };
+    const r = await FIN.releaseUnknown({ scope, section, actor: AUTH.session()?.user?.id || null });
+    if (CHANNEL) CHANNEL.post('finance-changed', { section });
+    await refreshFinance();
+    if (current === 'settings') render();
+    if (r.ok && accountMode()) scheduleRetry(300);
+    return r;
+  }
   document.addEventListener('click', e => {
+    const rel = e.target.closest('[data-fin-release]');
+    if (rel) { if (confirm('Dit oude conflict vrijgeven voor dit account? Er wordt geen waarde gekozen; je eigen gegevens blijven zoals ze zijn.')) releaseGuard(rel.dataset.finRelease); return; }
     const f = e.target.closest('[data-fin-choose]');
     if (f) {
       const section = f.dataset.finChoose, entry = st.finance.find(x => x.record.section === section);
@@ -516,13 +541,14 @@
       const r = own || (dev && deviceVisible(dev) ? dev : null);
       return r ? FIN.view(r, data[section]) : [];
     },
-    resolve: resolveFinance, refresh: refreshFinance,
+    resolve: resolveFinance, refresh: refreshFinance, release: releaseGuard,
     notify: () => { if (CHANNEL) CHANNEL.post('finance-changed', {}); return refreshFinance(); }
   };
   // Na een herstart: een keuze die al vastlag maar nog niet lokaal was opgeslagen (crash ertussen) alsnog toepassen.
   // Alleen voor de huidige identiteit en apparaatconflicten, nooit voor een ander account of huishouden.
   (async () => {
     if (!FIN) return;
+    await classifyLegacyDevice();
     try {
       const scope = ownScope();
       const fixes = FIN.interrupted([...(scope ? await FIN.list(scope) : []), ...(await deviceRecords())], data);

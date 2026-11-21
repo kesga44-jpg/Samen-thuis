@@ -262,3 +262,104 @@ test('V15. bron: accountronde gebruikt de code van de identiteit, nooit ongecont
   assert.doesNotMatch(acctSrc, /localStorage\.setItem\(SYNC_KEY/, 'accountronde schrijft de globale sleutel niet');
   assert.match(app, /if \(ACTIVE_IDENTITY\.mode !== 'local'\) return;\n  localStorage\.setItem\(SYNC_KEY/, 'globale code alleen vanuit het lokale profiel');
 });
+
+// ---------- Vervolg: strikte allowlist en afgeschermd conflictlogboek ----------
+test('V16. strikte allowlist: onbekend onderdeel in een account geweigerd, ook met (gewijzigde) eigen herkomst', () => {
+  const id = acct(B, H2);
+  const own = { exportIdentity: { mode: 'account', accountId: B, householdId: H2 } };
+  assert.deepEqual(IS.backupAllowed(backup(own, { evilSection: { x: 1 } }), id), { ok: false, reason: 'unknown-sections', sections: ['evilSection'] });
+  // Metadata van A gewijzigd naar B: herkomst niet te bewijzen, maar de allowlist blijft gelden.
+  assert.equal(IS.backupAllowed(backup(own, { groceries: [], legacyModule: [] }), id).reason, 'unknown-sections');
+  assert.equal(IS.backupAllowed(backup({ exportIdentity: { mode: 'retained', target: id.key } }, { x: 1 }), id).reason, 'unknown-sections', 'vervalst doel: allowlist geldt');
+  const ok = IS.backupAllowed(backup(own, { budgetV23: {}, nutrition: {}, offers25: [], settings: { weatherPlace: 'X' }, sportCoach: {} }), id);
+  assert.deepEqual([ok.ok, ok.unknown], [true, []], 'toegestane onderdelen; apparaatvelden worden genegeerd, niet geweigerd');
+  for (const k of IS.ACCOUNT_SECTIONS) assert.equal(IS.backupAllowed(backup(own, { [k]: k === 'priceReferenceUpdatedAt' || k === 'priceReferenceSource' || k === 'offerCurrentQuery25' ? 'x' : ['budget', 'budget19', 'budget219', 'budgetV22', 'budgetV23', 'dailyAnswers'].includes(k) ? {} : [] }), id).ok, true, k);
+  // Oude versies: versie 1 en zonder meta toegestaan (zelfde regels); te nieuw of ongeldig geweigerd.
+  assert.equal(IS.backupAllowed(backup({ ...own, version: 1 }), id).ok, true);
+  assert.equal(IS.backupAllowed(JSON.stringify({ groceries: [] }), LOCAL).ok, true);
+  for (const v of [0, 3, 2.5, null]) assert.equal(IS.backupAllowed(backup({ ...own, version: v }), id).reason, 'version', String(v));
+});
+
+test('V17. lokaal profiel: onbekende onderdelen apart in quarantaine (niet geladen), alleen in de herstelmodus zichtbaar', () => {
+  const st = memoryStorage();
+  const value = { meta: { version: 2 }, groceries: [{ id: 'g' }], evilSection: { a: 1 }, other: [2], settings: { weatherPlace: 'X' }, sportCoach: { library: [] } };
+  const allowed = IS.backupAllowed(JSON.stringify(value), LOCAL_V3);
+  assert.deepEqual([allowed.ok, allowed.unknown], [true, ['evilSection', 'other']]);
+  const { known, unknown } = IS.splitBackup(value);
+  assert.deepEqual(Object.keys(known).sort(), ['groceries', 'meta'], 'zonder apparaatvelden en onbekende onderdelen');
+  assert.deepEqual(unknown, { evilSection: { a: 1 }, other: [2] });
+  const key = IS.quarantineUnknown(st, unknown, { source: 'test.json' });
+  assert.ok(key.startsWith(`${IS.V3}|quarantine|`));
+  assert.deepEqual(JSON.parse(st.getItem(key)).evilSection, { a: 1 }, 'bewaard, niet weggegooid');
+  assert.equal(IS.quarantineUnknown(st, {}), null);
+  assert.deepEqual(IS.retainedFor(st, LOCAL_V3), []);
+  assert.deepEqual(IS.retainedFor(st, LOCAL_V3, { recovery: true }).map(r => [r.key, r.status]), [[key, 'quarantaine']]);
+  assert.deepEqual(IS.retainedFor(st, acct(A, H1), { recovery: true }), [], 'nooit in een account');
+  const app = fs.readFileSync(__dirname + '/app.js', 'utf8');
+  assert.match(app, /restoreBackupText\(localStorage, \{ \.\.\.recoveryOptions\(\), holdKey: RESTORE_HOLD_KEY \}, JSON\.stringify\(known\)\)/);
+  assert.match(app, /if\(importTarget243==='backup'\)\{[^}]*mergeBackupChecked\(text\);return\}/, 'samenvoegroute gebruikt dezelfde controle');
+  assert.doesNotMatch(app, /mergeBackup246\(JSON\.parse\(text\)\)/, 'geen ongecontroleerd samenvoegen meer');
+});
+
+function guardedPair() {
+  const idb = fakeIndexedDB(), storage = memoryStorage();
+  let active = { tab: IS.accountKey(A, H1), slot: `${A}:${H1}` };
+  const meta = SM.createSyncMetaStore({ indexedDB: idb, storage, hashValue: HS.hashValue, activeScope: () => active });
+  const raw = SM.createSyncMetaStore({ indexedDB: idb, storage, hashValue: HS.hashValue });
+  return { meta, raw, as: (u, h) => { active = u ? { tab: IS.accountKey(u, h), slot: `${u}:${h}` } : null; } };
+}
+test('V18. conflictlogboek: standaard de actieve identiteit; een andere identiteit via een parameter levert niets op', async () => {
+  const { meta, raw, as } = guardedPair();
+  await raw.recordTabConflict({ path: 'oud', section: 'groceries', kept: 1, other: 'oud-geheim' }); // van vóór opdracht 7
+  await meta.recordTabConflict({ path: 'groceries[g].title', section: 'groceries', kept: 'a', other: 'A-geheim' });
+  const [recA] = await meta.listTabConflicts();
+  assert.equal(recA.other, 'A-geheim', 'zonder parameter: eigen identiteit');
+  await assert.rejects(meta.recordTabConflict({ scope: IS.accountKey(B, H2), path: 'x', kept: 1, other: 2 }), /andere identiteit/);
+  as(B, H2);
+  assert.deepEqual(await meta.listTabConflicts(), []);
+  assert.deepEqual(await meta.listTabConflicts({ scope: IS.accountKey(A, H1) }), [], 'parameter met A: niets');
+  assert.deepEqual(await meta.listTabConflicts({ scope: null }), []);
+  assert.equal(await meta.getTabConflict(recA.key, { scope: IS.accountKey(A, H1) }), null);
+  assert.equal(await meta.resolveTabConflict(recA.key, 'other', { scope: IS.accountKey(A, H1) }), false);
+  assert.equal(await meta.getRecord(recA.key), null, 'ook niet via de algemene records');
+  assert.deepEqual(await meta.listRecords('tab'), []);
+  await assert.rejects(meta.putRecord({ ...recA }), /andere identiteit/);
+  assert.equal(await meta.updateRecord(recA.key, () => ({ ...recA, other: 'overschreven' })), undefined);
+  await meta.deleteRecord(recA.key);
+  as(null);
+  assert.deepEqual(await meta.listTabConflicts(), [], 'tijdens een wissel of zonder identiteit: niets');
+  as(A, H1);
+  assert.deepEqual((await meta.listTabConflicts()).map(r => r.other), ['A-geheim'], 'record van A ongewijzigd en niet verwijderd');
+  assert.equal((await raw.listTabConflicts()).length, 1, 'oud record bewaard');
+  assert.equal((await meta.listTabConflicts({ scope: undefined })).length, 1);
+});
+
+test('V19. afgeschermde synchronisatiemetadata en financiële records van een andere identiteit', async () => {
+  const { meta, raw, as } = guardedPair();
+  await meta.saveBaseValues(`${A}:${H1}`, { groceries: [{ id: 'a', title: 'A-geheim' }] });
+  await meta.saveConflicts(`${A}:${H1}`, [{ section: 'groceries', fields: ['x'] }]);
+  const core = FC.createFinanceConflicts({ store: meta, merge3: HS.merge3, hashValue: HS.hashValue });
+  await core.open({ scope: FC.scopeFor(A, H1), section: 'budgetV23', origin: 'sync', base: { pct: 1 }, local: { pct: 2 }, remote: { pct: 3 } });
+  as(B, H2);
+  assert.deepEqual(await meta.loadBaseValues(`${A}:${H1}`, {}), {}, 'basiswaarden van A niet leesbaar voor B');
+  assert.deepEqual(await meta.loadConflicts(`${A}:${H1}`), []);
+  await assert.rejects(meta.saveBaseValues(`${A}:${H1}`, { groceries: [] }), /andere identiteit/);
+  assert.deepEqual(await core.list(FC.scopeFor(A, H1)), [], 'financieel conflict van A niet zichtbaar');
+  assert.equal(await core.get(FC.scopeFor(A, H1), 'budgetV23'), null);
+  assert.equal((await core.resolve({ scope: FC.scopeFor(A, H1), section: 'budgetV23', choices: { pct: 'local' }, currentLocal: { pct: 2 } })).reason, 'not-found');
+  assert.ok((await meta.listRecords('finance-audit')).every(a => !a.scope || a.scope === FC.scopeFor(B, H2) || ['device', 'legacy-unknown'].includes(a.scope)));
+  // Een nieuw record in de scope van A vanuit B (bijv. koppeling) overschrijft nooit het bestaande record van A.
+  assert.equal(await meta.updateRecord(FC.recordKey(FC.scopeFor(A, H1), 'budgetV23'), () => ({ hacked: true })), undefined);
+  as(A, H1);
+  assert.equal((await core.list(FC.scopeFor(A, H1)))[0].local.pct, 2);
+  assert.equal((await meta.loadBaseValues(`${A}:${H1}`, {})).groceries[0].title, 'A-geheim');
+  assert.equal((await raw.listRecords('finance')).length, 1, 'niets verwijderd');
+});
+
+test('V20. bron: de app gebruikt de afgeschermde opslag en M1-koppeling', () => {
+  const metaSrc = fs.readFileSync(__dirname + '/sync-meta-store.js', 'utf8');
+  const acctSrc = fs.readFileSync(__dirname + '/account-sync.js', 'utf8');
+  assert.match(metaSrc, /sharedStore = createSyncMetaStore\(\{ indexedDB: idb, storage, hashValue: globalThis\.SamenThuisHouseholdSync\.hashValue, activeScope \}\);/);
+  assert.match(acctSrc, /await classifyLegacyDevice\(\); \/\/ idempotent/);
+  assert.match(acctSrc, /return !!r\.localKey && r\.localKey === id\.key;/, 'oude records zonder profiel nergens met waarden zichtbaar');
+});
