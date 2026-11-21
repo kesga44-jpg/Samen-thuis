@@ -14,10 +14,18 @@
   const LOCK = TAB ? TAB.createSyncLock({ name: 'samen-thuis-account-sync', locks: navigator.locks, storage: localStorage }) : null;
   const CHANNEL = TAB ? TAB.createChannel({ name: 'samen-thuis-account-sync', tabId: LOCK && LOCK.tabId }) : null;
   const loadBaseValues = async bases => { try { return await META.loadBaseValues(slot(), bases); } catch (_) { return {}; } };
-  const storeBaseValues = async values => {
-    try { await META.saveBaseValues(slot(), values); return true; }
-    catch (_) { console.warn('Basis voor samenvoegen kon niet worden bewaard; bij gelijktijdige wijzigingen wordt om een keuze gevraagd.'); return false; }
-  };
+  // Versie-administratie per slot. Staat de basis alleen in het geheugen (durability 'session'), dan blijft ook de
+  // administratie in het geheugen: na herladen geldt dan geen enkele versie als bevestigd zonder duurzame basis.
+  const sessionBases = {};
+  let metaDurability = 'unknown';
+  const readBases = s => sessionBases[s] || (((load().bases || {})[s] || {}).base) || {};
+  function writeBases(s, base, { durable }) {
+    if (!durable) { sessionBases[s] = base; return; }
+    const next = load(); next.bases = { ...(next.bases || {}), [s]: { base, lastSyncedAt: new Date().toISOString() } };
+    if (st.household) next.householdId = st.household.id;
+    if (!store(next)) throw new Error('Versie-administratie kon niet worden opgeslagen (opslag vol of geblokkeerd).');
+    delete sessionBases[s];
+  }
   let rerunRequested = false, retryTimer = null;
   function scheduleRetry(ms) {
     if (retryTimer) return;
@@ -70,13 +78,12 @@
       if (!st.household) st.household = await c.membership();
       if (!st.household) throw new Error('Dit account is nog geen lid van een huishouden.');
       const roundSlot = slot();
-      const cfg = load(), mine = (cfg.bases || {})[roundSlot] || {};
-      const prevBase = mine.base || {};
+      const prevBase = readBases(roundSlot);
       const prevBaseValues = await loadBaseValues(prevBase);
       // Consistente momentopname: wijzigingen die tijdens de ronde binnenkomen raken deze ronde niet.
       const snapshot = structuredClone(data);
       const raw = await HS.runAccountSync({
-        cloud: window.SamenThuisSyncMeta.trackUploads(c, META, roundSlot, HS.classifyError), householdId: st.household.id,
+        cloud: window.SamenThuisSyncMeta.trackUploads(c, META, roundSlot, HS.classifyError, (step, error) => console.warn('Syncmetadata (' + step + ') niet bewaard', error)), householdId: st.household.id,
         local: snapshot, base: prevBase, baseValues: prevBaseValues,
         hold: !!localStorage.getItem(RESTORE_HOLD_KEY), resolutions,
         encrypt: v => encryptData(v, code()), decrypt: p => decryptData(p, code())
@@ -103,15 +110,22 @@
           if (HS.hashValue(now[k]) !== appliedHash[k]) rerunRequested = true;
         });
       }
-      // Volgorde voor crashbestendigheid: eerst basiswaarden (IndexedDB, met vorige waarde), dan de versie-administratie.
-      await storeBaseValues(result.baseValues);
-      const next = load(); next.bases = { ...(next.bases || {}), [roundSlot]: { base, lastSyncedAt: new Date().toISOString() } };
-      next.householdId = st.household.id; store(next);
+      // Vaste volgorde (sync-meta-store.js commitRound): basiswaarden → versie-administratie → conflicten → inflight.
+      // Mislukt stap 1 of 2, dan wordt geen versie als bevestigd geregistreerd; de volgende ronde neemt de versies over
+      // zodra lokaal en cloud gelijk zijn (zonder tweede upload). Lokale gegevens blijven ongewijzigd staan.
+      const commit = await window.SamenThuisSyncMeta.commitRound({
+        store: META, slot: roundSlot, base, baseValues: result.baseValues, conflicts: result.conflicts,
+        roundOk: result.status === 'ok', writeBases: (b, opts) => writeBases(roundSlot, b, opts)
+      });
       st.conflicts = result.conflicts;
-      try {
-        await META.saveConflicts(roundSlot, result.conflicts);
-        if (result.status === 'ok') await META.clearInflight(roundSlot);
-      } catch (_) {}
+      if (!commit.committed) {
+        console.error('Syncmetadata niet vastgelegd (' + commit.step + ')', commit.error);
+        result.failed = [...(result.failed || []), { section: '(syncmetadata)', error: { kind: 'storage', message: 'De synchronisatiestatus kon niet op dit apparaat worden bewaard (' + commit.step + '). Je gegevens zijn veilig; de volgende ronde rondt het af.' } }];
+        result.status = 'partial';
+      } else {
+        metaDurability = commit.durability;
+        commit.warnings.forEach(w => console.warn('Syncmetadata (' + w.step + ') niet bijgewerkt', w.error));
+      }
       if (CHANNEL) CHANNEL.post('sync-finished', { slot: roundSlot, status: result.status });
       outcome = result.status;
       if (result.status === 'ok') {
@@ -125,6 +139,7 @@
           st.message = `Wijzigingen van beide apparaten samengevoegd (${names}).`;
           toast(`Samengevoegd met de wijzigingen van je huisgenoot: ${names}`);
         }
+        if (metaDurability === 'session') st.message += ' Let op: syncstatus staat alleen in het geheugen van deze sessie (geen duurzame opslag beschikbaar).';
         if (manual) toast('Synchronisatieronde afgerond');
       } else if (result.status === 'conflict') {
         syncError = 'Wijzigingen op beide apparaten; kies per onderdeel welke versie je bewaart.';
@@ -152,7 +167,7 @@
     legacyBadge(message);
     const badge = document.querySelector('#syncState');
     if (!badge || message || !accountMode()) return;
-    badge.textContent = syncing ? 'Synchroniseren…' : !AUTH.session()?.user?.id ? 'Aanmelden vereist · lokaal bewaard' : !navigator.onLine ? 'Offline · later synchroniseren' : st.conflicts.length ? 'Conflict · kies versie' : syncError ? 'Sync controleren' : 'Laatst gesynchroniseerd · niet geverifieerd';
+    badge.textContent = syncing ? 'Synchroniseren…' : !AUTH.session()?.user?.id ? 'Aanmelden vereist · lokaal bewaard' : !navigator.onLine ? 'Offline · later synchroniseren' : st.conflicts.length ? 'Conflict · kies versie' : syncError ? 'Sync controleren' : metaDurability === 'session' ? 'Gesynchroniseerd · status niet duurzaam bewaard' : 'Laatst gesynchroniseerd · niet geverifieerd';
     badge.classList.remove('connected');
   };
 
@@ -315,14 +330,14 @@
 
   // Onderdelen met lokale wijzigingen die de server nog niet heeft bevestigd (afgeleid uit duurzame gegevens + basis).
   function pendingSections() {
-    const b = ((load().bases || {})[slot()] || {}).base || {};
+    const b = readBases(slot());
     const S = HS.sectionsOf(data);
     return Object.keys(S).filter(k => b[k] ? b[k].hash !== HS.hashValue(S[k]) : !HS.isEmptyValue(S[k]));
   }
 
   window.SamenThuisAccountSync = {
     active: accountMode, sync: accountSync, conflicts: () => st.conflicts,
-    pending: pendingSections, inflight: () => META.listInflight(slot()),
+    pending: pendingSections, inflight: () => META.listInflight(slot()), metaStatus: () => META.status(),
     uploadSportFile, signedSportFileUrl, deleteSportFile
   };
 })();

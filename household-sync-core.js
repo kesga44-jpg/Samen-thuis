@@ -148,7 +148,7 @@
     if (code === '40001' || /Versieconflict/i.test(msg)) return { kind: 'conflict', message: 'De andere versie is ondertussen bijgewerkt. Je lokale gegevens zijn niet overschreven: tik op Nu synchroniseren en kies per onderdeel welke versie je bewaart.' };
     if (status === 401 || status === 403 || code === '42501' || code === 'PGRST301') return { kind: 'auth', message: 'Geen toegang. Meld je opnieuw aan via Instellingen en controleer of je lid bent van dit huishouden. Je lokale gegevens zijn veilig.' };
     if (code === 'PGRST202' || code === '42P01' || code === 'PGRST205' || status === 404) return { kind: 'migration', message: 'Accountsynchronisatie is nog niet beschikbaar: de Supabase-migraties moeten eerst handmatig zijn toegepast. Je gebruikt voorlopig de oude code-sync of werkt lokaal; er gaat niets verloren.' };
-    if (err instanceof TypeError || /failed to fetch|network/i.test(msg)) return { kind: 'network', message: 'Geen verbinding. Je wijzigingen blijven lokaal bewaard en worden automatisch gesynchroniseerd zodra je weer online bent.' };
+    if (err instanceof TypeError || err?.name === 'AbortError' || err?.name === 'TimeoutError' || /failed to fetch|network|time-?out/i.test(msg)) return { kind: 'network', message: 'Geen verbinding. Je wijzigingen blijven lokaal bewaard en worden automatisch gesynchroniseerd zodra je weer online bent.' };
     if (err?.name === 'OperationError' || /huishoudcode/i.test(msg)) return { kind: 'key', message: 'De huishoudcode past niet bij de versleutelde cloudgegevens. Controleer de code bij Instellingen; er is niets geschreven of overschreven.' };
     return { kind: 'other', message: msg || 'Synchronisatie mislukt' };
   }
@@ -164,15 +164,26 @@
   class CloudError extends Error { constructor(status, body) { super((body && (body.message || body.msg)) || ('Supabase ' + status)); this.status = status; this.code = body && body.code; } }
 
   // Dunne REST-client; token wordt per aanroep opgehaald (gebruikers-JWT, nooit een service-role key).
-  function createCloud({ url, anonKey, getToken, fetchImpl }) {
+  // timeoutMs: elk verzoek wordt na deze tijd afgebroken (AbortController), zodat een hangende verbinding een
+  // synchronisatieronde (en de lock daarvan) niet onbeperkt vasthoudt. Een afgebroken upload geldt als onzeker
+  // (netwerkfout); de server-versiecontrole bepaalt in de volgende ronde of hij al was verwerkt.
+  function createCloud({ url, anonKey, getToken, fetchImpl, timeoutMs = 45000, timers = globalThis }) {
     const f = fetchImpl || ((...a) => globalThis.fetch(...a)), base = String(url).replace(/\/+$/, '');
     async function call(path, opts = {}) {
       const token = await getToken();
       if (!token) throw new CloudError(401, { message: 'Niet aangemeld' });
-      const res = await f(base + path, { ...opts, headers: { 'Content-Type': 'application/json', apikey: anonKey, Authorization: 'Bearer ' + token, ...(opts.headers || {}) } });
-      const body = res.status === 204 ? null : await res.json().catch(() => null);
-      if (!res.ok) throw new CloudError(res.status, body);
-      return body;
+      const controller = typeof AbortController === 'function' && timeoutMs > 0 ? new AbortController() : null;
+      let timedOut = false;
+      const timer = controller ? timers.setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs) : null;
+      try {
+        const res = await f(base + path, { ...opts, ...(controller ? { signal: controller.signal } : {}), headers: { 'Content-Type': 'application/json', apikey: anonKey, Authorization: 'Bearer ' + token, ...(opts.headers || {}) } });
+        const body = res.status === 204 ? null : await res.json().catch(() => null);
+        if (!res.ok) throw new CloudError(res.status, body);
+        return body;
+      } catch (error) {
+        if (timedOut) { const e = new Error('Time-out: de server antwoordde niet op tijd'); e.name = 'TimeoutError'; throw e; }
+        throw error;
+      } finally { if (timer != null) timers.clearTimeout(timer); }
     }
     const rpc = (name, args) => call('/rest/v1/rpc/' + name, { method: 'POST', body: JSON.stringify(args) });
     return {

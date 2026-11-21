@@ -103,10 +103,24 @@ try {
     await b.page.evaluate(() => { data.groceries.find(g => g.id === 'e2e-Kaas').title = 'Oude kaas'; save({ sync: false }); });
     await a.page.waitForTimeout(200);
     await a.page.evaluate(() => save({ sync: false }));
+    await a.page.waitForTimeout(300);
     const log = await a.page.evaluate(() => SamenThuisSyncMeta.shared().listTabConflicts());
-    check('zelfde veld in twee tabbladen: conflict in logboek (IndexedDB) met de andere waarde', log.length >= 1, JSON.stringify(log.map(c => c.fields)));
+    const rec = log.find(c => c.path === 'groceries[e2e-Kaas].title');
+    check('zelfde veld in twee tabbladen: één conflictrecord met beide waarden', log.length === 1 && rec && [rec.kept, rec.other].sort().join('|') === 'Geitenkaas|Oude kaas' && rec.financial === false, JSON.stringify(log.map(c => [c.path, c.kept, c.other, c.count])));
+    const restored = await a.page.evaluate(async key => { const ok = await SamenThuisTabConflicts.restore(key, 'other'); return { ok, title: data.groceries.find(g => g.id === 'e2e-Kaas').title }; }, rec && rec.key);
+    check('conflict later herstellen: andere waarde teruggezet', restored.ok && restored.title === rec.other, JSON.stringify(restored));
+    // Financieel veld in twee tabbladen.
+    await a.page.evaluate(() => { data.budgetV23 = { ...(data.budgetV23 || {}), e2eShare: 50 }; save({ sync: false }); });
+    await b.page.waitForTimeout(300);
+    await a.page.evaluate(() => { data.budgetV23.e2eShare = 40; });
+    await b.page.evaluate(() => { data.budgetV23.e2eShare = 60; save({ sync: false }); });
+    await a.page.waitForTimeout(300);
+    const fin = await a.page.evaluate(async () => (await SamenThuisSyncMeta.shared().listTabConflicts({ includeResolved: false })).filter(c => c.financial).map(c => [c.path, c.kept, c.other, c.base]));
+    const toastText = await a.page.evaluate(() => document.querySelector('#toast')?.textContent || '');
+    check('financieel conflict: gemarkeerd, beide waarden en basis bewaard, expliciete melding', fin.length === 1 && fin[0][0] === 'budgetV23.e2eShare' && [fin[0][1], fin[0][2]].sort().join() === '40,60' && fin[0][3] === 50 && /financiële/.test(toastText), JSON.stringify(fin) + ' ' + toastText);
     check('geen JavaScript-fouten (tabbladen)', !a.errors.length && !b.errors.length, [...a.errors, ...b.errors].join(' | '));
-    check('metastore gebruikt echte IndexedDB', (await a.page.evaluate(() => SamenThuisSyncMeta.shared().mode())) === 'indexeddb');
+    const st = await a.page.evaluate(() => SamenThuisSyncMeta.shared().status());
+    check('metastore gebruikt echte IndexedDB en meldt "durable"', st.mode === 'indexeddb' && st.durability === 'durable', JSON.stringify(st));
     await ctx.close();
   }
 
@@ -185,9 +199,9 @@ try {
     const ctx = await newContext();
     await ctx.addInitScript(() => { Object.defineProperty(window, 'indexedDB', { get() { return undefined; }, configurable: true }); });
     const a = await open(ctx);
-    const mode = await a.page.evaluate(() => SamenThuisSyncMeta.shared().mode());
+    const st = await a.page.evaluate(() => SamenThuisSyncMeta.shared().status());
     await add(a.page, 'Zonder IDB');
-    check('zonder IndexedDB: terugval op localStorage, app werkt', mode === 'localStorage' && (await stored(a.page)).includes('Zonder IDB') && !a.errors.length, mode + ' ' + a.errors.join(' | '));
+    check('zonder IndexedDB: terugval localStorage, status "limited" (niet duurzaam gemeld), app werkt', st.mode === 'localStorage' && st.durability === 'limited' && (await stored(a.page)).includes('Zonder IDB') && !a.errors.length, JSON.stringify(st) + ' ' + a.errors.join(' | '));
     await ctx.close();
   }
 } finally {

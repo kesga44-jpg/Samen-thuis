@@ -318,12 +318,37 @@ const dataGuard = window.SamenThuisTabSync && window.SamenThuisHouseholdSync
   ? window.SamenThuisTabSync.createDataGuard({ storage: localStorage, key: STORAGE_KEY, merge3: window.SamenThuisHouseholdSync.merge3 })
   : null;
 
+// Dezelfde waarde in twee tabbladen anders gewijzigd. Per pad blijven beide waarden (en de basis) bewaard in het
+// conflictlogboek, zodat de andere waarde later terug te zetten is (SamenThuisTabConflicts.restore). Financiële paden
+// worden apart gemarkeerd en altijd expliciet gemeld; ze worden nooit stilzwijgend gekozen.
 function reportTabConflict(result) {
   if (!result.conflicts.length) return;
-  console.warn('Dezelfde gegevens zijn in twee tabbladen anders gewijzigd; deze versie is bewaard.', result.conflicts);
-  try { window.SamenThuisSyncMeta?.shared().recordTabConflict({ fields: result.conflicts, discarded: result.remote }); } catch (_) {}
-  try { toast('Ook in een ander tabblad gewijzigd: deze versie is bewaard, de andere staat in het conflictlogboek.'); } catch (_) {}
+  const TS = window.SamenThuisTabSync;
+  const details = TS ? TS.describeConflicts({ paths: result.conflicts, kept: result.value, other: result.remote, base: result.base }) : [];
+  const financial = details.some(d => d.financial);
+  console.warn('Dezelfde gegevens zijn in twee tabbladen anders gewijzigd; beide waarden zijn bewaard.', details.map(d => d.path));
+  const meta = window.SamenThuisSyncMeta?.shared();
+  if (meta) details.forEach(d => meta.recordTabConflict(d).catch(error => console.error('Tabbladconflict kon niet worden bewaard', error)));
+  try {
+    toast(financial
+      ? 'Let op: financiële gegevens zijn in twee tabbladen verschillend gewijzigd. Beide waarden zijn bewaard; controleer het bedrag.'
+      : 'Ook in een ander tabblad gewijzigd: beide waarden zijn bewaard, de andere kun je terugzetten.');
+  } catch (_) {}
 }
+// Technische herstelfunctie (nog geen interface): zet bij een tabbladconflict de bewaarde andere waarde terug.
+window.SamenThuisTabConflicts = {
+  list: (opts) => window.SamenThuisSyncMeta?.shared().listTabConflicts(opts) || Promise.resolve([]),
+  async restore(key, which = 'other') {
+    const meta = window.SamenThuisSyncMeta?.shared(), TS = window.SamenThuisTabSync;
+    const rec = meta && await meta.getTabConflict(key);
+    if (!rec || !TS || !['other', 'kept', 'base'].includes(which)) return false;
+    if (!TS.setAt(data, rec.path, structuredClone(rec[which]))) return false;
+    if (save() === false) return false;
+    await meta.resolveTabConflict(key, which);
+    render();
+    return true;
+  }
+};
 
 // Enige plek die samenThuisDataV2 schrijft. Gooit (zoals voorheen setItem) bij een volle opslag.
 function writeDataToStorage() {

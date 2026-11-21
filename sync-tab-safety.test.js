@@ -16,37 +16,45 @@ function memoryStorage(shared = new Map(), { quotaAt = Infinity } = {}) {
   };
 }
 
-// Minimale IndexedDB: open/onupgradeneeded, transacties met getAll/put/delete; schrijfacties worden pas bij `complete`
-// zichtbaar (zoals echte transacties). Dezelfde instantie hergebruiken = browser opnieuw openen.
-function fakeIndexedDB({ failOpen = false } = {}) {
+// Minimale IndexedDB: open/onupgradeneeded/onblocked, transacties met get/getAll/put/delete; schrijfacties worden pas
+// bij `complete` zichtbaar (zoals echte transacties). Dezelfde instantie hergebruiken = browser opnieuw openen.
+// Opties: failOpen, blockedMs (eerst onblocked, daarna success), quotaOnWrite (schrijftransacties breken af).
+function fakeIndexedDB({ failOpen = false, blockedMs = 0, openDelayMs = 0 } = {}) {
   const dbs = new Map();
-  const later = fn => setTimeout(fn, 0);
+  const later = (fn, ms = 0) => setTimeout(fn, ms);
   const copy = v => JSON.parse(JSON.stringify(v));
-  return {
-    dbs,
+  const api = {
+    dbs, txOptions: [], quotaOnWrite: false, closed: 0,
     open(name, version) {
       const req = {};
-      later(() => {
+      const go = () => {
         if (failOpen) { req.error = new Error('InvalidStateError'); req.onerror && req.onerror(); return; }
         let db = dbs.get(name), upgrade = false;
         if (!db) { db = { version, stores: new Map() }; dbs.set(name, db); upgrade = true; }
         const conn = {
           objectStoreNames: { contains: n => db.stores.has(n) },
           createObjectStore: n => { db.stores.set(n, new Map()); },
-          close() {},
-          transaction(storeName) {
+          close() { api.closed++; },
+          transaction(storeName, mode, options) {
+            api.txOptions.push({ mode, options });
             const t = {}, ops = [];
             let aborted = false, outstanding = 0;
             const data = db.stores.get(storeName);
             const finish = () => later(() => {
               if (aborted) return;
               if (outstanding) return finish();
+              if (mode === 'readwrite' && api.quotaOnWrite && ops.length) {
+                aborted = true; t.error = Object.assign(new Error('QuotaExceededError'), { name: 'QuotaExceededError' });
+                return t.onabort && t.onabort();
+              }
               ops.forEach(op => op());
               t.oncomplete && t.oncomplete();
             });
             t.abort = () => { aborted = true; t.onabort && t.onabort(); };
+            const request = fn => { const r = {}; outstanding++; later(() => { outstanding--; r.result = fn(); r.onsuccess && r.onsuccess(); }); return r; };
             t.objectStore = () => ({
-              getAll() { const r = {}; outstanding++; later(() => { outstanding--; r.result = [...data.values()].map(copy); r.onsuccess && r.onsuccess(); }); return r; },
+              getAll: () => request(() => [...data.values()].map(copy)),
+              get: key => request(() => (data.has(key) ? copy(data.get(key)) : undefined)),
               put(rec) { const c = copy(rec); ops.push(() => data.set(c.key, c)); },
               delete(key) { ops.push(() => data.delete(key)); }
             });
@@ -57,10 +65,15 @@ function fakeIndexedDB({ failOpen = false } = {}) {
         req.result = conn;
         if (upgrade && req.onupgradeneeded) req.onupgradeneeded();
         req.onsuccess && req.onsuccess();
+      };
+      later(() => {
+        if (blockedMs) { req.onblocked && req.onblocked(); later(go, blockedMs); }
+        else later(go, openDelayMs);
       });
       return req;
     }
   };
+  return api;
 }
 
 function fakeCloud() {
@@ -82,22 +95,29 @@ function fakeCloud() {
 }
 
 // Nabootsing van één apparaat met dezelfde stappen als account-sync.js (momentopname → ronde → uitgestelde pulls →
-// toepassen → basiswaarden in de metastore → versie-administratie).
-function device(cloud, meta, slot = 'user-a:hh-1') {
-  const dev = { data: {}, bases: {}, meta, slot };
+// toepassen → commitRound: basiswaarden → versie-administratie → conflicten → inflight).
+function device(cloud, meta, slot = 'user-a:hh-1', { writeBases } = {}) {
+  const dev = { data: {}, bases: {}, sessionBases: null, meta, slot, warnings: [] };
+  dev.readBases = () => dev.sessionBases || dev.bases;
   dev.sync = async ({ duringRound, resolutions = {} } = {}) => {
-    const prevBase = dev.bases;
+    const prevBase = dev.readBases();
     const prevBaseValues = await meta.loadBaseValues(slot, prevBase);
     const snapshot = structuredClone(dev.data);
-    const tracked = SM.trackUploads(cloud, meta, slot, HS.classifyError);
+    const tracked = SM.trackUploads(cloud, meta, slot, HS.classifyError, step => dev.warnings.push(step));
     const wrapped = duringRound ? { ...tracked, async readState(h) { const r = await tracked.readState(h); duringRound(dev); return r; } } : tracked;
     const raw = await HS.runAccountSync({ cloud: wrapped, householdId: 'hh-1', local: snapshot, base: prevBase, baseValues: prevBaseValues, resolutions, encrypt: async v => v, decrypt: async p => p });
     const result = HS.deferChangedPulls({ snapshot, current: dev.data, result: raw, prevBase, prevBaseValues });
     dev.data = { ...dev.data, ...result.pulls };
-    await meta.saveBaseValues(slot, result.baseValues);
-    dev.bases = result.base;
-    if (result.status === 'ok') await meta.clearInflight(slot);
-    return result;
+    const commit = await SM.commitRound({
+      store: meta, slot, base: result.base, baseValues: result.baseValues, conflicts: result.conflicts, roundOk: result.status === 'ok',
+      writeBases: async (b, opts) => {
+        if (writeBases) await writeBases(b, opts);
+        if (opts.durable) { dev.bases = b; dev.sessionBases = null; } else dev.sessionBases = b;
+      }
+    });
+    if (!commit.committed) return { ...result, status: 'partial', commit };
+    commit.warnings.forEach(w => dev.warnings.push(w.step));
+    return { ...result, commit };
   };
   return dev;
 }
@@ -324,13 +344,6 @@ test('7b. hetzelfde veld in twee tabbladen: waarde van het schrijvende tabblad b
   assert.equal(w.remote.budgetV23.pct, 60, 'de andere waarde komt mee voor het conflictlogboek');
 });
 
-test('7c. tabbladconflict wordt bewaard (begrensd tot 20)', async () => {
-  const meta = newMeta();
-  for (let i = 0; i < 23; i++) await meta.recordTabConflict({ fields: ['x'], discarded: { i } });
-  const list = await meta.listTabConflicts();
-  assert.equal(list.length, 20);
-});
-
 // ---------- 8. Meerdere synchronisatieverzoeken tegelijk ----------
 test('8. meerdere verzoeken tegelijk: lease-lock laat er één door (ook over tabbladen heen)', async () => {
   const storage = memoryStorage();
@@ -464,4 +477,263 @@ test('10c. bronbestanden: app.js schrijft samenThuisDataV2 alleen via de bewaakt
   assert.match(acct, /appliedHash/, 'basis voor toegepaste cloudwaarden wordt vóór het opslaan vastgelegd');
   assert.match(acct, /LOCK\.run\(/); assert.match(acct, /deferChangedPulls/); assert.match(acct, /trackUploads/);
   assert.doesNotMatch(acct, /localStorage\.setItem\(BASE_VALUES_KEY/, 'basiswaarden niet meer in localStorage');
+});
+
+// =====================================================================================================================
+// Opdracht 3 — regressietests voor de review-bevindingen
+// =====================================================================================================================
+
+// Metastore met foutinjectie per methode (nagebootste opslag).
+function failingMeta(failOn = {}) {
+  const meta = newMeta();
+  const wrap = name => async (...args) => { if (failOn[name] && failOn[name]-- > 0) throw new Error('injectie: ' + name); return meta[name](...args); };
+  return { ...meta, ...Object.fromEntries(['saveBaseValues', 'saveConflicts', 'clearInflight', 'beginUpload', 'endUpload'].map(n => [n, wrap(n)])) };
+}
+async function twoRoundsAfterFailure(failOn, { writeBasesFails = 0 } = {}) {
+  const cloud = fakeCloud(), meta = failingMeta(failOn);
+  let wbFail = writeBasesFails;
+  const kees = device(cloud, meta, 'kees:hh', { writeBases: async () => { if (wbFail-- > 0) throw new Error('injectie: writeBases'); } });
+  kees.data = { groceries: [g('a', 'Melk')] };
+  const r1 = await kees.sync();
+  const r2 = await kees.sync();
+  return { cloud, meta, kees, r1, r2 };
+}
+
+test('R1a. basiswaarde opslaan mislukt: geen versie als bevestigd; volgende ronde neemt over zonder tweede upload', async () => {
+  const { cloud, kees, r1, r2 } = await twoRoundsAfterFailure({ saveBaseValues: 1 });
+  assert.equal(r1.status, 'partial'); assert.equal(r1.commit.step, 'basiswaarden');
+  assert.equal(cloud.rows.get('groceries').version, 1, 'server had de upload al');
+  assert.equal(r2.status, 'ok'); assert.deepEqual(r2.pushed, [], 'geen dubbele mutatie');
+  assert.equal(cloud.rows.get('groceries').version, 1);
+  assert.equal(kees.bases.groceries.version, 1, 'na herstel wel bevestigd');
+  assert.deepEqual(kees.data.groceries, [g('a', 'Melk')], 'lokale gegevens onaangetast');
+});
+
+test('R1b. versie-administratie schrijven mislukt: oude administratie vindt haar basis nog (vorige waarde)', async () => {
+  const cloud = fakeCloud(), meta = newMeta();
+  let fail = 0;
+  const kees = device(cloud, meta, 'kees:hh', { writeBases: async () => { if (fail-- > 0) throw new Error('injectie: writeBases'); } });
+  kees.data = { groceries: [g('a', 'Melk')] };
+  await kees.sync();
+  const oldBases = structuredClone(kees.bases);
+  kees.data.groceries.push(g('b', 'Brood'));
+  fail = 1;
+  const r = await kees.sync();
+  assert.equal(r.status, 'partial'); assert.equal(r.commit.step, 'versie-administratie');
+  assert.deepEqual(kees.bases, oldBases, 'administratie niet bijgewerkt');
+  assert.deepEqual((await meta.loadBaseValues(kees.slot, oldBases)).groceries, [g('a', 'Melk')], 'basis bij oude administratie nog aanwezig');
+  const r2 = await kees.sync();
+  assert.equal(r2.status, 'ok'); assert.deepEqual(r2.pushed, []);
+  assert.equal(cloud.rows.get('groceries').version, 2);
+  assert.equal(kees.bases.groceries.version, 2);
+});
+
+test('R1c. conflicten bewaren mislukt: ronde vastgelegd, waarschuwing zichtbaar (niet stil)', async () => {
+  const { r1, kees } = await twoRoundsAfterFailure({ saveConflicts: 1 });
+  assert.equal(r1.commit.committed, true);
+  assert.ok(kees.warnings.includes('conflicten'));
+});
+
+test('R1d. inflight wissen mislukt: waarschuwing; volgende geslaagde ronde wist alsnog', async () => {
+  const cloud = fakeCloud(), meta = failingMeta({ clearInflight: 1 });
+  const kees = device(cloud, meta, 'kees:hh');
+  kees.data = { groceries: [g('a', 'Melk')] };
+  cloud.failNextPut('after-commit');
+  await kees.sync();                       // inflight blijft (netwerk)
+  const r = await kees.sync();             // ok, maar wissen faalt
+  assert.equal(r.status, 'ok'); assert.ok(kees.warnings.includes('inflight'));
+  assert.equal((await meta.listInflight(kees.slot)).length, 1);
+  await kees.sync();
+  assert.deepEqual(await meta.listInflight(kees.slot), []);
+});
+
+test('R1e. inflight registreren mislukt: upload gaat door (server-versiecontrole blijft), waarschuwing zichtbaar', async () => {
+  const { cloud, r1, kees } = await twoRoundsAfterFailure({ beginUpload: 1, endUpload: 1 });
+  assert.equal(r1.status, 'ok'); assert.equal(cloud.rows.get('groceries').version, 1);
+  assert.ok(kees.warnings.includes('inflight-start') && kees.warnings.includes('inflight-einde'));
+});
+
+test('R1f. fout in de metastore wordt in status().lastError vastgelegd', async () => {
+  const idb = fakeIndexedDB(); const meta = newMeta(idb);
+  assert.equal((await meta.status()).durability, 'durable');
+  idb.quotaOnWrite = true;
+  await assert.rejects(meta.saveBaseValues('s', { groceries: [1] }), /QuotaExceeded/);
+  const st = await meta.status();
+  assert.equal(st.lastError.step, 'basiswaarden'); assert.match(st.lastError.message, /Quota/);
+});
+
+test('R2. alleen geheugen: commitRound meldt "session"; administratie blijft in geheugen (nooit als duurzaam bevestigd)', async () => {
+  const cloud = fakeCloud();
+  const meta = SM.createSyncMetaStore({ hashValue: HS.hashValue });
+  assert.deepEqual((await meta.status()).durability, 'session');
+  const kees = device(cloud, meta, 'kees:hh');
+  kees.data = { groceries: [g('a', 'Melk')] };
+  const r = await kees.sync();
+  assert.equal(r.commit.durability, 'session');
+  assert.deepEqual(kees.bases, {}, 'niets in de duurzame administratie');
+  assert.equal(kees.sessionBases.groceries.version, 1, 'wel in het geheugen van deze sessie');
+  // localStorage-terugval die vol raakt → geheugen → ook "session".
+  const full = SM.createSyncMetaStore({ indexedDB: undefined, storage: memoryStorage(new Map(), { quotaAt: 10 }), hashValue: HS.hashValue });
+  assert.equal((await full.status()).durability, 'limited');
+  const saved = await full.saveBaseValues('s', { groceries: ['te groot voor de opslag'] });
+  assert.equal(saved.durability, 'session');
+});
+
+test('R3. localStorage-lease is niet exclusief bij vertraagde zichtbaarheid; server-versiecontrole voorkomt verlies', async () => {
+  // Twee tabbladen met elk een eigen (vertraagde) blik op localStorage: beide denken de lease te hebben.
+  const viewA = memoryStorage(), viewB = memoryStorage();
+  const timers = { setInterval: () => 0, clearInterval: () => {} };
+  const tabA = TS.createSyncLock({ storage: viewA, tabId: 'A', timers }), tabB = TS.createSyncLock({ storage: viewB, tabId: 'B', timers });
+  assert.equal(tabA.exclusive, false, 'lease claimt geen exclusiviteit');
+  let release; const gate = new Promise(r => { release = r; });
+  const a = tabA.run(() => gate.then(() => 'A'));
+  const b = await tabB.run(async () => 'B');
+  assert.equal(b.acquired, true, 'beide verkregen: geen garantie zonder Web Locks');
+  release(); await a;
+  // Laatste verdedigingslinie: twee gelijktijdige rondes van hetzelfde apparaat met dezelfde versie.
+  const cloud = fakeCloud();
+  const shared = { groceries: [g('a', 'Melk')] };
+  const t1 = device(cloud, newMeta(), 'kees:hh'), t2 = device(cloud, newMeta(), 'kees:hh');
+  t1.data = structuredClone(shared); t2.data = structuredClone(shared);
+  const [r1, r2] = await Promise.all([t1.sync(), t2.sync()]);
+  assert.equal(cloud.rows.get('groceries').version, 1, 'precies één schrijver geaccepteerd');
+  assert.ok([r1.status, r2.status].includes('ok'));
+  const loser = r1.status === 'ok' ? t2 : t1;
+  assert.equal((await loser.sync()).status, 'ok', 'tweede tabblad herstelt in de volgende ronde (adopt)');
+  assert.equal(cloud.rows.get('groceries').version, 1, 'geen extra versie');
+  assert.equal(TS.createSyncLock({ locks: { request() {} } }).exclusive, true, 'alleen Web Locks zijn exclusief');
+});
+
+test('R4. hangend netwerkverzoek wordt afgebroken (time-out) en geldt als netwerkfout; lock komt vrij', async () => {
+  const fetchImpl = (_url, opts) => new Promise((_, reject) => opts.signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))));
+  const cloud = HS.createCloud({ url: 'https://x.supabase.co', anonKey: 'k', getToken: async () => 't', fetchImpl, timeoutMs: 20 });
+  const lock = TS.createSyncLock({ storage: memoryStorage(), tabId: 't', timers: { setInterval: () => 0, clearInterval: () => {} } });
+  const out = await lock.run(() => cloud.readState('hh').then(() => 'ok', e => e));
+  assert.equal(out.value.name, 'TimeoutError');
+  assert.equal(HS.classifyError(out.value).kind, 'network');
+  assert.equal((await lock.run(async () => 'vrij')).value, 'vrij');
+});
+
+test('R5a. tabbladconflict: beide waarden per pad, financieel gemarkeerd, dubbele melding → één record', async () => {
+  const kept = { budgetV23: { pct: 40 }, groceries: [g('a', 'Volle melk')] };
+  const other = { budgetV23: { pct: 60 }, groceries: [g('a', 'Havermelk')] };
+  const base = { budgetV23: { pct: 50 }, groceries: [g('a', 'Melk')] };
+  const details = TS.describeConflicts({ paths: ['budgetV23.pct', 'groceries[a].title'], kept, other, base });
+  assert.deepEqual(details.map(d => [d.path, d.financial, d.kept, d.other, d.base]), [
+    ['budgetV23.pct', true, 40, 60, 50], ['groceries[a].title', false, 'Volle melk', 'Havermelk', 'Melk']]);
+  const meta = newMeta();
+  const first = await meta.recordTabConflict(details[0]);
+  // Het andere tabblad meldt dezelfde botsing (waarden omgedraaid).
+  const second = await meta.recordTabConflict({ ...details[0], kept: 60, other: 40 });
+  assert.equal(second.duplicate, true); assert.equal(first.key, second.key);
+  await meta.recordTabConflict(details[1]);
+  const list = await meta.listTabConflicts();
+  assert.equal(list.length, 2);
+  const fin = list.find(r => r.financial);
+  assert.equal(fin.count, 2); assert.equal(fin.kept, 40); assert.equal(fin.other, 60); assert.equal(fin.base, 50);
+});
+
+test('R5b. tabbladconflict later herstellen: andere waarde terugzetten op het pad; opgelost blijft in historie', async () => {
+  const meta = newMeta();
+  const data = { budgetV23: { pct: 40 }, groceries: [g('a', 'Volle melk')] };
+  const { key } = await meta.recordTabConflict({ path: 'groceries[a].title', section: 'groceries', kept: 'Volle melk', other: 'Havermelk' });
+  const rec = await meta.getTabConflict(key);
+  assert.equal(TS.setAt(data, rec.path, rec.other), true);
+  assert.equal(data.groceries[0].title, 'Havermelk');
+  await meta.resolveTabConflict(key, 'other');
+  assert.equal((await meta.listTabConflicts({ includeResolved: false })).length, 0);
+  assert.equal((await meta.listTabConflicts()).length, 1, 'historie blijft');
+  assert.equal(TS.setAt(data, 'onbekend[x].veld', 1), false, 'geen nieuwe structuur verzinnen');
+});
+
+test('R5c. opruimen: openstaande conflicten blijven; alleen opgeloste boven 50 verdwijnen', async () => {
+  const meta = newMeta();
+  for (let i = 0; i < 60; i++) { const { key } = await meta.recordTabConflict({ path: 'groceries[' + i + '].title', kept: 'a' + i, other: 'b' + i }); await meta.resolveTabConflict(key, 'kept'); }
+  for (let i = 0; i < 5; i++) await meta.recordTabConflict({ path: 'budgetV23.p' + i, financial: true, kept: i, other: -i });
+  const all = await meta.listTabConflicts();
+  assert.equal(all.filter(r => !r.resolved).length, 5);
+  assert.ok(all.filter(r => r.resolved).length <= 50);
+});
+
+test('R5d. app.js geeft tabbladconflicten door met beide waarden en een aparte financiële melding', () => {
+  const app = require('node:fs').readFileSync(__dirname + '/app.js', 'utf8');
+  assert.match(app, /describeConflicts\(\{ paths: result\.conflicts, kept: result\.value, other: result\.remote, base: result\.base \}\)/);
+  assert.match(app, /financiële gegevens zijn in twee tabbladen verschillend gewijzigd/);
+  assert.match(app, /window\.SamenThuisTabConflicts = \{/);
+  assert.doesNotMatch(app, /discarded: result\.remote/, 'geen volledige gegevenskopie per conflict meer');
+});
+
+test('R6a. IndexedDB geblokkeerd door oud tabblad: wacht op vrijgave in plaats van direct terug te vallen', async () => {
+  const idb = fakeIndexedDB({ blockedMs: 30 });
+  const meta = newMeta(idb);
+  assert.equal(await meta.mode(), 'indexeddb');
+});
+
+test('R6b. IndexedDB opent pas na de time-out: terugval, en de late verbinding wordt gesloten (geen lek)', async () => {
+  const idb = fakeIndexedDB({ openDelayMs: 60 });
+  const timers = { setTimeout: (fn) => setTimeout(fn, 10), clearTimeout: id => clearTimeout(id) };
+  const meta = SM.createSyncMetaStore({ indexedDB: idb, storage: memoryStorage(), hashValue: HS.hashValue, timers });
+  assert.equal(await meta.mode(), 'localStorage');
+  await new Promise(r => setTimeout(r, 120));
+  assert.equal(idb.closed, 1);
+});
+
+test('R6c. schrijftransacties vragen strikte duurzaamheid', async () => {
+  const idb = fakeIndexedDB(); const meta = newMeta(idb);
+  await meta.saveBaseValues('s', { groceries: [1] });
+  const writes = idb.txOptions.filter(t => t.mode === 'readwrite');
+  assert.ok(writes.length && writes.every(t => t.options && t.options.durability === 'strict'));
+});
+
+test('R6d. twee tabbladen migreren tegelijk; een intussen bewaarde nieuwere basis wordt niet overschreven', async () => {
+  const idb = fakeIndexedDB(), storage = memoryStorage();
+  storage.setItem(SM.LEGACY_BASE_KEY, JSON.stringify({ slot: { groceries: ['oud'] } }));
+  const tab1 = newMeta(idb, storage);
+  await tab1.mode();                                  // tab 1 migreert
+  await tab1.saveBaseValues('slot', { groceries: ['nieuw'] });
+  storage.setItem(SM.LEGACY_BASE_KEY, JSON.stringify({ slot: { groceries: ['oud'] } })); // oud tabblad (oude versie) schreef opnieuw
+  const tab2 = newMeta(idb, storage);
+  assert.deepEqual((await tab2.loadBaseValues('slot')).groceries, ['nieuw']);
+  const [x, y] = await Promise.all([newMeta(idb, storage).mode(), newMeta(idb, storage).mode()]);
+  assert.equal(x, 'indexeddb'); assert.equal(y, 'indexeddb');
+  assert.deepEqual((await tab2.loadBaseValues('slot')).groceries, ['nieuw']);
+});
+
+test('R7. versiegeschiedenis in de tabbladbewaking houdt maximaal 8 volledige teksten vast', () => {
+  const storage = memoryStorage();
+  storage.setItem('k', JSON.stringify({ meta: {}, groceries: [] }));
+  const tab = TS.createDataGuard({ storage, key: 'k', merge3: HS.merge3 });
+  const other = TS.createDataGuard({ storage, key: 'k', merge3: HS.merge3 });
+  let mine = JSON.parse(storage.getItem('k'));
+  for (let i = 0; i < 40; i++) {
+    const v = JSON.parse(storage.getItem('k')); v.groceries.push(g('x' + i, 'item ' + 'x'.repeat(1000)));
+    const text = other.serialize(v); storage.setItem('k', text); other.commit(text);
+    mine = tab.absorb(text, mine).value;
+  }
+  assert.equal(mine.groceries.length, 40);
+  assert.ok(tab.stats().texts <= 8, 'teksten: ' + tab.stats().texts);
+  assert.ok(tab.stats().versions >= 40, 'herkomstketen blijft bewaard');
+  // Indirect: na 40 versies werkt samenvoegen met een oude voorganger zonder tekst nog veilig (zonder basis).
+  const r = tab.absorb(JSON.stringify({ meta: { __tabRev: { id: 'vreemd', parent: 'onbekend' } }, groceries: [g('z', 'Z')] }), mine);
+  assert.ok(r.value.groceries.length === 41, 'zonder bekende voorganger wordt niets verwijderd');
+});
+
+test('R8. twee tabbladen schrijven elk hetzelfde samenvoegresultaat; volgende wijziging geeft geen onterecht conflict', () => {
+  const storage = memoryStorage();
+  storage.setItem('k', JSON.stringify({ meta: {}, groceries: [g('a', 'Melk')] }));
+  const A = TS.createDataGuard({ storage, key: 'k', merge3: HS.merge3 }), B = TS.createDataGuard({ storage, key: 'k', merge3: HS.merge3 });
+  let dA = JSON.parse(storage.getItem('k')), dB = JSON.parse(storage.getItem('k'));
+  dA.groceries.push(g('kaas', 'Kaas')); const K = A.serialize(dA); storage.setItem('k', K); A.commit(K);
+  dB.groceries.push(g('ei', 'Eieren')); const E = B.serialize(dB); storage.setItem('k', E); B.commit(E); // B zag K niet
+  const ra = A.absorb(E, dA); dA = ra.value; const M = A.serialize(dA); storage.setItem('k', M); A.commit(M);
+  const rb = B.absorb(K, dB); dB = rb.value; const M2 = B.serialize(dB); storage.setItem('k', M2); B.commit(M2);
+  dB = B.absorb(M, dB).value; dA = A.absorb(M2, dA).value;           // late meldingen: zelfde inhoud
+  assert.deepEqual(ids(dA), ids(dB));
+  // Nu wijzigen beide (A in geheugen, B slaat op) hetzelfde item: één echt conflict, geen extra (onterechte) conflicten.
+  dB.groceries.find(x => x.id === 'kaas').title = 'Oude kaas';
+  const w = B.prepareWrite(dB); const T = B.serialize(w.value); storage.setItem('k', T); B.commit(T);
+  assert.deepEqual(w.conflicts, [], 'B kent de laatste inhoud: geen conflict');
+  dA.groceries.find(x => x.id === 'kaas').title = 'Geitenkaas';
+  const r = A.absorb(T, dA);
+  assert.deepEqual(r.conflicts, ['groceries[kaas].title'], 'alleen het echte conflict');
 });

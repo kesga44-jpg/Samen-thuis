@@ -22,7 +22,8 @@
   // schrijven zonder de net gemaakte wijziging van een ander tabblad al te zien. Het tabblad dat dat later via het
   // storage-event merkt, voegt samen en schrijft het resultaat terug (needsWrite), zodat beide wijzigingen blijven.
   const REV = '__tabRev';
-  const HISTORY_LIMIT = 30;
+  const HISTORY_LIMIT = 100;      // herkomstketen (alleen id's)
+  const TEXT_LIMIT = 8;           // volledige teksten alleen van de jongste versies (geheugengebruik begrensd)
 
   // storage: Storage-achtig object; merge3(base, local, remote, opts) uit household-sync-core.js.
   function createDataGuard({ storage, key, merge3, newId = randomId }) {
@@ -30,33 +31,46 @@
     const history = new Map(); // id -> { text, parent }
     let known = { id: null, text: null };
 
+    // parent: de versie waarop is voortgebouwd; merged: de tweede voorganger als het een samengevoegde versie is.
     const revOf = value => {
       const r = value && value.meta && value.meta[REV];
-      return r && typeof r.id === 'string' ? { id: r.id, parent: typeof r.parent === 'string' ? r.parent : null } : { id: null, parent: null };
+      return r && typeof r.id === 'string'
+        ? { id: r.id, parent: typeof r.parent === 'string' ? r.parent : null, merged: typeof r.merged === 'string' ? r.merged : null }
+        : { id: null, parent: null, merged: null };
     };
-    function remember(text, value) {
-      const r = revOf(value);
+    let mergedFrom = null; // id van onze eigen versie die in de volgende schrijfactie is samengevoegd met een andere
+    function remember(text, r) {
       if (!r.id) return r;
-      history.delete(r.id); history.set(r.id, { text, parent: r.parent });
+      history.delete(r.id); history.set(r.id, { text, parents: [r.parent, r.merged].filter(Boolean) });
+      let withText = 0;
+      for (const id of [...history.keys()].reverse()) { const h = history.get(id); if (h.text != null && ++withText > TEXT_LIMIT) h.text = null; }
       while (history.size > HISTORY_LIMIT) history.delete(history.keys().next().value);
       return r;
     }
-    function setKnown(text, parsed) {
-      const value = parsed !== undefined ? parsed : (text == null ? null : parse(text).value);
-      const r = remember(text, value);
+    function setKnown(text, rev) {
+      const r = rev || revOf(text == null ? null : parse(text).value);
+      remember(text, r);
       known = { id: r.id, text };
     }
+    let lastSerialized = null;
     try { setKnown(storage.getItem(key)); } catch (_) { known = { id: null, text: null }; }
 
-    const chain = id => { const out = []; const seen = new Set(); let cur = id; while (cur && !seen.has(cur)) { out.push(cur); seen.add(cur); cur = history.get(cur)?.parent || null; } return out; };
+    // Voorgangers, dichtstbijzijnde eerst (breedte-eerst over beide voorgangers).
+    const ancestors = starts => {
+      const out = [], seen = new Set(), queue = starts.filter(Boolean);
+      while (queue.length) { const id = queue.shift(); if (seen.has(id)) continue; seen.add(id); out.push(id); queue.push(...(history.get(id)?.parents || [])); }
+      return out;
+    };
 
     // Basis voor samenvoegen van `other` met wat dit tabblad kent: de jongste gemeenschappelijke voorganger.
     function baseFor(otherRev) {
       if (known.text == null) return { ok: false };
       if (!otherRev.id || !known.id) return parse(known.text); // oude gegevens zonder herkomst: laatst bekende versie
-      const mine = new Set(chain(known.id));
-      for (const id of chain(otherRev.parent)) {
-        if (mine.has(id)) { const h = history.get(id); return h ? parse(h.text) : { ok: false }; }
+      const mine = new Set(ancestors([known.id, mergedFrom]));
+      for (const id of ancestors([otherRev.parent, otherRev.merged])) {
+        if (!mine.has(id)) continue;
+        const h = history.get(id);
+        if (h && h.text != null) return parse(h.text);
       }
       return { ok: false }; // geen gemeenschappelijke voorganger bekend: zonder basis samenvoegen (niets verwijderen)
     }
@@ -70,6 +84,13 @@
       const other = parse(otherText);
       if (!other.ok || !other.value || typeof other.value !== 'object') return { value: current, external: true, conflicts: ['(onleesbare gegevens van een ander tabblad)'], unreadable: true, needsWrite: false };
       const otherRev = revOf(other.value);
+      // Zelfde inhoud als de laatst bekende versie (bijv. twee tabbladen die elk hetzelfde samenvoegresultaat schreven):
+      // alleen de herkomst overnemen, niets samenvoegen. Voorkomt een te oude basis en onterechte conflicten.
+      const knownParsed = known.text == null ? { ok: false } : parse(known.text);
+      if (knownParsed.ok && stableText(split(knownParsed.value).body) === stableText(split(other.value).body)) {
+        setKnown(otherText, otherRev);
+        return { value: current, external: true, conflicts: [], remote: other.value, needsWrite: false, sameContent: true };
+      }
       const base = baseFor(otherRev);
       const B = base.ok ? split(base.value) : { body: undefined }, L = split(current), R = split(other.value);
       const opts = { conflicts: [] };
@@ -81,12 +102,14 @@
       meta[REV] = { ...otherRev };
       const value = { ...body, meta };
       const needsWrite = stableText(body) !== stableText(R.body);
-      setKnown(otherText, other.value);
-      return { value, external: true, conflicts: opts.conflicts, remote: other.value, needsWrite };
+      if (stableText(body) !== stableText(R.body) || stableText(L.body) !== stableText(R.body)) mergedFrom = mergedFrom || known.id;
+      setKnown(otherText, otherRev);
+      return { value, external: true, conflicts: opts.conflicts, remote: other.value, base: base.ok ? base.value : undefined, needsWrite };
     }
 
     return {
       known: () => known.text,
+      stats: () => ({ versions: history.size, texts: [...history.values()].filter(h => h.text != null).length }),
       // Vlak vóór het schrijven van `current`. Geeft de waarde terug die geschreven moet worden.
       prepareWrite(current) {
         let stored = null;
@@ -98,12 +121,14 @@
       serialize(value) {
         if (value && typeof value === 'object') {
           if (!value.meta || typeof value.meta !== 'object') value.meta = {};
-          value.meta[REV] = { id: newId(), parent: known.id };
+          value.meta[REV] = { id: newId(), parent: known.id, ...(mergedFrom && mergedFrom !== known.id ? { merged: mergedFrom } : {}) };
         }
-        return JSON.stringify(value);
+        const text = JSON.stringify(value);
+        lastSerialized = { text, rev: revOf(value) };
+        return text;
       },
-      // Na een geslaagde schrijfactie.
-      commit(text) { setKnown(text); },
+      // Na een geslaagde schrijfactie (zonder de tekst opnieuw te parsen als hij net door serialize is gemaakt).
+      commit(text) { setKnown(text, lastSerialized && lastSerialized.text === text ? lastSerialized.rev : undefined); lastSerialized = null; mergedFrom = null; },
       // Wijziging uit een ander tabblad (storage-event). needsWrite: het resultaat bevat iets dat de opslag mist.
       absorb(newText, current) {
         if (newText == null || newText === known.text) return { value: current, external: false, conflicts: [], needsWrite: false };
@@ -169,7 +194,11 @@
         return await runWithLease(fn);
       } finally { held = false; }
     }
-    return { run, tabId, release: releaseLease, isHeld: () => held, kind: webLocks ? 'web-locks' : 'lease' };
+    // exclusive: alleen Web Locks geven een echte garantie. De lease is best effort: lezen-schrijven-controleren in
+    // localStorage is niet atomair en kan tussen tabbladen vertraagd zichtbaar zijn, waardoor twee tabbladen hem
+    // tegelijk kunnen denken te hebben. Een verlopen lease (crash, gepauzeerd tabblad) wordt na ttlMs overgenomen.
+    // De versiecontrole op de server (put_household_state) blijft daarom altijd de laatste beveiliging.
+    return { run, tabId, release: releaseLease, isHeld: () => held, kind: webLocks ? 'web-locks' : 'lease', exclusive: !!webLocks };
   }
 
   function createChannel({ name = 'samen-thuis', BroadcastChannelImpl = globalThis.BroadcastChannel, tabId = randomId() } = {}) {
@@ -189,5 +218,56 @@
     };
   }
 
-  return { createDataGuard, createSyncLock, createChannel, randomId };
+  // ---------- Conflictdetails per pad ----------
+  // Pad zoals merge3 het meldt: "budgetV23.incomes.Kees", "groceries[g1].title", "(onderdeel)".
+  function parsePath(path) {
+    const out = []; const re = /\[([^\]]*)\]|([^.[\]]+)/g; let m;
+    while ((m = re.exec(String(path)))) out.push(m[1] !== undefined ? { id: m[1] } : { key: m[2] });
+    return out;
+  }
+  function valueAt(obj, path) {
+    let cur = obj;
+    for (const step of parsePath(path)) {
+      if (cur == null) return undefined;
+      if (step.id !== undefined) cur = Array.isArray(cur) ? cur.find(x => x && String(x.id) === step.id) : undefined;
+      else cur = typeof cur === 'object' ? cur[step.key] : undefined;
+    }
+    return cur;
+  }
+  // Zet een waarde op een pad; alleen bestaande tussenliggende objecten/items (geen nieuwe structuur verzinnen).
+  function setAt(obj, path, value) {
+    const steps = parsePath(path);
+    if (!steps.length) return false;
+    let cur = obj;
+    for (let i = 0; i < steps.length - 1; i++) {
+      const step = steps[i];
+      cur = step.id !== undefined ? (Array.isArray(cur) ? cur.find(x => x && String(x.id) === step.id) : undefined) : (cur && typeof cur === 'object' ? cur[step.key] : undefined);
+      if (cur == null || typeof cur !== 'object') return false;
+    }
+    const last = steps[steps.length - 1];
+    if (last.id !== undefined) {
+      if (!Array.isArray(cur)) return false;
+      const idx = cur.findIndex(x => x && String(x.id) === last.id);
+      if (idx < 0) cur.push(value); else cur[idx] = value;
+      return true;
+    }
+    if (value === undefined) delete cur[last.key]; else cur[last.key] = value;
+    return true;
+  }
+  // Financiële onderdelen: wijzigingen daarin worden nooit stilzwijgend gekozen (zie conflictbeleid B2).
+  const FINANCIAL = /^(budget|finan)/i;
+  const isFinancialPath = path => { const first = parsePath(path)[0]; return !!(first && first.key && FINANCIAL.test(first.key)); };
+  // Zet de paden uit merge3 om naar records met beide waarden (en de basis), voor het conflictlogboek.
+  function describeConflicts({ paths, kept, other, base, prefix = '' }) {
+    return (paths || []).map(p => {
+      const path = prefix ? (p === '(onderdeel)' ? prefix : `${prefix}${p.startsWith('[') ? '' : '.'}${p}`) : p;
+      const whole = /^\(/.test(path);
+      return {
+        path, section: whole ? '' : (parsePath(path)[0] || {}).key || '', financial: !whole && isFinancialPath(path),
+        kept: whole ? null : valueAt(kept, path), other: whole ? null : valueAt(other, path), base: whole || base === undefined ? null : valueAt(base, path)
+      };
+    });
+  }
+
+  return { createDataGuard, createSyncLock, createChannel, randomId, parsePath, valueAt, setAt, isFinancialPath, describeConflicts };
 });

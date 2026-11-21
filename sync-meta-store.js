@@ -6,7 +6,8 @@
    - inflight: verzonden maar (nog) niet bevestigde uploads. Na een crash of netwerkverlies blijft zichtbaar dat de uitkomst
      onzeker is; de volgende ronde stelt via versie + hash vast of de server de wijziging al had (dan geen tweede mutatie).
    - conflicts: conflictsamenvattingen per slot (sync) en tabbladconflicten (met de niet-gekozen waarde, om terug te halen).
-   Opslag: IndexedDB; valt terug op localStorage en daarna op geheugen. Oude basiswaarden uit
+   Opslag: IndexedDB (durable); valt terug op localStorage (limited) en daarna op geheugen (session, nooit als
+   duurzaam gemeld; zie status()). Oude basiswaarden uit
    localStorage (samenThuisAccountSyncBaseValuesV1) worden eenmalig overgenomen en pas na bevestigde opslag verwijderd. */
 (function (root, factory) {
   const core = factory();
@@ -20,7 +21,6 @@
   const STORES = ['baseValues', 'inflight', 'conflicts'];
   const LEGACY_BASE_KEY = 'samenThuisAccountSyncBaseValuesV1';
   const FALLBACK_KEY = 'samenThuisSyncMetaFallbackV1';
-  const MAX_TAB_CONFLICTS = 20;
   const sep = '\u0000';
   const keyOf = (...parts) => parts.map(String).join(sep);
 
@@ -31,7 +31,8 @@
       kind: 'memory',
       async getAll(store) { return [...data[store].values()].map(r => JSON.parse(JSON.stringify(r))); },
       async putMany(store, records) { records.forEach(r => data[store].set(r.key, JSON.parse(JSON.stringify(r)))); },
-      async deleteMany(store, keys) { keys.forEach(k => data[store].delete(k)); }
+      async deleteMany(store, keys) { keys.forEach(k => data[store].delete(k)); },
+      async putIfAbsent(store, records) { let n = 0; records.forEach(r => { if (!data[store].has(r.key)) { data[store].set(r.key, JSON.parse(JSON.stringify(r))); n++; } }); return n; }
     };
   }
 
@@ -58,6 +59,12 @@
         if (memory) return memory.deleteMany(store, keys);
         const all = read(); keys.forEach(k => { if (all[store]) delete all[store][k]; });
         try { write(all); } catch (_) {}
+      },
+      async putIfAbsent(store, records) {
+        const existing = new Set((await backend.getAll(store)).map(r => r.key));
+        const fresh = records.filter(r => !existing.has(r.key));
+        if (fresh.length) await backend.putMany(store, fresh);
+        return fresh.length;
       }
     };
     return backend;
@@ -82,17 +89,23 @@
         const db = request.result;
         STORES.forEach(s => { if (!db.objectStoreNames.contains(s)) db.createObjectStore(s, { keyPath: 'key' }); });
       };
-      request.onblocked = () => done(reject, new Error('IndexedDB geblokkeerd door een ander tabblad'));
+      // Geblokkeerd (een ander tabblad houdt een oudere versie open): niet direct opgeven. Andere tabbladen sluiten hun
+      // verbinding bij `versionchange`; lukt dat niet binnen de time-out, dan volgt de terugval.
+      request.onblocked = () => {};
       request.onerror = () => done(reject, request.error || new Error('IndexedDB openen mislukt'));
       request.onsuccess = () => {
         const db = request.result;
         db.onversionchange = () => { try { db.close(); } catch (_) {} };
+        if (settled) { try { db.close(); } catch (_) {} return; } // te laat (na time-out): verbinding niet laten lekken
         done(resolve, db);
       };
     }).then(db => {
       const tx = (store, mode, work) => new Promise((resolve, reject) => {
         let result;
-        const t = db.transaction(store, mode);
+        let t;
+        // 'strict': `complete` pas na wegschrijven naar schijf (waar de browser dit ondersteunt).
+        try { t = mode === 'readwrite' ? db.transaction(store, mode, { durability: 'strict' }) : db.transaction(store, mode); }
+        catch (_) { t = db.transaction(store, mode); }
         t.oncomplete = () => resolve(result);
         t.onerror = () => reject(t.error || new Error('IndexedDB-transactie mislukt'));
         t.onabort = () => reject(t.error || new Error('IndexedDB-transactie afgebroken'));
@@ -103,15 +116,32 @@
         getAll: store => tx(store, 'readonly', os => idbRequest(os.getAll())),
         putMany: (store, records) => tx(store, 'readwrite', os => { records.forEach(r => os.put(r)); }),
         deleteMany: (store, keys) => tx(store, 'readwrite', os => { keys.forEach(k => os.delete(k)); }),
+        // Lezen en schrijven in één transactie: twee tabbladen die tegelijk migreren overschrijven elkaar niet.
+        putIfAbsent: (store, records) => tx(store, 'readwrite', os => new Promise((resolve, reject) => {
+          let pending = records.length, added = 0;
+          if (!pending) return resolve(0);
+          records.forEach(r => {
+            const req = os.get(r.key);
+            req.onsuccess = () => { if (req.result === undefined) { os.put(r); added++; } if (--pending === 0) resolve(added); };
+            req.onerror = () => reject(req.error);
+          });
+        })),
         close: () => { try { db.close(); } catch (_) {} }
       };
     });
   }
 
+  // Duurzaamheid per opslagvorm. Alleen IndexedDB telt als duurzaam; geheugen geldt nooit als bevestigd bewaard.
+  const DURABILITY = { indexeddb: 'durable', localStorage: 'limited', memory: 'session' };
+  const MAX_TAB_CONFLICTS = 500;     // harde bovengrens; opgeloste conflicten worden eerst opgeruimd
+  const KEEP_RESOLVED = 50;
+
   function createSyncMetaStore({ indexedDB, storage, hashValue, now = () => new Date().toISOString(), timers } = {}) {
     if (typeof hashValue !== 'function') throw new Error('createSyncMetaStore: hashValue is vereist');
     let backendPromise = null;
     let warning = '';
+    let lastError = null;
+    const fail = (step, error) => { lastError = { step, message: String(error && error.message || error), at: now() }; };
 
     async function migrateLegacy(backend) {
       if (!storage) return;
@@ -121,17 +151,16 @@
       let legacy;
       try { legacy = JSON.parse(raw); } catch (_) { return; } // onleesbaar: oude sleutel blijft onaangeroerd staan
       if (!legacy || typeof legacy !== 'object') return;
-      const existing = new Set((await backend.getAll('baseValues')).map(r => r.key));
       const records = [];
       for (const [slot, values] of Object.entries(legacy)) {
         if (!values || typeof values !== 'object') continue;
         for (const [section, value] of Object.entries(values)) {
-          const key = keyOf(slot, section);
-          if (!existing.has(key)) records.push({ key, slot, section, hash: hashValue(value), value, prev: null, at: now() });
+          records.push({ key: keyOf(slot, section), slot, section, hash: hashValue(value), value, prev: null, at: now() });
         }
       }
-      if (records.length) await backend.putMany('baseValues', records);
-      // Alleen verwijderen als alles aantoonbaar is overgenomen.
+      // Nooit een nieuwere basis (bijv. door een ander tabblad intussen bewaard) overschrijven met de oude waarde.
+      if (records.length) await backend.putIfAbsent('baseValues', records);
+      // Alleen verwijderen als elke sleutel aantoonbaar aanwezig is (nieuw of al bestaand).
       const after = new Set((await backend.getAll('baseValues')).map(r => r.key));
       if (records.every(r => after.has(r.key))) { try { storage.removeItem(LEGACY_BASE_KEY); } catch (_) {} }
     }
@@ -143,14 +172,24 @@
         catch (error) { warning = 'IndexedDB niet beschikbaar: ' + (error && error.message || error); backend = null; }
       } else warning = 'IndexedDB niet beschikbaar in deze browser';
       if (!backend) backend = storage ? storageBackend(storage) : memoryBackend();
-      try { await migrateLegacy(backend); } catch (_) { /* oude sleutel blijft staan; geen verlies */ }
+      try { await migrateLegacy(backend); } catch (error) { fail('migratie', error); /* oude sleutel blijft staan; geen verlies */ }
       return backend;
     }
     const backend = () => (backendPromise ||= init());
     const bySlot = async (store, slot) => (await (await backend()).getAll(store)).filter(r => r.slot === slot);
+    // Schrijfacties: een fout wordt vastgelegd én doorgegeven (nooit stil als succes behandeld).
+    async function write(step, fn) {
+      try { return await fn(await backend()); }
+      catch (error) { fail(step, error); throw error; }
+    }
+    async function status() {
+      const mode = (await backend()).kind;
+      return { mode, durability: DURABILITY[mode] || 'session', warning, lastError };
+    }
 
     return {
       async mode() { return (await backend()).kind; },
+      status,
       warning: () => warning,
 
       // bases: {section: {version, hash}} uit de versie-administratie. Geeft de basiswaarde die bij die hash hoort.
@@ -163,76 +202,134 @@
         }
         return out;
       },
+      // Geeft { count, mode, durability } ná het schrijven (de localStorage-terugval kan tijdens het schrijven naar
+      // geheugen overgaan; dat is dan zichtbaar in `durability`).
       async saveBaseValues(slot, values) {
-        const b = await backend();
-        const current = new Map((await bySlot('baseValues', slot)).map(r => [r.section, r]));
-        const records = [];
-        for (const [section, value] of Object.entries(values || {})) {
-          const hash = hashValue(value), old = current.get(section);
-          if (old && old.hash === hash) continue;
-          records.push({ key: keyOf(slot, section), slot, section, hash, value, prev: old ? { hash: old.hash, value: old.value } : null, at: now() });
-        }
-        if (records.length) await b.putMany('baseValues', records);
-        return records.length;
+        return write('basiswaarden', async b => {
+          const current = new Map((await bySlot('baseValues', slot)).map(r => [r.section, r]));
+          const records = [];
+          for (const [section, value] of Object.entries(values || {})) {
+            const hash = hashValue(value), old = current.get(section);
+            if (old && old.hash === hash) continue;
+            records.push({ key: keyOf(slot, section), slot, section, hash, value, prev: old ? { hash: old.hash, value: old.value } : null, at: now() });
+          }
+          if (records.length) await b.putMany('baseValues', records);
+          return { count: records.length, mode: b.kind, durability: DURABILITY[b.kind] || 'session' };
+        });
       },
 
       async beginUpload(slot, section, info = {}) {
-        await (await backend()).putMany('inflight', [{ key: keyOf(slot, section), slot, section, expectedVersion: Number(info.expectedVersion) || 0, startedAt: now() }]);
+        await write('inflight', b => b.putMany('inflight', [{ key: keyOf(slot, section), slot, section, expectedVersion: Number(info.expectedVersion) || 0, startedAt: now() }]));
       },
-      async endUpload(slot, section) { await (await backend()).deleteMany('inflight', [keyOf(slot, section)]); },
+      async endUpload(slot, section) { await write('inflight', b => b.deleteMany('inflight', [keyOf(slot, section)])); },
       async listInflight(slot) { return bySlot('inflight', slot); },
       async clearInflight(slot, sections) {
         const keys = (await bySlot('inflight', slot)).filter(r => !sections || sections.includes(r.section)).map(r => r.key);
-        if (keys.length) await (await backend()).deleteMany('inflight', keys);
+        if (keys.length) await write('inflight', b => b.deleteMany('inflight', keys));
       },
 
       // Conflictsamenvattingen van de laatste ronde (vervangt de vorige set voor dit slot).
       async saveConflicts(slot, conflicts) {
-        const b = await backend();
-        const old = (await bySlot('conflicts', slot)).filter(r => r.kind === 'sync').map(r => r.key);
-        if (old.length) await b.deleteMany('conflicts', old);
-        const records = (conflicts || []).map(c => ({
-          key: keyOf(slot, 'sync', c.section), slot, kind: 'sync', section: c.section,
-          fields: Array.isArray(c.fields) ? c.fields.slice(0, 20) : [], remoteVersion: Number(c.remoteVersion) || 0, raced: !!c.raced, at: now()
-        }));
-        if (records.length) await b.putMany('conflicts', records);
+        await write('conflicten', async b => {
+          const old = (await bySlot('conflicts', slot)).filter(r => r.kind === 'sync').map(r => r.key);
+          if (old.length) await b.deleteMany('conflicts', old);
+          const records = (conflicts || []).map(c => ({
+            key: keyOf(slot, 'sync', c.section), slot, kind: 'sync', section: c.section,
+            fields: Array.isArray(c.fields) ? c.fields.slice(0, 20) : [], remoteVersion: Number(c.remoteVersion) || 0, raced: !!c.raced, at: now()
+          }));
+          if (records.length) await b.putMany('conflicts', records);
+        });
       },
       async loadConflicts(slot) {
         return (await bySlot('conflicts', slot)).filter(r => r.kind === 'sync')
           .map(r => ({ section: r.section, fields: r.fields, remoteVersion: r.remoteVersion, raced: r.raced, restored: true }));
       },
 
-      // Tabbladconflict: dezelfde waarde in twee tabbladen anders gewijzigd. De niet-gekozen waarde blijft bewaard.
-      async recordTabConflict({ fields, discarded }) {
-        const b = await backend();
-        const at = now();
-        await b.putMany('conflicts', [{ key: keyOf('local', 'tab', at, Math.random().toString(36).slice(2, 8)), slot: 'local', kind: 'tab', fields: (fields || []).slice(0, 20), discarded, at }]);
-        const tabs = (await bySlot('conflicts', 'local')).filter(r => r.kind === 'tab').sort((x, y) => String(y.at).localeCompare(String(x.at)));
-        const excess = tabs.slice(MAX_TAB_CONFLICTS).map(r => r.key);
-        if (excess.length) await b.deleteMany('conflicts', excess);
+      // Tabbladconflict op één pad. Beide waarden blijven bewaard. Dezelfde botsing gemeld door twee tabbladen krijgt
+      // dezelfde sleutel (pad + beide waarden), zodat er één record is met een teller in plaats van dubbele of verloren
+      // historie. Openstaande conflicten worden nooit opgeruimd ten gunste van nieuwe, behalve bij de harde bovengrens.
+      async recordTabConflict({ path, section, financial = false, kept, other, base }) {
+        return write('tabbladconflict', async b => {
+          const pair = [hashValue(kept === undefined ? null : kept), hashValue(other === undefined ? null : other)].sort();
+          const key = keyOf('local', 'tab', hashValue({ path: String(path), pair }));
+          const all = (await b.getAll('conflicts')).filter(r => r.slot === 'local' && r.kind === 'tab');
+          const existing = all.find(r => r.key === key);
+          const at = now();
+          const record = existing
+            ? { ...existing, count: (existing.count || 1) + 1, lastAt: at }
+            : { key, slot: 'local', kind: 'tab', path: String(path), section: section || String(path).split(/[.[]/)[0], financial: !!financial,
+                kept: kept === undefined ? null : kept, other: other === undefined ? null : other, base: base === undefined ? null : base,
+                at, lastAt: at, count: 1, resolved: null };
+          await b.putMany('conflicts', [record]);
+          const resolved = all.filter(r => r.resolved && r.key !== key).sort((x, y) => String(y.lastAt || y.at).localeCompare(String(x.lastAt || x.at)));
+          const drop = resolved.slice(KEEP_RESOLVED).map(r => r.key);
+          const remaining = all.length + (existing ? 0 : 1) - drop.length;
+          if (remaining > MAX_TAB_CONFLICTS) {
+            const open = all.filter(r => !r.resolved && r.key !== key).sort((x, y) => String(x.lastAt || x.at).localeCompare(String(y.lastAt || y.at)));
+            drop.push(...open.slice(0, remaining - MAX_TAB_CONFLICTS).map(r => r.key));
+          }
+          if (drop.length) await b.deleteMany('conflicts', drop);
+          return { key, duplicate: !!existing };
+        });
       },
-      async listTabConflicts() { return (await bySlot('conflicts', 'local')).filter(r => r.kind === 'tab'); }
+      async listTabConflicts({ includeResolved = true } = {}) {
+        return (await bySlot('conflicts', 'local')).filter(r => r.kind === 'tab' && (includeResolved || !r.resolved))
+          .sort((x, y) => String(y.lastAt || y.at).localeCompare(String(x.lastAt || x.at)));
+      },
+      async getTabConflict(key) { return (await bySlot('conflicts', 'local')).find(r => r.key === key) || null; },
+      async resolveTabConflict(key, resolution) {
+        return write('tabbladconflict', async b => {
+          const rec = (await b.getAll('conflicts')).find(r => r.key === key);
+          if (!rec) return false;
+          await b.putMany('conflicts', [{ ...rec, resolved: { resolution, at: now() } }]);
+          return true;
+        });
+      }
     };
   }
 
   // Wikkelt cloud.putState: vóór verzenden een duurzame inflight-registratie, na een bevestiging of een definitieve
   // weigering (bijv. versieconflict) weer weg. Bij netwerkverlies blijft de registratie staan: uitkomst onzeker.
-  function trackUploads(cloud, store, slot, classify) {
+  // Lukt de registratie zelf niet, dan gaat de upload door (de server-versiecontrole blijft de beveiliging); de fout
+  // staat dan in status().lastError en `onWarning` wordt aangeroepen.
+  function trackUploads(cloud, store, slot, classify, onWarning = () => {}) {
+    const note = step => error => { try { onWarning(step, error); } catch (_) {} };
     return {
       ...cloud,
       async putState(householdId, section, payload, expected) {
-        await store.beginUpload(slot, section, { expectedVersion: expected });
+        try { await store.beginUpload(slot, section, { expectedVersion: expected }); } catch (error) { note('inflight-start')(error); }
         try {
           const version = await cloud.putState(householdId, section, payload, expected);
-          await store.endUpload(slot, section);
+          try { await store.endUpload(slot, section); } catch (error) { note('inflight-einde')(error); }
           return version;
         } catch (error) {
           const kind = typeof classify === 'function' ? classify(error).kind : 'other';
-          if (kind !== 'network') { try { await store.endUpload(slot, section); } catch (_) {} }
+          if (kind !== 'network') { try { await store.endUpload(slot, section); } catch (e) { note('inflight-einde')(e); } }
           throw error;
         }
       }
     };
+  }
+
+  // Legt na een ronde de metadata vast, in deze volgorde:
+  //   1. basiswaarden (met vorige waarde)  → mislukt: STOP, versie-administratie blijft zoals vóór de ronde
+  //   2. versie-administratie (writeBases)  → mislukt: STOP; stap 1 bewaarde de vorige waarde, dus de oude
+  //      administratie vindt haar basis nog
+  //   3. conflictsamenvattingen              → mislukt: waarschuwing (worden elke ronde opnieuw bepaald)
+  //   4. inflight wissen (alleen bij 'ok')    → mislukt: waarschuwing (volgende geslaagde ronde wist alsnog)
+  // Niet vastgelegde versies zijn herstelbaar: de volgende ronde ziet lokaal = cloud en neemt de versie over (adopt),
+  // zonder tweede upload. writeBases(base, { durable }) schrijft de administratie; bij durability 'session' hoort die
+  // alleen in het geheugen te staan, zodat na herladen nooit een versie als bevestigd geldt zonder duurzame basis.
+  async function commitRound({ store, slot, base, baseValues, conflicts, roundOk, writeBases }) {
+    const warnings = [];
+    let saved;
+    try { saved = await store.saveBaseValues(slot, baseValues); }
+    catch (error) { return { committed: false, step: 'basiswaarden', error, warnings }; }
+    try { await writeBases(base, { durable: saved.durability !== 'session', durability: saved.durability }); }
+    catch (error) { return { committed: false, step: 'versie-administratie', error, warnings, durability: saved.durability }; }
+    try { await store.saveConflicts(slot, conflicts); } catch (error) { warnings.push({ step: 'conflicten', error }); }
+    if (roundOk) { try { await store.clearInflight(slot); } catch (error) { warnings.push({ step: 'inflight', error }); } }
+    return { committed: true, durability: saved.durability, warnings };
   }
 
   // Eén gedeelde instantie per pagina (app.js en account-sync.js gebruiken dezelfde database-verbinding).
@@ -246,5 +343,5 @@
     return sharedStore;
   }
 
-  return { createSyncMetaStore, trackUploads, shared, LEGACY_BASE_KEY, FALLBACK_KEY, DB_NAME, _backends: { memoryBackend, storageBackend, openIndexedDb } };
+  return { createSyncMetaStore, trackUploads, commitRound, shared, DURABILITY, LEGACY_BASE_KEY, FALLBACK_KEY, DB_NAME, _backends: { memoryBackend, storageBackend, openIndexedDb } };
 });
