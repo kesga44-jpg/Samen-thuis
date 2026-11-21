@@ -18,7 +18,8 @@
   'use strict';
 
   // Centrale, expliciete definitie. Nieuw financieel onderdeel? Hier toevoegen (en een test in finance-conflicts.test.js).
-  const FINANCIAL_SECTIONS = Object.freeze(['budget', 'budget19', 'budget219', 'budgetV22', 'budgetV23']);
+  // fuelEntries (tankbeurten met bedragen) sinds opdracht 6.
+  const FINANCIAL_SECTIONS = Object.freeze(['budget', 'budget19', 'budget219', 'budgetV22', 'budgetV23', 'fuelEntries']);
   const WHOLE = '(onderdeel)';
   const GUARD_TTL_MS = 30 * 24 * 3600 * 1000;
   const MAX_AUDIT = 300;
@@ -426,6 +427,33 @@
     return api;
   }
 
+  // ---------- Persoonlijke financiële instellingen (personal_preferences.finance_config) ----------
+  // Geen last-write-wins: lezen → 3-wegs samenvoegen met de laatst geladen versie → voorwaardelijk bijwerken op updated_at
+  // (PostgREST-filter, geen databasewijziging). Veldconflict → niets schrijven, expliciete keuze nodig.
+  // fetchRow() → { finance_config, updated_at } | null; patchIf(value, updatedAt) → bijgewerkte rij | null (0 rijen);
+  // insertIfAbsent(value) → rij | null (bestond al).
+  async function savePersonalConfig({ fetchRow, patchIf, insertIfAbsent, merge3, hashValue, base, local, attempts = 3 }) {
+    for (let i = 0; i < attempts; i++) {
+      const row = await fetchRow();
+      if (!row) {
+        const inserted = await insertIfAbsent(local);
+        if (inserted) return { ok: true, value: local, updatedAt: inserted.updated_at || null };
+        continue;
+      }
+      const remote = row.finance_config && typeof row.finance_config === 'object' ? row.finance_config : {};
+      if (hashValue(remote) === hashValue(local)) return { ok: true, value: remote, updatedAt: row.updated_at, unchanged: true };
+      const opts = { conflicts: [] };
+      const remoteEmpty = Object.keys(remote).length === 0;
+      const merged = base === undefined || base === null
+        ? (remoteEmpty ? local : (opts.conflicts.push('(onderdeel)'), local))
+        : merge3(base, local, remote, opts);
+      if (opts.conflicts.length) return { ok: false, conflict: { paths: [...new Set(opts.conflicts)], local, remote, base: base ?? null, updatedAt: row.updated_at } };
+      const updated = await patchIf(merged, row.updated_at);
+      if (updated) return { ok: true, value: merged, updatedAt: updated.updated_at || null, merged: hashValue(merged) !== hashValue(local) };
+    }
+    return { ok: false, reason: 'race' };
+  }
+
   let sharedInstance = null;
   function shared() {
     if (sharedInstance) return sharedInstance;
@@ -435,5 +463,5 @@
     return sharedInstance;
   }
 
-  return { shared, FINANCIAL_SECTIONS, isFinancialSection, isFinancialPath, parsePath, valueAt, setAt, livePaths, resolveValue, newRecord, auditEntry, createFinanceConflicts, recordKey, guardKey, scopeFor, isIdentityScope, isValidScope, DEVICE_SCOPE, LEGACY_SCOPE, WHOLE };
+  return { savePersonalConfig, shared, FINANCIAL_SECTIONS, isFinancialSection, isFinancialPath, parsePath, valueAt, setAt, livePaths, resolveValue, newRecord, auditEntry, createFinanceConflicts, recordKey, guardKey, scopeFor, isIdentityScope, isValidScope, DEVICE_SCOPE, LEGACY_SCOPE, WHOLE };
 });

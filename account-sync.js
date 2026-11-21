@@ -3,9 +3,14 @@
 (() => {
   'use strict';
   const HS = window.SamenThuisHouseholdSync, AUTH = window.SamenThuisAuth25;
-  if (window.__ST_ACCOUNT_SYNC__ || !HS || !AUTH || !window.SamenThuisSyncMeta) return;
+  if (window.__ST_ACCOUNT_SYNC__ || !HS || !AUTH || !window.SamenThuisSyncMeta || !window.SamenThuisIdentityStore || !window.SamenThuisIdentity) return;
   window.__ST_ACCOUNT_SYNC__ = true;
-  const KEY = 'samenThuisAccountSyncV1', PRE_KEY = 'samenThuisPreAccountSyncBackup';
+  const KEY = 'samenThuisAccountSyncV1';
+  // Opdracht 6: identiteit ligt vast per paginalading; accountsync staat per account aan (accounts[uid]).
+  const IDS = window.SamenThuisIdentityStore, IDENT = window.SamenThuisIdentity;
+  const PRE_KEY = IDENT.keys().preSyncKey;
+  const accountCfg = () => { const uid = AUTH.session()?.user?.id; return uid ? IDS.readConfig(localStorage).accounts[uid] || null : null; };
+  class StaleIdentity extends Error { constructor(message) { super(message); this.name = 'StaleIdentity'; } }
   // Laatst door de server bevestigde waarde per onderdeel (per account + huishouden): basis voor automatisch samenvoegen.
   // Alleen op dit apparaat, in IndexedDB (sync-meta-store.js; fallback localStorage, daarna geheugen). Ontbreekt de basis,
   // dan valt de app terug op "kies per onderdeel" (geen dataverlies).
@@ -19,7 +24,7 @@
   const isFinancialSection = s => !!(FINC && FINC.isFinancialSection(s));
   // Financiële conflicten horen bij één identiteit: '<accountId>:<huishoudenId>' (zelfde notatie als slot()).
   // Zonder bekende identiteit is er geen scope; dan worden alleen apparaatconflicten ('device') getoond.
-  const financeScope = () => FINC ? FINC.scopeFor(AUTH.session()?.user?.id || '', st.household?.id || load().householdId || '') : null;
+  const financeScope = () => FINC ? FINC.scopeFor(AUTH.session()?.user?.id || '', st.household?.id || accountCfg()?.householdId || '') : null;
   const loadBaseValues = async bases => { try { return await META.loadBaseValues(slot(), bases); } catch (_) { return {}; } };
   // Versie-administratie per slot. Staat de basis alleen in het geheugen (durability 'session'), dan blijft ook de
   // administratie in het geheugen: na herladen geldt dan geen enkele versie als bevestigd zonder duurzame basis.
@@ -29,7 +34,6 @@
   function writeBases(s, base, { durable }) {
     if (!durable) { sessionBases[s] = base; return; }
     const next = load(); next.bases = { ...(next.bases || {}), [s]: { base, lastSyncedAt: new Date().toISOString() } };
-    if (st.household) next.householdId = st.household.id;
     if (!store(next)) throw new Error('Versie-administratie kon niet worden opgeslagen (opslag vol of geblokkeerd).');
     delete sessionBases[s];
   }
@@ -44,12 +48,12 @@
   // Accountwissel: nooit huishouden/conflicten van het vorige account blijven gebruiken.
   function syncIdentity() {
     const uid = AUTH.session()?.user?.id || '';
-    if (uid !== st.uid) { Object.assign(st, { uid, household: null, conflicts: [], finance: [], finChoices: {}, message: '' }); refreshFinance(); }
+    if (uid !== st.uid) { Object.assign(st, { uid, household: null, conflicts: [], finance: [], finChoices: {}, message: '' }); if (!IDENT.reevaluate()) refreshFinance(); }
   }
   const load = () => { try { return JSON.parse(localStorage.getItem(KEY) || '{}'); } catch (_) { return {}; } };
   const store = v => { try { localStorage.setItem(KEY, JSON.stringify(v)); return true; } catch (_) { return false; } };
-  const accountMode = () => HS.syncRoute(load(), !!AUTH.session()?.user?.id) !== 'legacy';
-  const slot = () => `${AUTH.session()?.user?.id || ''}:${st.household?.id || load().householdId || ''}`;
+  const accountMode = () => !!(AUTH.session()?.user?.id && accountCfg()?.enabled);
+  const slot = () => `${AUTH.session()?.user?.id || ''}:${st.household?.id || accountCfg()?.householdId || ''}`;
   const cloud = () => HS.createCloud({
     url: DEFAULT_PROJECT_URL, anonKey: DEFAULT_PUBLISHABLE_KEY,
     getToken: async () => (await AUTH.ready())?.access_token || ''
@@ -82,8 +86,20 @@
       if (!window.crypto?.subtle) throw new Error('Versleuteling vereist HTTPS');
       if (code().length < 12) throw new Error('Vul eerst de huishoudcode in (minimaal 12 tekens).');
       const c = cloud();
-      if (!st.household) st.household = await c.membership();
+      // Elke ronde opnieuw: is het lidmaatschap veranderd (ander huishouden), dan hoort er een andere dataset bij.
+      st.household = await c.membership();
       if (!st.household) throw new Error('Dit account is nog geen lid van een huishouden.');
+      // De dataset van deze paginalading moet precies bij dit account en huishouden horen. Is het huishouden nog onbekend
+      // of gewijzigd, dan wordt het vastgelegd en de pagina opnieuw geladen; deze ronde verwerkt dan niets.
+      const uid = AUTH.session()?.user?.id || '';
+      if (accountCfg()?.householdId !== st.household.id) IDS.setAccount(localStorage, uid, { householdId: st.household.id });
+      if (IDENT.reevaluate()) throw new StaleIdentity('De gegevens van dit account en huishouden worden geladen.');
+      const ident = IDENT.current();
+      if (ident.mode !== 'account' || ident.accountId !== uid || ident.householdId !== st.household.id) throw new StaleIdentity('Deze gegevens horen niet bij dit account en huishouden; er wordt niets gesynchroniseerd.');
+      const roundKey = ident.key;
+      const assertIdentity = () => {
+        if (IDENT.switching() || IDENT.current().key !== roundKey || (AUTH.session()?.user?.id || '') !== uid) throw new StaleIdentity('Account of huishouden is tijdens de synchronisatie gewijzigd; er is niets opgeslagen.');
+      };
       const roundSlot = slot();
       const prevBase = readBases(roundSlot);
       const prevBaseValues = await loadBaseValues(prevBase);
@@ -93,6 +109,7 @@
       const scope = FINC ? FINC.scopeFor(actor || '', st.household.id) : null;
       const FS = FIN && scope ? FIN.scoped(scope) : null;
       const fin = FS ? await FS.beforeRound({ data, prevBase, prevBaseValues, actor, householdId: st.household.id }) : { records: [], frozen: [], fixes: [] };
+      assertIdentity();
       if (fin.fixes.length) {
         const previous = data;
         data = { ...data, ...Object.fromEntries(fin.fixes.map(f => [f.section, f.value])) };
@@ -115,12 +132,14 @@
         ? await FS.afterRound({ raw: rawRound, records: fin.records, snapshot, prevBase, prevBaseValues, cloud: tracked, householdId: st.household.id, encrypt, classify: HS.classifyError, actor })
         : { result: rawRound, outcomes: [] };
       const raw = finRound.result;
+      assertIdentity(); // na alle netwerkverzoeken: oude antwoorden schrijven niets na een accountwissel
       // Onderdelen die tijdens de ronde lokaal zijn gewijzigd: oudere cloudrespons niet toepassen (volgende ronde voegt samen).
       const result = HS.deferChangedPulls({ snapshot, current: data, result: raw, prevBase, prevBaseValues });
       if (result.deferred.length) rerunRequested = true;
       let base = result.base;
       const pulled = Object.keys(result.pulls);
       if (pulled.length) {
+        assertIdentity();
         try { localStorage.setItem(PRE_KEY, JSON.stringify({ at: new Date().toISOString(), data })); }
         catch (_) { throw new Error('Geen ruimte voor een veiligheidskopie; cloudgegevens zijn niet toegepast.'); }
         const previous = data;
@@ -140,12 +159,14 @@
       // Vaste volgorde (sync-meta-store.js commitRound): basiswaarden → versie-administratie → conflicten → inflight.
       // Mislukt stap 1 of 2, dan wordt geen versie als bevestigd geregistreerd; de volgende ronde neemt de versies over
       // zodra lokaal en cloud gelijk zijn (zonder tweede upload). Lokale gegevens blijven ongewijzigd staan.
+      assertIdentity();
       const commit = await window.SamenThuisSyncMeta.commitRound({
         store: META, slot: roundSlot, base, baseValues: result.baseValues, conflicts: result.conflicts,
         roundOk: result.status === 'ok', writeBases: (b, opts) => writeBases(roundSlot, b, opts)
       });
       st.conflicts = result.conflicts;
       // Financiële records pas afronden (verwijderen) als de versie-administratie duurzaam is vastgelegd.
+      assertIdentity();
       if (FS && commit.committed && commit.durability !== 'session') {
         try { await FS.afterCommit({ outcomes: finRound.outcomes, actor }); } catch (error) { console.error('Financiële conflicten niet afgerond', error); }
       }
@@ -183,6 +204,7 @@
       if (current === 'settings' || pulled.length) render();
       return { status: outcome };
     } catch (error) {
+      if (error && error.name === 'StaleIdentity') { st.message = error.message; syncError = ''; return { status: 'identity-changed' }; }
       const c = HS.classifyError(error);
       console.error('Accountsynchronisatie mislukt', error);
       syncError = c.kind === 'network' ? '' : c.message; st.message = c.message;
@@ -211,14 +233,19 @@
       const c = cloud(); st.household = await c.membership();
       if (!st.household) throw new Error('Maak eerst een huishouden aan of voeg je toe met de code van je huisgenoot.');
       st.busy = false;
+      // Expliciete koppeling door de gebruiker: het lokale profiel gaat naar dit account + huishouden (alleen als daar nog
+      // niets staat). Daarna accountsync aan voor dit account en opnieuw laden; de eerste ronde volgt na het laden.
       // Importing the opaque legacy payload would reintroduce SportCoach.
-      const first = await accountSync({ manual: true });
-      if (HS.shouldEnable(first.status)) {
-        const cfg = load(); cfg.enabled = true; cfg.householdId = st.household.id; store(cfg);
-        st.message = 'Accountsync is ingeschakeld. Oude code-syncdata is niet automatisch gekopieerd en blijft behouden op de oude route tot DB-1.';
-      } else {
-        st.message = 'Overstap niet voltooid: ' + (st.message || 'controleer je verbinding en probeer opnieuw') + ' Lokale gegevens zijn behouden; de oude serverroute blijft bestaan tot DB-1.';
-      }
+      const uid = AUTH.session().user.id;
+      const bound = IDS.bindLocalToAccount(localStorage, { accountId: uid, householdId: st.household.id });
+      IDS.setAccount(localStorage, uid, { enabled: true, householdId: st.household.id });
+      st.message = bound.bound
+        ? 'Accountsync is ingeschakeld. De gegevens van dit apparaat zijn aan dit account en huishouden gekoppeld; de oorspronkelijke kopie blijft bewaard.'
+        : bound.reason === 'bestaat-al'
+          ? 'Accountsync is ingeschakeld. Dit account heeft op dit apparaat al eigen gegevens; het lokale profiel is ongewijzigd bewaard.'
+          : 'Accountsync is ingeschakeld. De gegevens van dit huishouden worden uit de cloud geladen.';
+      toast(st.message);
+      IDENT.reevaluate();
     } catch (e) { st.message = e.message || 'Overstappen mislukt'; toast(st.message); }
     finally { st.busy = false; render(); }
   }

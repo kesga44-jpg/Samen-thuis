@@ -7,7 +7,9 @@ function memoryStorage(shared = new Map(), { quotaAt = Infinity } = {}) {
     map: shared,
     getItem: k => (shared.has(k) ? shared.get(k) : null),
     setItem: (k, v) => { if (String(v).length > quotaAt) { const e = new Error('QuotaExceededError'); e.name = 'QuotaExceededError'; throw e; } shared.set(k, String(v)); },
-    removeItem: k => { shared.delete(k); }
+    removeItem: k => { shared.delete(k); },
+    get length() { return shared.size; },
+    key: i => [...shared.keys()][i] ?? null
   };
 }
 

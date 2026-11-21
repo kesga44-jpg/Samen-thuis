@@ -59,21 +59,70 @@
     } finally { remote.busy = false; }
   }
 
+  // Privé-potjes en -uitgaven (personal_preferences.finance_config). base = laatst geladen/bevestigde versie: basis voor
+  // samenvoegen en voorwaardelijk opslaan (finance-conflict-core.js savePersonalConfig). Nooit stil overschrijven.
+  const FC = globalThis.SamenThuisFinanceConflicts, HSC = globalThis.SamenThuisHouseholdSync;
+  const personalValue = () => ({ pots: state.personal.pots, expenses: state.personal.expenses });
+  function applyPersonal(config) {
+    state.personal.pots = (config.pots || []).map(F.normalizePot);
+    state.personal.expenses = Array.isArray(config.expenses) ? config.expenses : [];
+  }
+  async function fetchPersonalRow() {
+    const rows = await api(`/rest/v1/personal_preferences?select=finance_config,updated_at&user_id=eq.${encodeURIComponent(uid())}&limit=1`);
+    return rows?.[0] || null;
+  }
   async function loadPersonal() {
     if (state.personal.loaded) return;
     try {
-      const rows = await api(`/rest/v1/personal_preferences?select=finance_config&user_id=eq.${encodeURIComponent(uid())}&limit=1`);
-      const config = rows?.[0]?.finance_config || {};
-      state.personal.pots = (config.pots || []).map(F.normalizePot);
-      state.personal.expenses = Array.isArray(config.expenses) ? config.expenses : [];
+      const row = await fetchPersonalRow();
+      const config = row?.finance_config || {};
+      applyPersonal(config);
+      state.personal.base = JSON.parse(JSON.stringify(config));
       state.personal.loaded = true;
     } catch (_) { /* kolom ontbreekt zolang de migratie niet is toegepast */ }
   }
-  async function savePersonal() {
-    await api('/rest/v1/personal_preferences?on_conflict=user_id', {
-      method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
-      body: JSON.stringify({ user_id: uid(), finance_config: { pots: state.personal.pots, expenses: state.personal.expenses } })
+  async function savePersonal(override) {
+    const local = override || personalValue();
+    const result = await FC.savePersonalConfig({
+      merge3: HSC.merge3, hashValue: HSC.hashValue, base: state.personal.base, local,
+      fetchRow: fetchPersonalRow,
+      patchIf: async (value, updatedAt) => {
+        const rows = await api(`/rest/v1/personal_preferences?user_id=eq.${encodeURIComponent(uid())}&updated_at=eq.${encodeURIComponent(updatedAt)}`, {
+          method: 'PATCH', headers: { Prefer: 'return=representation' }, body: JSON.stringify({ finance_config: value, updated_at: new Date().toISOString() })
+        });
+        return Array.isArray(rows) && rows.length === 1 ? rows[0] : null;
+      },
+      insertIfAbsent: async value => {
+        const rows = await api('/rest/v1/personal_preferences?on_conflict=user_id', {
+          method: 'POST', headers: { Prefer: 'resolution=ignore-duplicates,return=representation' }, body: JSON.stringify({ user_id: uid(), finance_config: value })
+        });
+        return Array.isArray(rows) && rows.length ? rows[0] : null;
+      }
     });
+    if (result.ok) {
+      state.personal.base = JSON.parse(JSON.stringify(result.value));
+      applyPersonal(result.value);
+      state.personal.conflict = null;
+      if (result.merged) state.notice = 'Je privé-potjes zijn samengevoegd met wijzigingen van een ander apparaat.';
+      return result;
+    }
+    if (result.conflict) {
+      state.personal.conflict = result.conflict;
+      state.notice = 'Je privé-potjes of -uitgaven zijn intussen op een ander apparaat anders gewijzigd. Er is niets overschreven; kies hieronder welke versie geldt.';
+      return result;
+    }
+    throw new Error('Opslaan van je privé-potjes lukte niet door gelijktijdige wijzigingen. Probeer het opnieuw.');
+  }
+  // Expliciete keuze bij een conflict: per conflicterend veld deze of de andere waarde; overige verschillen samengevoegd.
+  async function resolvePersonalConflict(side) {
+    const c = state.personal.conflict;
+    if (!c) return;
+    const choices = Object.fromEntries(c.paths.map(p => [p, side]));
+    const r = FC.resolveValue({ merge3: HSC.merge3, hashValue: HSC.hashValue, base: c.base, local: c.local, remote: c.remote, choices });
+    state.personal.base = JSON.parse(JSON.stringify(c.remote));   // de andere versie is nu bekend en gezien
+    state.personal.conflict = null;
+    applyPersonal(r.value);
+    await savePersonal(r.value);
   }
 
   // ---- Afgeleide gegevens ---------------------------------------------------------------------------
@@ -169,7 +218,7 @@
     const ordered = [...data.people].sort((a, b) => Number(Boolean(b.own)) - Number(Boolean(a.own)));
     const budget = ctx.budget();
     return `<div class="fin-grid">
-      ${notice ? `<p class="fin-note" role="status">${esc(notice)}</p>` : ''}${state.notice ? `<p class="fin-note" role="status">${esc(state.notice)}</p>` : ''}
+      ${notice ? `<p class="fin-note" role="status">${esc(notice)}</p>` : ''}${state.notice ? `<p class="fin-note" role="status">${esc(state.notice)}</p>` : ''}${state.personal.conflict ? `<div class="button-row" data-fin-personal-conflict><button class="secondary" type="button" data-fin-personal-resolve="local">Mijn versie bewaren</button><button class="secondary" type="button" data-fin-personal-resolve="remote">Andere versie gebruiken</button></div>` : ''}
       <label class="fin-month">Maand<input type="month" data-fin-month value="${esc(state.month)}"></label>
       ${statusBox(e)}
       <section class="fin-card"><h3>Gezamenlijk afdraagpercentage</h3>
@@ -279,7 +328,7 @@
 
   async function refresh(force) {
     const changed = await loadRemote(force);
-    const applied = state.ctx.applyDistributions(state.remote.distributions);
+    const applied = state.ctx.applyDistributions(state.remote.distributions, state.remote.householdId);
     if (changed || applied || state.remote.status !== 'idle' && !state.firstPaint) { state.firstPaint = true; if (!state.typing) state.ctx.render(); }
   }
 
@@ -290,10 +339,12 @@
     state.busy = true; state.notice = '';
     try { await action(); if (successNotice) state.notice = successNotice; }
     catch (error) { state.notice = friendly(error); }
-    finally { state.busy = false; await loadRemote(true); state.ctx.applyDistributions(state.remote.distributions); repaint(); }
+    finally { state.busy = false; await loadRemote(true); state.ctx.applyDistributions(state.remote.distributions, state.remote.householdId); repaint(); }
   }
 
   document.addEventListener('click', event => {
+    const personalChoice = event.target.closest('[data-fin-personal-resolve]');
+    if (personalChoice) { resolvePersonalConflict(personalChoice.dataset.finPersonalResolve).then(repaint).catch(error => { state.notice = friendly(error); repaint(); }); return; }
     const ctx = state.ctx; if (!ctx || !document.querySelector('.fin-pane')) return;
     if (event.target.closest('[data-fin-confirm-income]')) {
       const person = peopleList().find(item => item.own);

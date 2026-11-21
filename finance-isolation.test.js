@@ -219,7 +219,8 @@ test('S9. apparaatconflict (tabbladen, niet aangemeld): opgelost lokaal, daarna 
   assert.equal(r.ok, true); assert.equal(r.value.pct, 39); assert.equal(r.record.status, 'resolved-local');
   await core.completeLocal(FC.DEVICE_SCOPE, 'budgetV23', r.record.resolution.id);
   const [rec] = await core.list(FC.DEVICE_SCOPE);
-  assert.ok(!JSON.stringify(rec).includes('61') && !JSON.stringify(rec).includes('39'));
+  assert.equal(rec.base, null); assert.equal(rec.local, null); assert.equal(rec.remote, null); assert.equal(rec.resolution.value, null);
+  assert.ok(rec.resolution.valueHash && rec.resolution.choices.pct === 'remote', 'keuze en hash blijven');
   const pre = await core.scoped(`${A}:${H1}`).beforeRound({ data: { budgetV23: { pct: 39 } } });
   assert.deepEqual(pre.frozen, [], 'opgelost apparaatconflict blokkeert niets meer');
   await assert.rejects(core.open({ scope: '', section: 'budgetV23', origin: 'sync' }), /scope/, 'zonder scope geen record');

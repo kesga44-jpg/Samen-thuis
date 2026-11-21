@@ -66,7 +66,7 @@ async function conflictOnPct() {
 }
 
 test('F0. financieel = uitsluitend de expliciete centrale lijst (geen zoekwoordherkenning)', () => {
-  assert.deepEqual([...FC.FINANCIAL_SECTIONS], ['budget', 'budget19', 'budget219', 'budgetV22', 'budgetV23']);
+  assert.deepEqual([...FC.FINANCIAL_SECTIONS], ['budget', 'budget19', 'budget219', 'budgetV22', 'budgetV23', 'fuelEntries']);
   assert.equal(FC.isFinancialPath('budgetV23.pots.vakantie'), true);
   assert.equal(FC.isFinancialPath('budgetPlanner.x'), false);
   assert.equal(FC.isFinancialPath('financeNotes'), false);

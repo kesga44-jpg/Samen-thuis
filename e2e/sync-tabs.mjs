@@ -67,7 +67,9 @@ async function newContext({ account = false, legacyBase = null } = {}) {
     }
     if (!account || localStorage.getItem('samenThuisAccountSyncV1')) return;
     localStorage.setItem('samenThuisSyncV1', JSON.stringify({ householdCode: 'test-huishouden-123' }));
-    localStorage.setItem('samenThuisAccountSyncV1', JSON.stringify({ enabled: true, householdId: HH }));
+    // Opdracht 6: accountsync per account; de dataset van dit account+huishouden staat onder een eigen sleutel.
+    localStorage.setItem('samenThuisAccountSyncV1', JSON.stringify({ accounts: { [USER]: { enabled: true, householdId: HH } }, accountsMigrated: true }));
+    localStorage.setItem(`samenThuisDataV3|${USER}|${HH}`, JSON.stringify({ meta: { version: 2 }, groceries: ['Tomaten', 'Basilicum', 'Havermelk'].map((title, i) => ({ id: 'g' + (i + 1), title, category: 'Overig', done: false })) }));
     localStorage.setItem('samenThuisPersonalAuthV1', JSON.stringify({ access_token: 'tok', refresh_token: 'ref', expires_at: Date.now() + 36e5, user: { id: USER, email: 'kees@example.test' } }));
   }, { account, legacyBase, HH, USER });
   return context;
@@ -225,7 +227,7 @@ try {
     ctl.putSections = [];
     await a.page.evaluate(() => SamenThuisAccountSync.sync()); await waitIdle(a.page);
     const asOther = await a.page.evaluate(async () => ({ scope: SamenThuisFinanceSync.scope(), list: (await SamenThuisFinanceSync.list()).length, badge: document.querySelector('#syncState')?.textContent || '' }));
-    check('ander account op hetzelfde apparaat: ziet het conflict niet, budget van het eerste account niet verstuurd', asOther.scope.startsWith(OTHER_USER + ':') && asOther.list === 0 && !ctl.putSections.includes('budgetV23') && !/Financieel/.test(asOther.badge), JSON.stringify({ ...asOther, puts: ctl.putSections }));
+    check('ander account op hetzelfde apparaat: ziet het conflict niet, budget van het eerste account niet verstuurd', (asOther.scope === null || asOther.scope.startsWith(OTHER_USER + ':')) && asOther.list === 0 && !ctl.putSections.includes('budgetV23') && !/Financieel/.test(asOther.badge), JSON.stringify({ ...asOther, puts: ctl.putSections }));
     await a.page.evaluate(u => { const s = JSON.parse(localStorage.getItem('samenThuisPersonalAuthV1')); s.user.id = u; localStorage.setItem('samenThuisPersonalAuthV1', JSON.stringify(s)); }, USER);
     await a.page.reload({ waitUntil: 'load' }); await a.page.waitForTimeout(600); await waitIdle(a.page);
     const back = await a.page.evaluate(async () => (await SamenThuisFinanceSync.list()).map(r => [r.status, r.local.e2ePct, r.remote.e2ePct]));

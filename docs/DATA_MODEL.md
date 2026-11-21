@@ -4,7 +4,9 @@
 
 | Sleutel | Inhoud | Sync | In back-up |
 |---|---|---|---|
-| `samenThuisDataV2` | Huishoudgegevens plus lokale SportCoach-data (zie § 2) | Behalve lokale-only velden, waaronder `sportCoach` | Ja, behalve `sportCoach` |
+| `samenThuisDataV2` | Altijd SportCoach en settings (apparaat); daarnaast het lokale profiel zolang het niet gekoppeld of in quarantaine is (zie `docs/LOCAL_DATA_ISOLATION.md`) | Alleen als lokaal profiel na expliciete koppeling | Ja, behalve `sportCoach` |
+| **`samenThuisDataV3|<account>|<huishouden>`**, `samenThuisDataV3|local` 🆕 | Huishoudgegevens per identiteit; lokaal profiel na koppeling | Per identiteit | Ja, met herkomst (`meta.exportIdentity`) |
+| **`samenThuisDataMigrationV1`** 🆕 | Migratiejournaal | Nee | Nee |
 | `samenThuisDataV1` | Oude versie, alleen migratiebron | Nee | — |
 | `samenThuisSyncV1` | Huishoudcode, laatste synctijd (legacy-route) | Nee | Nee |
 | `samenThuisSyncConflictV1`, `samenThuisRestoreHold` | Conflict- en herstelstatus | Nee | Nee |
