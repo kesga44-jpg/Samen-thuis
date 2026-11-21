@@ -325,13 +325,24 @@ function reportTabConflict(result) {
   if (!result.conflicts.length) return;
   const TS = window.SamenThuisTabSync;
   const details = TS ? TS.describeConflicts({ paths: result.conflicts, kept: result.value, other: result.remote, base: result.base }) : [];
-  const financial = details.some(d => d.financial);
+  const financial = details.filter(d => d.financial), general = details.filter(d => !d.financial);
   console.warn('Dezelfde gegevens zijn in twee tabbladen anders gewijzigd; beide waarden zijn bewaard.', details.map(d => d.path));
   const meta = window.SamenThuisSyncMeta?.shared();
-  if (meta) details.forEach(d => meta.recordTabConflict(d).catch(error => console.error('Tabbladconflict kon niet worden bewaard', error)));
+  if (meta) general.forEach(d => meta.recordTabConflict(d).catch(error => console.error('Tabbladconflict kon niet worden bewaard', error)));
+  // Financieel: één record per onderdeel met basis, deze en de andere waarde; het onderdeel wordt niet geüpload tot er
+  // per veld expliciet is gekozen (finance-conflict-core.js). Geen kopie in het algemene tabbladlogboek.
+  const FIN = window.SamenThuisFinanceConflicts?.shared();
+  if (FIN) {
+    [...new Set(financial.map(d => d.section))].forEach(section => {
+      FIN.open({
+        section, origin: 'tab', base: result.base ? result.base[section] : null, local: result.value[section], remote: result.remote[section],
+        localUser: window.SamenThuisAuth25?.session()?.user?.id || null, forcedPaths: financial.filter(d => d.section === section).map(d => d.path.slice(section.length).replace(/^\./, '')).filter(Boolean)
+      }).then(() => window.SamenThuisFinanceSync?.notify()).catch(error => console.error('Financieel conflict kon niet worden bewaard', error));
+    });
+  }
   try {
-    toast(financial
-      ? 'Let op: financiële gegevens zijn in twee tabbladen verschillend gewijzigd. Beide waarden zijn bewaard; controleer het bedrag.'
+    toast(financial.length
+      ? 'Let op: financiële gegevens zijn in twee tabbladen verschillend gewijzigd. Dit onderdeel wordt niet gesynchroniseerd tot je bij Instellingen per bedrag kiest.'
       : 'Ook in een ander tabblad gewijzigd: beide waarden zijn bewaard, de andere kun je terugzetten.');
   } catch (_) {}
 }

@@ -32,7 +32,14 @@
       async getAll(store) { return [...data[store].values()].map(r => JSON.parse(JSON.stringify(r))); },
       async putMany(store, records) { records.forEach(r => data[store].set(r.key, JSON.parse(JSON.stringify(r)))); },
       async deleteMany(store, keys) { keys.forEach(k => data[store].delete(k)); },
-      async putIfAbsent(store, records) { let n = 0; records.forEach(r => { if (!data[store].has(r.key)) { data[store].set(r.key, JSON.parse(JSON.stringify(r))); n++; } }); return n; }
+      async putIfAbsent(store, records) { let n = 0; records.forEach(r => { if (!data[store].has(r.key)) { data[store].set(r.key, JSON.parse(JSON.stringify(r))); n++; } }); return n; },
+      async update(store, key, fn) {
+        const cur = data[store].has(key) ? JSON.parse(JSON.stringify(data[store].get(key))) : undefined;
+        const next = fn(cur);
+        if (next === undefined) return undefined;
+        if (next === null) { data[store].delete(key); return null; }
+        data[store].set(key, JSON.parse(JSON.stringify(next))); return JSON.parse(JSON.stringify(next));
+      }
     };
   }
 
@@ -59,6 +66,15 @@
         if (memory) return memory.deleteMany(store, keys);
         const all = read(); keys.forEach(k => { if (all[store]) delete all[store][k]; });
         try { write(all); } catch (_) {}
+      },
+      // Niet atomair tussen tabbladen (localStorage-terugval); binnen één tabblad wel zonder onderbreking.
+      async update(store, key, fn) {
+        if (memory) return memory.update(store, key, fn);
+        const cur = (await backend.getAll(store)).find(r => r.key === key);
+        const next = fn(cur === undefined ? undefined : JSON.parse(JSON.stringify(cur)));
+        if (next === undefined) return undefined;
+        if (next === null) { await backend.deleteMany(store, [key]); return null; }
+        await backend.putMany(store, [next]); return next;
       },
       async putIfAbsent(store, records) {
         const existing = new Set((await backend.getAll(store)).map(r => r.key));
@@ -125,6 +141,18 @@
             req.onsuccess = () => { if (req.result === undefined) { os.put(r); added++; } if (--pending === 0) resolve(added); };
             req.onerror = () => reject(req.error);
           });
+        })),
+        // Lezen, beslissen en schrijven in één transactie: atomair tussen tabbladen (compare-and-set).
+        update: (store, key, fn) => tx(store, 'readwrite', os => new Promise((resolve, reject) => {
+          const req = os.get(key);
+          req.onsuccess = () => {
+            let next;
+            try { next = fn(req.result === undefined ? undefined : req.result); } catch (error) { reject(error); return; }
+            if (next === undefined) return resolve(undefined);
+            if (next === null) { os.delete(key); return resolve(null); }
+            os.put(next); resolve(next);
+          };
+          req.onerror = () => reject(req.error);
         })),
         close: () => { try { db.close(); } catch (_) {} }
       };
@@ -272,6 +300,15 @@
           return { key, duplicate: !!existing };
         });
       },
+      // Algemene records in de conflicts-store (gebruikt door finance-conflict-core.js). updateRecord is atomair in IndexedDB.
+      async getRecord(key) { return (await (await backend()).getAll('conflicts')).find(r => r.key === key) || null; },
+      async listRecords(kind) { return (await (await backend()).getAll('conflicts')).filter(r => r.kind === kind); },
+      async putRecord(record) { await write('record', b => b.putMany('conflicts', [record])); },
+      async updateRecord(key, fn) { return write('record', b => b.update('conflicts', key, fn)); },
+      async deleteRecord(key, predicate) {
+        return write('record', b => b.update('conflicts', key, cur => (cur && (!predicate || predicate(cur))) ? null : undefined));
+      },
+
       async listTabConflicts({ includeResolved = true } = {}) {
         return (await bySlot('conflicts', 'local')).filter(r => r.kind === 'tab' && (includeResolved || !r.resolved))
           .sort((x, y) => String(y.lastAt || y.at).localeCompare(String(x.lastAt || x.at)));

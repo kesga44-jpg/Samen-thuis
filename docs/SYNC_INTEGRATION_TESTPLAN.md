@@ -23,24 +23,28 @@ Na een stop is de status `partial` en blijven de lokale gegevens staan. De volge
 
 Beperking: mislukt stap 2 meerdere rondes achter elkaar, dan kan de bewaarde vorige waarde niet meer bij de oude administratie passen. De app vraagt dan per onderdeel om een keuze. Er gaat niets verloren.
 
-## 3. Technisch voorstel: conflicten tussen tabbladen (nog geen interface)
+## 3. Conflicten
 
-**Nu geïmplementeerd:**
+### 3a. Gewone gegevens tussen tabbladen
+Per pad worden de bewaarde waarde, de andere waarde en de basis vastgelegd (`SamenThuisTabConflicts.list/restore`). Dubbele meldingen worden één record. De laatste schrijfactie blijft lokaal staan; de andere waarde is herstelbaar.
 
-- Per conflicterend pad (bijv. `budgetV23.pct`, `groceries[g1].title`) worden de bewaarde waarde (`kept`), de andere waarde (`other`) en de basis bewaard in IndexedDB.
-- Dezelfde botsing, gemeld door twee tabbladen, wordt één record met een teller. De sleutel is het pad plus beide waarden.
-- Openstaande conflicten worden niet opgeruimd ten gunste van nieuwe. Opgeloste blijven tot maximaal 50 bewaard; de harde bovengrens is 500.
-- Financiële paden (onderdelen `budget*` en `finan*`) krijgen `financial: true` en een eigen, expliciete melding.
-- Herstel (technisch): `SamenThuisTabConflicts.list()` en `SamenThuisTabConflicts.restore(key, 'other' | 'kept' | 'base')` zetten de waarde terug op het pad en markeren het conflict als opgelost.
+### 3b. Financiële gegevens (opdracht 4, geïmplementeerd in `finance-conflict-core.js`)
 
-**Voorstel voor de volgende opdracht:**
+| Regel | Uitwerking |
+|---|---|
+| Wat is financieel | Uitsluitend `FINANCIAL_SECTIONS` = `budget`, `budget19`, `budget219`, `budgetV22`, `budgetV23` (centraal, geen zoekwoorden) |
+| Detectie | Sync: hetzelfde veld aan beide kanten anders gewijzigd (3-wegs). Tabbladen: idem via de tabbladbewaking. Herintroductie: een afgewezen waarde komt terug op dit apparaat |
+| Record (één per onderdeel, IndexedDB) | Basis, lokale en concurrerende waarde; `localUser`, `remoteUpdatedBy` (`household_state.updated_by`), `detectedAt`, `remoteUpdatedAt`, onderdeel, cloudversie, oorsprong |
+| Blokkade | Status `open`, `resolved-pending` of `confirmed`: het onderdeel wordt niet verstuurd, opgehaald of samengevoegd (`frozen`). Andere onderdelen synchroniseren door |
+| Oplossen | Per conflicterend veld expliciet "deze waarde" of "andere waarde" (kaart in Instellingen → Synchronisatie, of `SamenThuisFinanceSync.resolve`). Niet-conflicterende verschillen worden gewoon samengevoegd |
+| Volgorde | 1. keuze atomair vastleggen (`open` → `resolved-pending`) → 2. lokaal opslaan (fout: terugdraaien) → 3. versturen met de verwachte versie → 4. `confirmed` na serverantwoord → 5. record pas weg na duurzaam vastgelegde versie-administratie (niet bij `session`) |
+| Cloud intussen gewijzigd | Ander veld: samengevoegd versturen. Zelfde veld: opnieuw `open` met een nieuwe keuze |
+| Crash | Na stap 1: bij herstart alsnog lokaal toegepast (alleen als de lokale waarde nog die van het keuzemoment is). Na stap 4: afronden zonder nieuwe versie |
+| Oude kopie | Ander apparaat: 3-wegs merge geeft daar een nieuw, expliciet conflict. Dit apparaat: 30 dagen per veld de hash van de afgewezen waarde; komt die terug, dan volgt een nieuw conflict (`reintroduction`) in plaats van een upload |
+| Idempotent | Hetzelfde conflict → één record. Twee tabbladen met dezelfde keuze → één oplossing (compare-and-set in IndexedDB); een andere keuze wordt geweigerd |
+| Audit | `finance-audit`: actie, onderdeel, paden, hashes, versies, gebruikers-id's, tijdstippen. Geen bedragen. Na afronding staan er geen financiële waarden meer in de conflictopslag |
 
-1. **Financiële tabbladconflicten blokkeren de upload van dat onderdeel.** Zolang er een openstaand `financial`-record voor een onderdeel is, verstuurt accountsync dat onderdeel niet. Het staat dan in de conflictlijst met de keuzes "deze waarde", "andere waarde" of "basis". Zo kan een financiële waarde de cloud nooit bereiken zonder bewuste keuze.
-2. **Interface:** de bestaande conflictkaart in Instellingen uitbreiden met tabbladconflicten. Toon het pad als leesbaar label met de twee waarden naast elkaar, en een herstelknop die `restore` aanroept. Toon ook een melding in de Inbox (categorie `sync`).
-3. **Gewone gegevens:** de laatste schrijfactie blijft automatisch winnen, maar de andere waarde blijft 30 dagen herstelbaar.
-4. **Uitbreiding naar sync-conflicten tussen apparaten:** dezelfde regel voor `budget*`-onderdelen in `runAccountSync` (beleid B2). Een veldconflict wordt bij "Beide samenvoegen" dan niet automatisch "cloud wint" voor financiële paden.
-
-Tests voor de detectie staan in `sync-tab-safety.test.js` (R5a–R5d, R8) en `e2e/sync-tabs.mjs`.
+Grenzen: zonder accountsync blijft een opgelost tabbladconflict op `resolved-pending` staan (er is geen server die bevestigt). Het blokkeert dan niets, maar blijft zichtbaar. In de localStorage-terugval is compare-and-set niet atomair tussen tabbladen. Een bewuste latere wijziging terug naar een afgewezen bedrag vraagt binnen 30 dagen om bevestiging.
 
 ## 4. Wat is echt getest en wat niet
 
@@ -66,7 +70,8 @@ Tests voor de detectie staan in `sync-tab-safety.test.js` (R5a–R5d, R8) en `e2
 |---|---|---|---|---|
 | I1 | Twee accounts, gelijktijdige toevoegingen | A (Chrome) en B (Firefox) voegen binnen 1 s elk een andere boodschap toe | Na ≤ 2 rondes beide items bij A en B | `household_state.groceries.version` +2; geen conflictkaart |
 | I2 | Zelfde veld gelijktijdig | A en B wijzigen dezelfde boodschaptitel | Conflictkaart bij de tweede; beide waarden zichtbaar | Cloudwaarde = die van de eerste; niets stil overschreven |
-| I3 | Financieel veld gelijktijdig | A en B wijzigen hetzelfde bedrag in `budgetV23` | Conflict, nooit automatisch gekozen | Zoals I2; geen nieuwe versie zonder keuze |
+| I3 | Financieel veld gelijktijdig | A en B wijzigen hetzelfde bedrag in `budgetV23` | Financieel record bij de tweede; badge "Financieel conflict"; boodschappen synchroniseren door | Geen nieuwe `budgetV23`-versie tot de keuze; daarna precies één; `updated_by` van A staat in het record |
+| I3b | Financiële keuze met netwerkuitval | B kiest, verbinding weg vóór/na upload, herstel | Record blijft tot bevestiging; daarna weg | Versie +1, niet +2 |
 | I4 | Netwerkuitval vóór de upload | A offline, wijziging, sync | Status "Offline"; wijziging lokaal; na online automatisch verstuurd | Eén nieuwe versie |
 | I5 | Onzekere upload (antwoord kwijt) | A: DevTools "Block request" op het antwoord van `rpc/put_household_state` (of het tabblad sluiten direct na verzenden) | Inflight in IndexedDB; status `partial` | Na herstel: `version` precies +1, `pushed` leeg, inflight leeg |
 | I6 | Herstel na onzekere upload, ander apparaat eerst | Na I5 wijzigt B hetzelfde onderdeel voordat A terugkomt | A ziet de wijziging van B en voegt samen; geen tweede upload van de oude A-waarde | Versies oplopend zonder gaten |

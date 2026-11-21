@@ -103,6 +103,8 @@
       return out;
     }
     // Scalars of onvergelijkbare structuren die aan beide kanten anders zijn gewijzigd.
+    // Functie: de aanroeper beslist per pad (gebruikt voor expliciete keuzes bij financiële conflicten).
+    if (typeof opts.onConflict === 'function') return opts.onConflict(path || '(onderdeel)', local, remote);
     if (opts.onConflict === 'remote') return remote;
     if (opts.onConflict === 'local') return local;
     conflicts.push(path || '(onderdeel)');
@@ -193,7 +195,15 @@
       },
       createHousehold: name => rpc('create_household', { p_name: name }),
       joinHousehold: code => rpc('join_household', { p_code: code }),
-      readState: hid => call('/rest/v1/household_state?select=section,payload,version,updated_at&household_id=eq.' + encodeURIComponent(hid)),
+      // updated_by (bestaande kolom) voor de audit van financiële conflicten; valt terug als de kolom niet leesbaar is.
+      async readState(hid) {
+        const q = '&household_id=eq.' + encodeURIComponent(hid);
+        if (!this._noUpdatedBy) {
+          try { return await call('/rest/v1/household_state?select=section,payload,version,updated_at,updated_by' + q); }
+          catch (error) { if (!(error instanceof CloudError) || !(error.status === 400 && /42703|PGRST/.test(String(error.code)))) throw error; this._noUpdatedBy = true; }
+        }
+        return call('/rest/v1/household_state?select=section,payload,version,updated_at' + q);
+      },
       putState: (hid, section, payload, expected) => rpc('put_household_state', { p_household: hid, p_section: section, p_payload: payload, p_expected_version: expected })
     };
   }
@@ -202,14 +212,21 @@
   // baseValues: {section: waarde bij de laatste geslaagde synchronisatie} (lokaal bewaard). Daarmee worden gelijktijdige
   // wijzigingen automatisch samengevoegd. Ontbreekt de basis, dan blijft het oude gedrag (conflict → gebruiker kiest).
   // resolutions[s] === 'merge': door de gebruiker gekozen samenvoegen; bij echte veldconflicten wint de cloudversie.
-  async function runAccountSync({ cloud, householdId, local, base = {}, baseValues = {}, hold = false, resolutions = {}, encrypt, decrypt }) {
+  // frozen: onderdelen die deze ronde niet worden verstuurd, opgehaald of samengevoegd (bijv. een openstaand financieel
+  //   conflict). Hun cloudstand komt wel terug in remoteState.
+  // protectedSections: onderdelen waarvoor "samenvoegen" nooit stil de cloudwaarde laat winnen bij een veldconflict.
+  async function runAccountSync({ cloud, householdId, local, base = {}, baseValues = {}, hold = false, resolutions = {}, encrypt, decrypt, frozen = [], protectedSections = [] }) {
     const rows = await cloud.readState(householdId);
-    const remote = {}; let legacy = null;
+    const remote = {}, remoteState = {}; let legacy = null;
+    const isFrozen = s => frozen.includes(s), isProtected = s => protectedSections.includes(s);
     for (const row of rows || []) {
       if (row.section === 'sportCoach') continue;
       const value = await decrypt(row.payload); // sleutelfout stopt vóór enig schrijven
       if (row.section === LEGACY_SECTION) legacy = value;
-      else if (validSection(row.section)) remote[row.section] = { version: Number(row.version), value };
+      else if (validSection(row.section)) {
+        remote[row.section] = { version: Number(row.version), value };
+        remoteState[row.section] = { version: Number(row.version), value, updatedBy: row.updated_by || null, updatedAt: row.updated_at || null };
+      }
       // Onbekende/gereserveerde namen (bijv. settings) uit de cloud worden genegeerd: nooit apparaatinstellingen overschrijven.
     }
     if (legacy && typeof legacy === 'object') {
@@ -220,12 +237,13 @@
     const newBaseValues = {};
     for (const a of actions) {
       const s = a.section;
+      if (isFrozen(s)) continue; // geblokkeerd: geen upload, geen pull, basis blijft ongewijzigd
       // Conflict of gekozen samenvoegen: probeer 3-wegs samenvoegen; lukt dat zonder veldconflict, dan versturen we het resultaat.
       if ((a.action === 'conflict' && !hold) || resolutions[s] === 'merge') {
         const forced = resolutions[s] === 'merge';
         const hasBase = Object.prototype.hasOwnProperty.call(baseValues, s) && base[s] && hashValue(baseValues[s]) === base[s].hash;
         if (remote[s] && (hasBase || forced)) {
-          const m = mergeSection(hasBase ? baseValues[s] : undefined, L[s], remote[s].value, { onConflict: forced ? 'remote' : 'report' });
+          const m = mergeSection(hasBase ? baseValues[s] : undefined, L[s], remote[s].value, { onConflict: forced && !isProtected(s) ? 'remote' : 'report' });
           if (m.ok) {
             try {
               const version = await cloud.putState(householdId, s, await encrypt(m.value), remote[s].version);
@@ -258,7 +276,7 @@
         }
       }
     }
-    return { status: failed.length ? 'partial' : conflicts.length ? 'conflict' : 'ok', pulls, base: newBase, baseValues: newBaseValues, pushed, merged, conflicts, failed, hadLegacy: !!legacy };
+    return { status: failed.length ? 'partial' : conflicts.length ? 'conflict' : 'ok', pulls, base: newBase, baseValues: newBaseValues, pushed, merged, conflicts, failed, hadLegacy: !!legacy, remoteState };
   }
 
   // Na een ronde: cloudwaarden alleen toepassen op onderdelen die lokaal niet zijn gewijzigd sinds de momentopname waarmee

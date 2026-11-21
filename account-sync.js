@@ -13,6 +13,10 @@
   const TAB = window.SamenThuisTabSync;
   const LOCK = TAB ? TAB.createSyncLock({ name: 'samen-thuis-account-sync', locks: navigator.locks, storage: localStorage }) : null;
   const CHANNEL = TAB ? TAB.createChannel({ name: 'samen-thuis-account-sync', tabId: LOCK && LOCK.tabId }) : null;
+  // Financiële conflicten (finance-conflict-core.js): blokkeren de upload van het betreffende onderdeel tot er gekozen is.
+  const FINC = window.SamenThuisFinanceConflicts;
+  const FIN = FINC ? FINC.shared() : null;
+  const isFinancialSection = s => !!(FINC && FINC.isFinancialSection(s));
   const loadBaseValues = async bases => { try { return await META.loadBaseValues(slot(), bases); } catch (_) { return {}; } };
   // Versie-administratie per slot. Staat de basis alleen in het geheugen (durability 'session'), dan blijft ook de
   // administratie in het geheugen: na herladen geldt dan geen enkele versie als bevestigd zonder duurzame basis.
@@ -33,7 +37,7 @@
   }
   const SECTION_LABELS = { groceries: 'boodschappen', meals: 'weekmenu', planning: 'agenda', chores: 'routines', tasks: 'taken', stock: 'voorraad', freezer: 'vriezer', ideas: 'date-ideeën', home: 'woning', trips: 'reizen', tripFolders: 'reizen', tripSections: 'reizen', budgetV23: 'financiën', nutrition: 'voeding', challengeDataV26: 'challenges', dailyAnswers: 'vraag van de dag' };
   const label = s => SECTION_LABELS[s] || s;
-  const st = { household: null, conflicts: [], message: '', busy: false, uid: AUTH.session()?.user?.id || '' };
+  const st = { household: null, conflicts: [], finance: [], finChoices: {}, message: '', busy: false, uid: AUTH.session()?.user?.id || '' };
   // Accountwissel: nooit huishouden/conflicten van het vorige account blijven gebruiken.
   function syncIdentity() {
     const uid = AUTH.session()?.user?.id || '';
@@ -80,14 +84,31 @@
       const roundSlot = slot();
       const prevBase = readBases(roundSlot);
       const prevBaseValues = await loadBaseValues(prevBase);
+      const actor = AUTH.session()?.user?.id || null;
+      // Financieel: onderbroken keuzes afronden, herintroducties blokkeren, bevroren onderdelen bepalen.
+      const fin = FIN ? await FIN.beforeRound({ data, prevBase, prevBaseValues, actor, householdId: st.household.id }) : { records: [], frozen: [], fixes: [] };
+      if (fin.fixes.length) {
+        const previous = data;
+        data = { ...data, ...Object.fromEntries(fin.fixes.map(f => [f.section, f.value])) };
+        if (save({ touch: false, sync: false }) === false) { data = previous; throw new Error('Lokaal opslaan is geblokkeerd; financiële keuze nog niet toegepast.'); }
+      }
       // Consistente momentopname: wijzigingen die tijdens de ronde binnenkomen raken deze ronde niet.
       const snapshot = structuredClone(data);
-      const raw = await HS.runAccountSync({
-        cloud: window.SamenThuisSyncMeta.trackUploads(c, META, roundSlot, HS.classifyError, (step, error) => console.warn('Syncmetadata (' + step + ') niet bewaard', error)), householdId: st.household.id,
+      const encrypt = v => encryptData(v, code());
+      const tracked = window.SamenThuisSyncMeta.trackUploads(c, META, roundSlot, HS.classifyError, (step, error) => console.warn('Syncmetadata (' + step + ') niet bewaard', error));
+      // Een financieel onderdeel wordt nooit via de algemene keuzeknoppen opgelost (alleen via een keuze per veld).
+      const generalResolutions = Object.fromEntries(Object.entries(resolutions || {}).filter(([s]) => !isFinancialSection(s)));
+      const rawRound = await HS.runAccountSync({
+        cloud: tracked, householdId: st.household.id,
         local: snapshot, base: prevBase, baseValues: prevBaseValues,
-        hold: !!localStorage.getItem(RESTORE_HOLD_KEY), resolutions,
-        encrypt: v => encryptData(v, code()), decrypt: p => decryptData(p, code())
+        hold: !!localStorage.getItem(RESTORE_HOLD_KEY), resolutions: generalResolutions,
+        encrypt, decrypt: p => decryptData(p, code()),
+        frozen: fin.frozen, protectedSections: FINC ? [...FINC.FINANCIAL_SECTIONS] : []
       });
+      const finRound = FIN
+        ? await FIN.afterRound({ raw: rawRound, records: fin.records, snapshot, prevBase, prevBaseValues, cloud: tracked, householdId: st.household.id, encrypt, classify: HS.classifyError, actor })
+        : { result: rawRound, outcomes: [] };
+      const raw = finRound.result;
       // Onderdelen die tijdens de ronde lokaal zijn gewijzigd: oudere cloudrespons niet toepassen (volgende ronde voegt samen).
       const result = HS.deferChangedPulls({ snapshot, current: data, result: raw, prevBase, prevBaseValues });
       if (result.deferred.length) rerunRequested = true;
@@ -118,6 +139,11 @@
         roundOk: result.status === 'ok', writeBases: (b, opts) => writeBases(roundSlot, b, opts)
       });
       st.conflicts = result.conflicts;
+      // Financiële records pas afronden (verwijderen) als de versie-administratie duurzaam is vastgelegd.
+      if (FIN && commit.committed && commit.durability !== 'session') {
+        try { await FIN.afterCommit({ outcomes: finRound.outcomes, actor }); } catch (error) { console.error('Financiële conflicten niet afgerond', error); }
+      }
+      await refreshFinance();
       if (!commit.committed) {
         console.error('Syncmetadata niet vastgelegd (' + commit.step + ')', commit.error);
         result.failed = [...(result.failed || []), { section: '(syncmetadata)', error: { kind: 'storage', message: 'De synchronisatiestatus kon niet op dit apparaat worden bewaard (' + commit.step + '). Je gegevens zijn veilig; de volgende ronde rondt het af.' } }];
@@ -167,7 +193,7 @@
     legacyBadge(message);
     const badge = document.querySelector('#syncState');
     if (!badge || message || !accountMode()) return;
-    badge.textContent = syncing ? 'Synchroniseren…' : !AUTH.session()?.user?.id ? 'Aanmelden vereist · lokaal bewaard' : !navigator.onLine ? 'Offline · later synchroniseren' : st.conflicts.length ? 'Conflict · kies versie' : syncError ? 'Sync controleren' : metaDurability === 'session' ? 'Gesynchroniseerd · status niet duurzaam bewaard' : 'Laatst gesynchroniseerd · niet geverifieerd';
+    badge.textContent = syncing ? 'Synchroniseren…' : !AUTH.session()?.user?.id ? 'Aanmelden vereist · lokaal bewaard' : !navigator.onLine ? 'Offline · later synchroniseren' : st.finance.some(x => x.record.status === 'open') ? 'Financieel conflict · kies waarde' : st.conflicts.length ? 'Conflict · kies versie' : syncError ? 'Sync controleren' : metaDurability === 'session' ? 'Gesynchroniseerd · status niet duurzaam bewaard' : 'Laatst gesynchroniseerd · niet geverifieerd';
     badge.classList.remove('connected');
   };
 
@@ -278,6 +304,52 @@
     return true;
   }
 
+  // ---------- Financiële conflicten: verversen, kiezen, tonen ----------
+  async function refreshFinance() {
+    if (!FIN) return;
+    try {
+      const records = await FIN.list();
+      st.finance = records.map(r => ({ record: r, paths: r.status === 'open' ? FIN.view(r, data[r.section]) : [] }));
+    } catch (error) { console.error('Financiële conflicten laden mislukt', error); }
+    updateSyncBadge();
+  }
+  // Expliciete keuze per veld: choices = { [pad]: 'local' | 'remote' }. Volgorde: keuze atomair vastleggen (IndexedDB) →
+  // lokaal opslaan (bij een fout terugdraaien) → versturen in de volgende ronde → record pas weg na serverbevestiging.
+  async function resolveFinance(section, choices) {
+    if (!FIN || !isFinancialSection(section)) return { ok: false, reason: 'not-financial' };
+    const bases = readBases(slot());
+    const pushBase = bases[section] ? { version: bases[section].version, value: (await loadBaseValues(bases))[section] } : null;
+    const r = await FIN.resolve({ section, choices, currentLocal: data[section], actor: AUTH.session()?.user?.id || null, pushBase });
+    if (!r.ok) { await refreshFinance(); return r; }
+    if (HS.hashValue(data[section] ?? null) !== HS.hashValue(r.value ?? null)) {
+      const previous = data[section];
+      data[section] = structuredClone(r.value);
+      if (save({ sync: false }) === false) {
+        data[section] = previous;
+        if (!r.idempotent) await FIN.rollback(section, r.record.resolution.id);
+        await refreshFinance();
+        return { ok: false, reason: 'save-failed' };
+      }
+    }
+    delete st.finChoices[section];
+    if (CHANNEL) CHANNEL.post('finance-changed', { section });
+    await refreshFinance();
+    if (current === 'settings') render();
+    if (accountMode()) scheduleRetry(300);
+    return r;
+  }
+  const short = v => { const t = v === undefined ? '—' : typeof v === 'string' ? v : JSON.stringify(v); return t.length > 60 ? t.slice(0, 57) + '…' : t; };
+  function financeList() {
+    if (!st.finance.length) return '';
+    const me = AUTH.session()?.user?.id || '';
+    return `<p class="eyebrow">FINANCIËN · KEUZE NODIG</p><ul class="list" data-fin-list>${st.finance.map(({ record: r, paths }) => {
+      const who = r.origin === 'tab' ? 'in een ander tabblad op dit apparaat' : r.origin === 'reintroduction' ? 'een oude kopie op dit apparaat' : (r.remoteUpdatedBy && r.remoteUpdatedBy !== me ? 'door je huisgenoot' : 'op een ander apparaat');
+      if (r.status !== 'open') return `<li class="list-item"><div class="item-main"><strong>${esc2(label(r.section))}</strong><small>Keuze bewaard · wordt pas afgerond als de server hem bevestigt. Dit onderdeel wordt tot dan niet anders verstuurd.</small></div></li>`;
+      const chosen = st.finChoices[r.section] || {};
+      return paths.map(p => `<li class="list-item" data-fin-row="${esc2(r.section)}"><div class="item-main"><strong>${esc2(label(r.section))} · ${esc2(p.path)}</strong><small>Ook gewijzigd ${esc2(who)}${r.remoteUpdatedAt ? ' (' + esc2(new Date(r.remoteUpdatedAt).toLocaleString('nl-NL')) + ')' : ''}. Eerder: ${esc2(short(p.base))}</small></div><button class="${chosen[p.path] === 'local' ? 'primary' : 'secondary'}" data-fin-choose="${esc2(r.section)}" data-fin-path="${esc2(p.path)}" data-fin-side="local">Deze waarde: ${esc2(short(p.local))}</button><button class="${chosen[p.path] === 'remote' ? 'primary' : 'secondary'}" data-fin-choose="${esc2(r.section)}" data-fin-path="${esc2(p.path)}" data-fin-side="remote">Andere waarde: ${esc2(short(p.remote))}</button></li>`).join('');
+    }).join('')}</ul>`;
+  }
+
   function card() {
     const signed = !!AUTH.session()?.user?.id, on = accountMode();
     const conflicts = st.conflicts.map(c => `<li class="list-item"><div class="item-main"><strong>${esc2(label(c.section))}</strong><small>${c.fields && c.fields.length ? `Op beide apparaten anders gewijzigd: ${esc2(c.fields.slice(0, 3).join(', '))}${c.fields.length > 3 ? ' …' : ''}` : 'Lokaal en cloud verschillen'}</small></div><button class="primary" data-acct-resolve="${esc2(c.section)}:merge" title="Toevoegingen van beide blijven; is hetzelfde item op beide apparaten anders gewijzigd, dan wint de cloudversie">Beide samenvoegen</button><button class="secondary" data-acct-resolve="${esc2(c.section)}:local">Mijn versie</button><button class="secondary" data-acct-resolve="${esc2(c.section)}:remote">Cloudversie</button></li>`).join('');
@@ -289,7 +361,7 @@
          <button class="primary" data-acct-on ${st.busy ? 'disabled' : ''}>Overstappen naar accountsync</button>`;
     return `<section class="card settings-card" data-acct-card><div class="card-head"><div><p class="eyebrow">VEILIGE SYNC</p><h2>Accountsynchronisatie per onderdeel</h2></div><span class="tag ${on ? 'green' : ''}">${on ? 'Actief' : 'Niet actief'}</span></div>
       <p class="muted">SportCoach wordt niet gesynchroniseerd. De oude code-sync is in deze app gepauzeerd; oude clouddata wordt niet automatisch gekopieerd en blijft behouden tot DB-1. Een succesvolle accountsync bevestigt niet dat beide apparaten actueel gelijk zijn.</p>
-      ${body}<p role="status" aria-live="polite" class="small-note">${esc2(st.message)}</p>${conflicts ? `<ul class="list">${conflicts}</ul>` : ''}</section>`;
+      ${body}<p role="status" aria-live="polite" class="small-note">${esc2(st.message)}</p>${conflicts ? `<ul class="list">${conflicts}</ul>` : ''}${financeList()}</section>`;
   }
   const baseRender = render;
   render = function (...a) {
@@ -298,6 +370,15 @@
     return r;
   };
   document.addEventListener('click', e => {
+    const f = e.target.closest('[data-fin-choose]');
+    if (f) {
+      const section = f.dataset.finChoose, entry = st.finance.find(x => x.record.section === section);
+      const chosen = st.finChoices[section] = { ...(st.finChoices[section] || {}), [f.dataset.finPath]: f.dataset.finSide };
+      // Pas oplossen als voor elk conflicterend veld expliciet is gekozen.
+      if (entry && entry.paths.every(p => chosen[p.path])) resolveFinance(section, chosen).then(r => { if (!r.ok) toast('Keuze niet verwerkt: ' + (r.reason === 'already-resolved' ? 'in een ander tabblad al anders gekozen.' : r.reason)); });
+      else if (current === 'settings') render();
+      return;
+    }
     const t = e.target.closest('[data-acct-on],[data-acct-sync],[data-acct-resolve]'); if (!t) return;
     if (t.matches('[data-acct-on]')) activate();
     else if (t.matches('[data-acct-sync]')) accountSync({ manual: true });
@@ -319,6 +400,7 @@
   })();
   // Een ander tabblad heeft een ronde afgerond: conflictstatus bijwerken (gegevens komen via het storage-event binnen).
   const offChannel = CHANNEL ? CHANNEL.on(msg => {
+    if (msg.type === 'finance-changed' || msg.type === 'sync-finished') refreshFinance().then(() => { if (current === 'settings') render(); });
     if (msg.type !== 'sync-finished' || msg.slot !== slot()) return;
     META.loadConflicts(msg.slot).then(list => { st.conflicts = list; updateSyncBadge(); if (current === 'settings') render(); }).catch(() => {});
   }) : null;
@@ -335,8 +417,31 @@
     return Object.keys(S).filter(k => b[k] ? b[k].hash !== HS.hashValue(S[k]) : !HS.isEmptyValue(S[k]));
   }
 
+  // Financiële conflicten voor app.js (tabbladen) en voor tests: lijst, live weergave, expliciete keuze.
+  window.SamenThuisFinanceSync = {
+    list: () => FIN ? FIN.list() : Promise.resolve([]),
+    view: async section => { const r = FIN && await FIN.get(section); return r ? FIN.view(r, data[section]) : []; },
+    resolve: resolveFinance, refresh: refreshFinance,
+    notify: () => { if (CHANNEL) CHANNEL.post('finance-changed', {}); return refreshFinance(); }
+  };
+  // Na een herstart: een keuze die al vastlag maar nog niet lokaal was opgeslagen (crash ertussen) alsnog toepassen.
+  (async () => {
+    if (!FIN) return;
+    try {
+      const fixes = FIN.interrupted(await FIN.list(), data);
+      if (fixes.length) {
+        const previous = data;
+        data = { ...data, ...Object.fromEntries(fixes.map(f => [f.section, f.value])) };
+        if (save({ touch: false, sync: false }) === false) data = previous;
+      }
+    } catch (error) { console.error('Onderbroken financiële keuze niet afgerond', error); }
+    await refreshFinance();
+    if (current === 'settings') render();
+  })();
+
   window.SamenThuisAccountSync = {
-    active: accountMode, sync: accountSync, conflicts: () => st.conflicts,
+    active: accountMode, sync: accountSync,
+    conflicts: () => [...st.conflicts, ...st.finance.filter(x => x.record.status === 'open').map(x => ({ section: x.record.section, fields: x.paths.map(p => p.path), financial: true }))],
     pending: pendingSections, inflight: () => META.listInflight(slot()), metaStatus: () => META.status(),
     uploadSportFile, signedSportFileUrl, deleteSportFile
   };

@@ -254,9 +254,10 @@
     if (value === undefined) delete cur[last.key]; else cur[last.key] = value;
     return true;
   }
-  // Financiële onderdelen: wijzigingen daarin worden nooit stilzwijgend gekozen (zie conflictbeleid B2).
-  const FINANCIAL = /^(budget|finan)/i;
-  const isFinancialPath = path => { const first = parsePath(path)[0]; return !!(first && first.key && FINANCIAL.test(first.key)); };
+  // Financiële paden: uitsluitend volgens de centrale, expliciete definitie in finance-conflict-core.js.
+  const financeCore = () => (typeof module === 'object' && module.exports && typeof require === 'function')
+    ? require('./finance-conflict-core.js') : globalThis.SamenThuisFinanceConflicts;
+  const isFinancialPath = path => { const core = financeCore(); return !!(core && core.isFinancialPath(path)); };
   // Zet de paden uit merge3 om naar records met beide waarden (en de basis), voor het conflictlogboek.
   function describeConflicts({ paths, kept, other, base, prefix = '' }) {
     return (paths || []).map(p => {

@@ -23,7 +23,7 @@ const base = `http://localhost:${server.address().port}/`;
 const HH = '11111111-1111-4111-8111-111111111111';
 const USER = '22222222-2222-4222-8222-222222222222';
 const state = new Map();                       // section -> { payload, version }
-const ctl = { readDelayMs: 0, abortNextPut: false, reads: 0, activeReads: 0, maxActiveReads: 0, puts: 0 };
+const ctl = { readDelayMs: 0, abortNextPut: false, reads: 0, activeReads: 0, maxActiveReads: 0, puts: 0, putSections: [] };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 async function supabase(route) {
@@ -35,14 +35,14 @@ async function supabase(route) {
     ctl.reads++; ctl.activeReads++; ctl.maxActiveReads = Math.max(ctl.maxActiveReads, ctl.activeReads);
     try {
       if (ctl.readDelayMs) await sleep(ctl.readDelayMs);
-      return await json(200, [...state].map(([section, r]) => ({ section, payload: r.payload, version: r.version, updated_at: null })));
+      return await json(200, [...state].map(([section, r]) => ({ section, payload: r.payload, version: r.version, updated_at: r.updatedAt || null, updated_by: r.updatedBy || USER })));
     } finally { ctl.activeReads--; }
   }
   if (url.pathname.endsWith('/rest/v1/rpc/put_household_state')) {
     const b = JSON.parse(req.postData() || '{}');
     const cur = state.get(b.p_section), v = cur ? cur.version : 0;
     if (v !== b.p_expected_version) return json(409, { code: '40001', message: 'Versieconflict' });
-    state.set(b.p_section, { payload: b.p_payload, version: v + 1 }); ctl.puts++;
+    state.set(b.p_section, { payload: b.p_payload, version: v + 1, updatedBy: USER, updatedAt: new Date().toISOString() }); ctl.puts++; ctl.putSections.push(b.p_section);
     if (ctl.abortNextPut) { ctl.abortNextPut = false; return route.abort('connectionreset'); } // commit gelukt, antwoord kwijt
     return json(200, v + 1);
   }
@@ -115,9 +115,21 @@ try {
     await a.page.evaluate(() => { data.budgetV23.e2eShare = 40; });
     await b.page.evaluate(() => { data.budgetV23.e2eShare = 60; save({ sync: false }); });
     await a.page.waitForTimeout(300);
-    const fin = await a.page.evaluate(async () => (await SamenThuisSyncMeta.shared().listTabConflicts({ includeResolved: false })).filter(c => c.financial).map(c => [c.path, c.kept, c.other, c.base]));
+    await a.page.waitForTimeout(300);
+    const fin = await a.page.evaluate(async () => (await SamenThuisFinanceSync.list()).map(r => ({ section: r.section, origin: r.origin, status: r.status, base: r.base && r.base.e2eShare, local: r.local && r.local.e2eShare, remote: r.remote && r.remote.e2eShare })));
     const toastText = await a.page.evaluate(() => document.querySelector('#toast')?.textContent || '');
-    check('financieel conflict: gemarkeerd, beide waarden en basis bewaard, expliciete melding', fin.length === 1 && fin[0][0] === 'budgetV23.e2eShare' && [fin[0][1], fin[0][2]].sort().join() === '40,60' && fin[0][3] === 50 && /financiële/.test(toastText), JSON.stringify(fin) + ' ' + toastText);
+    const generalFin = await a.page.evaluate(async () => (await SamenThuisSyncMeta.shared().listTabConflicts()).filter(c => c.financial).length);
+    check('financieel tabbladconflict: één financieel record (basis, deze, andere waarde), expliciete melding, niet in algemeen logboek',
+      fin.length === 1 && fin[0].section === 'budgetV23' && fin[0].origin === 'tab' && fin[0].status === 'open' && fin[0].base === 50 && [fin[0].local, fin[0].remote].sort().join() === '40,60' && /financiële/.test(toastText) && generalFin === 0,
+      JSON.stringify(fin) + ' ' + toastText + ' algemeen:' + generalFin);
+    // Kiezen via de kaart in Instellingen (echte klik).
+    await a.page.evaluate(() => { location.hash = '#/settings/synchronisatie'; }); await a.page.waitForTimeout(400);
+    await a.page.waitForSelector('[data-fin-choose][data-fin-side="remote"]', { timeout: 5000 });
+    const otherValue = fin[0].remote;
+    await a.page.click('[data-fin-choose][data-fin-side="remote"]');
+    await a.page.waitForTimeout(500);
+    const after = await a.page.evaluate(async () => ({ value: data.budgetV23.e2eShare, recs: (await SamenThuisFinanceSync.list()).map(r => r.status) }));
+    check('keuze via de kaart: gekozen waarde lokaal opgeslagen; record wacht op serverbevestiging (niet verwijderd)', after.value === otherValue && after.recs.join() === 'resolved-pending', JSON.stringify(after));
     check('geen JavaScript-fouten (tabbladen)', !a.errors.length && !b.errors.length, [...a.errors, ...b.errors].join(' | '));
     const st = await a.page.evaluate(() => SamenThuisSyncMeta.shared().status());
     check('metastore gebruikt echte IndexedDB en meldt "durable"', st.mode === 'indexeddb' && st.durability === 'durable', JSON.stringify(st));
@@ -190,6 +202,30 @@ try {
     await a.page.evaluate(() => SamenThuisAccountSync.sync()); await waitIdle(a.page);
     const after = await a.page.evaluate(async () => ({ inflight: (await SamenThuisAccountSync.inflight()).length, pending: SamenThuisAccountSync.pending(), titles: data.groceries.map(g => g.title) }));
     check('na heropenen: wijziging bewaard, bevestigd zonder tweede upload', after.titles.includes('Melk-offline') && after.inflight === 0 && !after.pending.includes('groceries') && ctl.puts === putsBefore + 1, JSON.stringify({ ...after, puts: ctl.puts - putsBefore }));
+    // Financieel conflict met een andere gebruiker: upload geblokkeerd, andere onderdelen door, kiezen via de kaart.
+    await a.page.evaluate(() => { data.budgetV23 = { e2ePct: 50 }; save({ sync: false }); });
+    await a.page.evaluate(() => SamenThuisAccountSync.sync()); await waitIdle(a.page);
+    const bRow = state.get('budgetV23');
+    const remoteBudget = await a.page.evaluate(p => decryptData(p, 'test-huishouden-123'), bRow.payload);
+    remoteBudget.e2ePct = 40;
+    state.set('budgetV23', { payload: await a.page.evaluate(v => encryptData(v, 'test-huishouden-123'), remoteBudget), version: bRow.version + 1, updatedBy: '33333333-3333-4333-8333-333333333333', updatedAt: new Date().toISOString() });
+    await a.page.evaluate(() => { data.budgetV23.e2ePct = 60; data.groceries.push({ id: 'e2e-fin', title: 'Tijdens conflict', category: 'Overig', done: false }); save({ sync: false }); });
+    ctl.putSections = [];
+    await a.page.evaluate(() => SamenThuisAccountSync.sync()); await waitIdle(a.page);
+    const finRec = await a.page.evaluate(async () => (await SamenThuisFinanceSync.list()).map(r => ({ s: r.section, st: r.status, by: r.remoteUpdatedBy, l: r.local.e2ePct, r: r.remote.e2ePct })));
+    const badge = await a.page.evaluate(() => document.querySelector('#syncState')?.textContent || '');
+    check('financieel conflict tussen gebruikers: record, upload budget geblokkeerd, boodschappen wel verstuurd, badge meldt het',
+      finRec.length === 1 && finRec[0].st === 'open' && finRec[0].by === '33333333-3333-4333-8333-333333333333' && finRec[0].l === 60 && finRec[0].r === 40
+      && !ctl.putSections.includes('budgetV23') && ctl.putSections.includes('groceries') && /Financieel conflict/.test(badge),
+      JSON.stringify({ finRec, puts: ctl.putSections, badge }));
+    await a.page.evaluate(() => { location.hash = '#/settings/synchronisatie'; }); await a.page.waitForTimeout(400);
+    await a.page.waitForSelector('[data-fin-choose][data-fin-side="local"]', { timeout: 5000 });
+    await a.page.click('[data-fin-choose][data-fin-side="local"]');
+    await a.page.waitForTimeout(800); await waitIdle(a.page);
+    await a.page.evaluate(() => SamenThuisAccountSync.sync()); await waitIdle(a.page);
+    const cloudPct = await a.page.evaluate(p => decryptData(p, 'test-huishouden-123').then(v => v.e2ePct), state.get('budgetV23').payload);
+    const finAfter = await a.page.evaluate(async () => (await SamenThuisFinanceSync.list()).length);
+    check('na expliciete keuze: gekozen waarde in de cloud, record pas na bevestiging verwijderd', cloudPct === 60 && finAfter === 0, JSON.stringify({ cloudPct, finAfter }));
     check('geen JavaScript-fouten (accountsync)', !a.errors.length, a.errors.join(' | '));
     await ctx.close();
   }
