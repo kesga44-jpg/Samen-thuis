@@ -16,7 +16,8 @@ test('SportCoach is uitgesloten van huishoudsync en generieke JSON-back-ups/rest
   assert.match(app, /preserveUnknownFields\(raw\.meta, migrated\.meta, clone\)/);
   assert.match(app, /delete backupData\.sportCoach/);
   assert.match(app, /k==='sportCoach'\|\|v==null/);
-  assert.match(app, /preserveLocal: \(\) => \(\{ sportCoach: clone\(data\?\.sportCoach\) \}\)/);
+  // Opdracht 7: ook apparaatinstellingen blijven bij herstel de huidige (SportCoach blijft lokaal).
+  assert.match(app, /preserveLocal: \(\) => \(\{ sportCoach: clone\(data\?\.sportCoach\), settings: clone\(data\?\.settings\) \}\)/);
   assert.match(app, /Een afzonderlijke veilige SportCoach-export is nog niet beschikbaar/);
   const conflictCard = app.slice(app.indexOf('function renderSyncConflictCard'), app.indexOf('// Basis voor automatisch samenvoegen'));
   assert.doesNotMatch(conflictCard, /data-sync-conflict-choice=/);
@@ -55,7 +56,7 @@ test('sport-assets en de nieuwe account-syncbestandsinterface worden geladen en 
   const html = read('index.html');
   const sw = read('sw.js');
   const accountSync = read('account-sync.js');
-  for (const asset of ['sportcoach.css?v=2', 'sportcoach-core.js?v=2', 'data-core.js?v=251', 'household-sync-core.js?v=6', 'account-sync.js?v=10']) {
+  for (const asset of ['sportcoach.css?v=2', 'sportcoach-core.js?v=2', 'data-core.js?v=251', 'household-sync-core.js?v=6', 'account-sync.js?v=11']) {
     assert.ok(html.includes(asset), `${asset} ontbreekt in index`);
     assert.ok(sw.includes(asset), `${asset} ontbreekt in service worker`);
   }

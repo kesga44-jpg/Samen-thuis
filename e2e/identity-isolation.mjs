@@ -86,6 +86,14 @@ async function switchTo(page, uid, { enable = null } = {}) {
   }, { a: uid ? auth(uid) : null, enable });
   await page.waitForLoadState('load'); await page.waitForTimeout(900);
 }
+// Opdracht 7: een nieuwe identiteit vult de huishoudcode zelf in (echte instellingenkaart); geen globale code meer.
+async function enterCode(page, code = CODE) {
+  await page.evaluate(() => { location.hash = '#/settings/synchronisatie'; });
+  const input = await page.waitForSelector('#syncHouseholdCode', { state: 'visible', timeout: 8000 });
+  await input.fill(code);
+  await page.click('#syncForm button[type=submit]');
+  await page.waitForTimeout(300); await waitIdle(page);
+}
 const groceriesOf = (page, hid) => page.evaluate(async ({ payload }) => payload ? (await decryptData(payload, 'test-huishouden-123')).map(g => g.title).sort() : [], { payload: cloud[hid].get('groceries')?.payload });
 
 try {
@@ -100,6 +108,8 @@ try {
     localStorage.setItem('samenThuisSyncV1', JSON.stringify({ householdCode: 'test-huishouden-123' }));
     localStorage.setItem('samenThuisPersonalAuthV1', JSON.stringify(a));
   }, { A, H1, sport, a: auth(A) });
+  // H1 heeft al gegevens (A synchroniseerde eerder met de globale code): de code van A wordt pas na bewijs overgenomen.
+  cloud[H1].set('ideas', { payload: await page.evaluate(v => encryptData(v, 'test-huishouden-123'), [{ id: 'i-h1', title: 'H1-idee' }]), version: 1, by: A });
   await page.reload({ waitUntil: 'load' }); await page.waitForTimeout(900);
   const v2Before = await page.evaluate(() => localStorage.getItem('samenThuisDataV2'));
   let id = await identity(page);
@@ -107,6 +117,7 @@ try {
     && (await page.evaluate(() => JSON.parse(localStorage.getItem('samenThuisDataMigrationV1')).v2)) === 'bound', JSON.stringify(id));
   await sync(page);
   check('A synchroniseert naar H1', (await groceriesOf(page, H1)).includes('A-melk'));
+  check('A (bestaande identiteit) neemt de oude code pas over na ontsleutelen van H1', await page.evaluate(k => JSON.parse(localStorage.getItem('samenThuisHouseholdCodesV1') || '{}')[k]?.source, `${A}|${H1}`) === 'legacy-verified');
 
   // 1. A meldt af (echte knop), B meldt aan.
   await page.evaluate(() => { location.hash = '#/settings/account'; }); await page.waitForTimeout(500);
@@ -122,6 +133,11 @@ try {
   cloud[H2].set('groceries', { payload: await page.evaluate(v => encryptData(v, 'test-huishouden-123'), [{ id: 'g-b', title: 'H2-brood', category: 'Overig', done: false }]), version: 1, by: B });
   await switchTo(page, B, { enable: { uid: B, hid: H2 } });
   id = await identity(page);
+  const putsNoCode = ctl.puts.length;
+  await sync(page);
+  check('2a. B (nieuwe identiteit) gebruikt de globale code niet: zonder eigen code niets verstuurd of opgehaald', ctl.puts.length === putsNoCode && (await titles(page)).length === 0
+    && await page.evaluate(() => !document.querySelector('#syncHouseholdCode')?.value && !syncConfig.householdCode));
+  await enterCode(page);
   await sync(page);
   check('2. huishouden H2 geopend: eigen dataset, gegevens van H2 opgehaald', id.mode === 'account' && id.householdId === H2 && JSON.stringify(await titles(page)) === JSON.stringify(['H2-brood']), JSON.stringify(await titles(page)));
   check('3. B heeft geen gegevens van A naar H2 gestuurd', !(await groceriesOf(page, H2)).includes('A-melk') && !ctl.puts.some(p => p.hid === H2 && p.user !== B));
@@ -172,6 +188,7 @@ try {
 
   // 11. Twee accounts in hetzelfde huishouden (A en C in H1) op dit apparaat.
   await switchTo(page, C, { enable: { uid: C, hid: H1 } });
+  await enterCode(page);
   await sync(page);
   const cTitles = await titles(page);
   await page.evaluate(() => { data.groceries.push({ id: 'g-c', title: 'C-appel', category: 'Overig', done: false }); save({ sync: false }); });
@@ -204,6 +221,11 @@ try {
   const aH1 = await page.evaluate(k => localStorage.getItem(k), `samenThuisDataV3|${A}|${H1}`);
   MEMBER[A] = H2;
   await page.evaluate(() => window.SamenThuisAccountSync.sync()); await page.waitForLoadState('load'); await page.waitForTimeout(1200);
+  const puts2b = ctl.puts.length;
+  await sync(page);
+  check('2b-code. A in H2 (nieuw huishouden voor A): zonder code van H2 niets verstuurd; code van H1 niet hergebruikt', ctl.puts.length === puts2b && (await titles(page)).length === 0
+    && await page.evaluate(() => !syncConfig.householdCode));
+  await enterCode(page);
   await sync(page);
   id = await identity(page);
   const t2b = await titles(page);
@@ -228,8 +250,17 @@ try {
   const q = await p2.evaluate(() => ({ id: SamenThuisIdentity.current(), t: data.groceries.map(g => g.title), retained: SamenThuisIdentity.retained().map(r => r.status), v2: JSON.parse(localStorage.getItem('samenThuisDataV2')).groceries[0].title }));
   await p2.evaluate(() => { location.hash = '#/settings/back-ups'; }); await p2.waitForTimeout(500);
   const card = await p2.$('[data-retained-data]');
-  check('10. onbekende legacygegevens: quarantaine, behouden, niet geladen, niet gesynchroniseerd; zichtbaar met download', q.id.accountId === A && !q.t.includes('Q-legacy') && q.t.includes('A-melk') && q.retained.includes('quarantaine') && q.v2 === 'Q-legacy'
-    && !(await groceriesOf(p2, H1)).includes('Q-legacy') && ctl.puts.slice(putsQ).every(p => p.section !== 'groceries' || p.user === A) && !!card, JSON.stringify({ ...q, card: !!card }));
+  // Opdracht 7: quarantaine is in een account niet zichtbaar (ook niet voor A); alleen in het lokale profiel na het
+  // expliciet openen van de herstelmodus.
+  check('10. onbekende legacygegevens: quarantaine, behouden, niet geladen, niet gesynchroniseerd; in een account onzichtbaar', q.id.accountId === A && !q.t.includes('Q-legacy') && q.t.includes('A-melk') && q.retained.length === 0 && q.v2 === 'Q-legacy'
+    && !(await groceriesOf(p2, H1)).includes('Q-legacy') && ctl.puts.slice(putsQ).every(p => p.section !== 'groceries' || p.user === A) && !card, JSON.stringify({ ...q, card: !!card }));
+  await switchTo(p2, null);
+  await p2.evaluate(() => { location.hash = '#/settings/back-ups'; }); await p2.waitForTimeout(500);
+  const before10 = await p2.evaluate(() => ({ r: SamenThuisIdentity.retained().length, dl: !!document.querySelector('[data-download-retained]'), open: !!document.querySelector('[data-open-local-recovery]') }));
+  p2.once('dialog', d => d.accept());
+  await p2.click('[data-open-local-recovery]'); await p2.waitForTimeout(400);
+  const after10 = await p2.evaluate(() => ({ r: SamenThuisIdentity.retained().map(x => x.status), dl: !!document.querySelector('[data-download-retained]') }));
+  check('10b. lokaal profiel: quarantaine pas zichtbaar na expliciet openen van de herstelmodus', before10.r === 0 && !before10.dl && before10.open && JSON.stringify(after10.r) === '["quarantaine"]' && after10.dl, JSON.stringify({ before10, after10 }));
   await ctx2.close();
 } finally {
   await browser.close(); server.close();

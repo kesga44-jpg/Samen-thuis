@@ -194,9 +194,10 @@ test('S8. oude records zonder scope worden veilig gemigreerd of in quarantaine g
   const guards = await meta.listRecords('finance-guard');
   assert.equal(guards.length, 1); assert.equal(guards[0].scope, FC.LEGACY_SCOPE, 'oude guard inert bewaard, niet verwijderd');
   assert.ok((await core.audit()).filter(a => a.action === 'migrated').length === 3);
-  // Quarantaine wordt in geen enkele ronde verwerkt; het device-tabbladconflict blokkeert uit voorzorg zolang het openstaat.
+  // Quarantaine wordt in geen enkele ronde verwerkt. Opdracht 7: een apparaatconflict hoort bij het lokale profiel en
+  // heeft geen invloed op (en is niet zichtbaar in) de ronde van een account; het gaat alleen mee bij expliciete koppeling.
   const pre = await core.scoped(`${B}:${H2}`).beforeRound({ data: { budget: { pct: 60 }, budget19: { pct: 60 } } });
-  assert.deepEqual(pre.records, []); assert.deepEqual(pre.frozen, ['budget19']);
+  assert.deepEqual(pre.records, []); assert.deepEqual(pre.frozen, []); assert.deepEqual(pre.fixes, []);
 });
 
 test('S8b. migratie overschrijft nooit een nieuwer record met dezelfde doelkey (oud record apart in quarantaine)', async () => {
@@ -243,7 +244,7 @@ test('S11. bronbestanden: account-sync en app.js gebruiken uitsluitend scoped re
   assert.match(acct, /const FS = FIN && scope \? FIN\.scoped\(scope\) : null;/);
   assert.doesNotMatch(acct, /FIN\.(beforeRound|afterRound|afterCommit)\(/, 'rondes alleen via de gebonden scope');
   assert.doesNotMatch(acct, /FIN\.list\(\)/, 'nooit alle records zonder scope');
-  assert.match(app, /FIN\.open\(\{\s*scope, section, origin: 'tab'/);
+  assert.match(app, /FIN\.open\(\{\s*scope, localKey: [^,]+, section, origin: 'tab'/);
   assert.doesNotMatch(core, /'fin:' \+|'fing:' \+/, 'oude keys worden alleen nog gelezen (migratie)');
 });
 

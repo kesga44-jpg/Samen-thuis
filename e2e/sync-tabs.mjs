@@ -69,6 +69,8 @@ async function newContext({ account = false, legacyBase = null } = {}) {
     localStorage.setItem('samenThuisSyncV1', JSON.stringify({ householdCode: 'test-huishouden-123' }));
     // Opdracht 6: accountsync per account; de dataset van dit account+huishouden staat onder een eigen sleutel.
     localStorage.setItem('samenThuisAccountSyncV1', JSON.stringify({ accounts: { [USER]: { enabled: true, householdId: HH } }, accountsMigrated: true }));
+    // Opdracht 7: de huishoudcode staat per account + huishouden (door de gebruiker ingevuld).
+    localStorage.setItem('samenThuisHouseholdCodesV1', JSON.stringify({ [`${USER}|${HH}`]: { code: 'test-huishouden-123', source: 'entered', verified: false } }));
     localStorage.setItem(`samenThuisDataV3|${USER}|${HH}`, JSON.stringify({ meta: { version: 2 }, groceries: ['Tomaten', 'Basilicum', 'Havermelk'].map((title, i) => ({ id: 'g' + (i + 1), title, category: 'Overig', done: false })) }));
     localStorage.setItem('samenThuisPersonalAuthV1', JSON.stringify({ access_token: 'tok', refresh_token: 'ref', expires_at: Date.now() + 36e5, user: { id: USER, email: 'kees@example.test' } }));
   }, { account, legacyBase, HH, USER });
@@ -106,7 +108,9 @@ try {
     await a.page.waitForTimeout(200);
     await a.page.evaluate(() => save({ sync: false }));
     await a.page.waitForTimeout(300);
-    const log = await a.page.evaluate(() => SamenThuisSyncMeta.shared().listTabConflicts());
+    // Opdracht 7: tabbladconflicten staan per identiteit; het oude apparaatbrede slot blijft leeg.
+    const log = await a.page.evaluate(() => SamenThuisTabConflicts.list());
+    check('tabbladconflict per identiteit opgeslagen, niet apparaatbreed', (await a.page.evaluate(async () => (await SamenThuisSyncMeta.shared().listTabConflicts()).length)) === 0);
     const rec = log.find(c => c.path === 'groceries[e2e-Kaas].title');
     check('zelfde veld in twee tabbladen: één conflictrecord met beide waarden', log.length === 1 && rec && [rec.kept, rec.other].sort().join('|') === 'Geitenkaas|Oude kaas' && rec.financial === false, JSON.stringify(log.map(c => [c.path, c.kept, c.other, c.count])));
     const restored = await a.page.evaluate(async key => { const ok = await SamenThuisTabConflicts.restore(key, 'other'); return { ok, title: data.groceries.find(g => g.id === 'e2e-Kaas').title }; }, rec && rec.key);

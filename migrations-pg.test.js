@@ -362,3 +362,35 @@ test('financiën: privé-gegevens in personal_preferences blijven eigen rij; rol
   assert.equal(psql(`select count(*) from personal_preferences where finance_config <> '{}'`).out, '1');
   ok(file(root + 'migrations/20261104000000_finance_confirmations.sql'), 'opnieuw toepassen');
 });
+
+// Opdracht 7, punt 1: finance-ui.js slaat finance_config op met PATCH ?user_id=eq.<uid>&updated_at=eq.<gelezen>. PostgREST
+// voert dat uit als één UPDATE … WHERE user_id = … AND updated_at = …; hier dezelfde UPDATE onder de echte RLS, met twee
+// echte gelijktijdige sessies (de eerste houdt de rij vast). Bewijst de SQL-semantiek lokaal, niet het gedrag van live
+// PostgREST/Supabase.
+test('finance_config: voorwaardelijke update op updated_at is atomair bij gelijktijdige apparaten; ander account kan niets', { skip }, async () => {
+  ok(psql(`insert into personal_preferences(user_id, finance_config) values ('${E}', '{"pots":[]}')`, E));
+  const t0 = psql(`select to_json(updated_at)#>>'{}' from personal_preferences where user_id='${E}'`, E).out;
+  const update = (label, ts) => `with u as (update personal_preferences set finance_config='{"pots":["${label}"]}', updated_at='${ts}' where user_id='${E}' and updated_at='${t0}' returning 1) select count(*) from u`;
+  const first = psqlAsync(`begin; ${update('apparaat-1', '2030-01-01T00:00:00.001Z')}; select pg_sleep(1.2); commit;`, E);
+  await new Promise(r => setTimeout(r, 400));
+  const second = await psqlAsync(`${update('apparaat-2', '2030-01-01T00:00:00.002Z')};`, E);
+  const one = await first;
+  ok(one, 'sessie 1'); ok(second, 'sessie 2');
+  assert.equal(one.out.split('\n')[0], '1', 'eerste schrijver wint');
+  assert.equal(second.out, '0', 'tweede schrijver met dezelfde oorspronkelijke updated_at krijgt 0 rijen (conflict, niets overschreven)');
+  assert.equal(psql(`select finance_config->'pots'->>0 from personal_preferences where user_id='${E}'`, E).out, 'apparaat-1');
+  // Ander account (F) met het juiste versiekenmerk: RLS laat de rij niet zien en niet bijwerken.
+  const t1 = psql(`select to_json(updated_at)#>>'{}' from personal_preferences where user_id='${E}'`, E).out;
+  assert.equal(psql(`with u as (update personal_preferences set finance_config='{"pots":["F"]}' where user_id='${E}' and updated_at='${t1}' returning 1) select count(*) from u`, F).out, '0');
+  assert.equal(psql(`select count(*) from personal_preferences where user_id='${E}'`, F).out, '0');
+  assert.equal(psql(`select finance_config->'pots'->>0 from personal_preferences where user_id='${E}'`, E).out, 'apparaat-1');
+});
+
+// Restrisico 1A (buiten opdracht 7; vereist een databasewijziging): het versiekenmerk is een tijdstempel van het apparaat.
+// Schrijft een apparaat exact dezelfde updated_at terug (zelfde milliseconde of klokafwijking), dan slaagt een verouderde
+// voorwaardelijke update. Deze test legt het restrisico vast; hij hoort te falen zodra er een serverrevisie is.
+test('restrisico: gelijk teruggeschreven updated_at (ABA) laat een verouderde voorwaardelijke update slagen', { skip }, () => {
+  const t = psql(`select to_json(updated_at)#>>'{}' from personal_preferences where user_id='${E}'`, E).out;
+  ok(psql(`update personal_preferences set finance_config='{"pots":["nieuw"]}', updated_at='${t}' where user_id='${E}' and updated_at='${t}'`, E));
+  assert.equal(psql(`with u as (update personal_preferences set finance_config='{"pots":["verouderd"]}', updated_at=now() where user_id='${E}' and updated_at='${t}' returning 1) select count(*) from u`, E).out, '1');
+});

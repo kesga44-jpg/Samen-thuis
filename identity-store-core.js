@@ -163,21 +163,41 @@
     if (hashText(read(storage, target) || '') !== hashText(content)) throw new Error('Koppeling niet geverifieerd');
     if (source === LEGACY_KEY) writeJournal(storage, { ...j, v2: 'bound', target, sourceHash: hashText(content), at: now(), explicit: true });
     else {
-      storage.setItem(`${V3}|local-archive|${Date.now()}`, text); // niet wissen: archief
+      // Archief met vastgelegd doel (opdracht 7): alleen zichtbaar voor de identiteit waaraan het profiel is gekoppeld.
+      const archiveKey = `${V3}|local-archive|${Date.now()}`;
+      storage.setItem(archiveKey, text); // niet wissen: archief
+      writeJournal(storage, { ...journal(storage), archives: { ...(journal(storage).archives || {}), [archiveKey]: target } });
       storage.removeItem(LOCAL_V3);
     }
     return { bound: true, target, source };
   }
 
-  // Overzicht van bewaarde gegevens die niet (meer) worden geladen.
+  // Overzicht van bewaarde gegevens die niet (meer) worden geladen (alle identiteiten; intern gebruik).
+  // target: de identiteitsdataset waaraan de gegevens aantoonbaar horen; ontbreekt die, dan is de herkomst onzeker
+  // (quarantaine). Een archief zonder vastgelegd doel (van vóór opdracht 7) geldt als quarantaine.
   function retained(storage) {
     const j = journal(storage), out = [];
-    if (j.v2 === 'quarantined') out.push({ key: LEGACY_KEY, status: 'quarantaine', reason: j.reason, at: j.at });
-    if (j.v2 === 'bound') out.push({ key: LEGACY_KEY, status: 'gekoppeld', target: j.target, at: j.at });
+    if (j.v2 === 'quarantined') out.push({ key: LEGACY_KEY, status: 'quarantaine', reason: j.reason, at: j.at, target: null });
+    if (j.v2 === 'bound') out.push({ key: LEGACY_KEY, status: 'gekoppeld', target: j.target || null, at: j.at });
+    const archives = j.archives || {};
     try {
-      for (let i = 0; i < storage.length; i++) { const k = storage.key(i); if (k && k.startsWith(`${V3}|local-archive|`)) out.push({ key: k, status: 'archief' }); }
+      for (let i = 0; i < storage.length; i++) {
+        const k = storage.key(i);
+        if (k && k.startsWith(`${V3}|local-archive|`)) out.push({ key: k, status: 'archief', target: typeof archives[k] === 'string' ? archives[k] : null });
+      }
     } catch (_) {}
     return out;
+  }
+
+  // Bewaarde gegevens die de actieve identiteit mag zien (opdracht 7):
+  //   - met vastgelegd doel: uitsluitend de identiteit met precies die dataset;
+  //   - zonder bewezen eigenaar (quarantaine): uitsluitend in de lokale identiteit én in de expliciete herstelmodus.
+  // Een account ziet nooit gegevens van een ander account of huishouden, en nooit quarantainegegevens.
+  function retainedFor(storage, identity, { recovery = false } = {}) {
+    if (!identity || identity.mode === 'locked') return [];
+    return retained(storage).filter(item => item.target
+      ? item.target === identity.key
+      : identity.mode === 'local' && recovery === true);
   }
 
   // Inhoud van samenThuisDataV2 wordt bij een gekoppelde/quarantaine-status niet meer als dataset gebruikt; alleen de
@@ -189,18 +209,96 @@
     return out;
   }
 
-  // Mag een back-up in de actieve identiteit worden teruggezet? Een back-up van een account alleen in hetzelfde account
-  // en huishouden; back-ups zonder accountherkomst (lokaal, bewaard, oud formaat) alleen als expliciete gebruikersactie.
-  function backupAllowed(text, identity) {
-    if (identity.mode === 'locked') return { ok: false, reason: 'locked' };
-    const value = parse(text);
-    const origin = value && value.meta && value.meta.exportIdentity;
-    if (origin && origin.mode === 'account') {
-      if (identity.mode !== 'account' || origin.accountId !== identity.accountId || origin.householdId !== identity.householdId) return { ok: false, reason: 'other-identity' };
+  // ---------- Back-ups (opdracht 7) ----------
+  // Schema- en versiecontrole vóór herstel. Onbekende onderdelen met een geldige naam blijven toegestaan (de app bewaart
+  // onbekende velden bewust, zie migrateData); bekende onderdelen moeten het juiste type hebben.
+  const SUPPORTED_VERSION = 2;
+  const LIST_SECTIONS = Object.freeze(['planning', 'calendars', 'excludedCalendars', 'meals', 'groceries', 'freezer', 'chores', 'stock', 'ideas', 'home', 'tripFolders', 'tripSections', 'trips', 'fuelEntries', 'cars']);
+  const OBJECT_SECTIONS = Object.freeze(['dailyAnswers', 'budget', 'budget19', 'budget219', 'budgetV22', 'budgetV23']);
+  const BACKUP_RESERVED = Object.freeze(['__proto__', 'constructor', 'prototype', 'legacy_full']);
+  const isPlain = v => !!v && typeof v === 'object' && !Array.isArray(v);
+  function validateBackup(value) {
+    if (!isPlain(value)) return { ok: false, reason: 'schema', detail: 'geen object' };
+    if (value.meta !== undefined && !isPlain(value.meta)) return { ok: false, reason: 'schema', detail: 'meta' };
+    const version = value.meta && value.meta.version;
+    if (version !== undefined && (!Number.isInteger(version) || version < 1 || version > SUPPORTED_VERSION)) return { ok: false, reason: 'version', detail: String(version) };
+    for (const key of Object.keys(value)) {
+      if (BACKUP_RESERVED.includes(key) || !/^[\w.-]{1,60}$/.test(key)) return { ok: false, reason: 'schema', detail: key };
+      if (LIST_SECTIONS.includes(key) && !Array.isArray(value[key])) return { ok: false, reason: 'schema', detail: key };
+      if (OBJECT_SECTIONS.includes(key) && !isPlain(value[key])) return { ok: false, reason: 'schema', detail: key };
     }
     return { ok: true };
   }
 
-  return { backupAllowed, LEGACY_KEY, V1_KEY, V3, LOCAL_V3, CFG_KEY, AUTH_KEY, JOURNAL_KEY, DEVICE_FIELDS, accountKey, resolve, keysFor, readConfig, setAccount,
+  // Mag een back-up in de actieve identiteit worden teruggezet?
+  //   - account-back-up: alleen in precies hetzelfde account én huishouden;
+  //   - bewaarde gegevens met vastgelegd doel: alleen in die identiteit;
+  //   - zonder bewezen herkomst (oud formaat, lokaal profiel, quarantaine): alleen in de lokale identiteit, nooit
+  //     automatisch in een account. Koppelen aan een account gaat daarna via de expliciete overstap.
+  // exportIdentity staat in het bestand zelf: dit voorkomt vergissingen, het is geen bewijs tegen opzet.
+  function backupAllowed(text, identity) {
+    if (!identity || identity.mode === 'locked') return { ok: false, reason: 'locked' };
+    const value = parse(text);
+    const valid = validateBackup(value);
+    if (!valid.ok) return valid;
+    const origin = isPlain(value.meta) && isPlain(value.meta.exportIdentity) ? value.meta.exportIdentity : null;
+    if (origin && origin.mode === 'account') {
+      return identity.mode === 'account' && origin.accountId === identity.accountId && origin.householdId === identity.householdId
+        ? { ok: true, origin: 'account' } : { ok: false, reason: 'other-identity' };
+    }
+    if (origin && origin.mode === 'retained' && typeof origin.target === 'string' && origin.target) {
+      return origin.target === identity.key ? { ok: true, origin: 'retained' } : { ok: false, reason: 'other-identity' };
+    }
+    return identity.mode === 'local' ? { ok: true, origin: 'unverified' } : { ok: false, reason: 'unverified' };
+  }
+
+  // ---------- Huishoudcode per account + huishouden (opdracht 7) ----------
+  // samenThuisHouseholdCodesV1 = { '<account>|<huishouden>': { code, source: 'entered'|'legacy-verified', verified, at } }
+  // De oude globale code (samenThuisSyncV1.householdCode) blijft alleen voor het lokale profiel en de oude code-sync.
+  // Een account gebruikt nooit de globale code om te schrijven: die geldt pas als code van een huishouden nadat hij
+  // bestaande gegevens van precies dat huishouden heeft ontsleuteld (bewijs), zie account-sync.js.
+  const CODES_KEY = 'samenThuisHouseholdCodesV1', SYNC_KEY = 'samenThuisSyncV1', MIN_CODE = 12;
+  const codeSlot = identity => identity && identity.mode === 'account' && ID.test(identity.accountId || '') && ID.test(identity.householdId || '') ? `${identity.accountId}|${identity.householdId}` : null;
+  function readCode(storage, identity) {
+    const slot = codeSlot(identity);
+    if (!slot) return null;
+    const entry = readJson(storage, CODES_KEY, {})[slot];
+    return isPlain(entry) && typeof entry.code === 'string' ? { code: entry.code, source: entry.source || 'entered', verified: entry.verified === true, at: entry.at || null } : null;
+  }
+  function setCode(storage, identity, code, { source = 'entered', verified = false, now = () => new Date().toISOString() } = {}) {
+    const slot = codeSlot(identity);
+    const value = String(code || '').trim();
+    if (!slot) throw new Error('Een huishoudcode hoort bij een account en huishouden.');
+    if (value.length < MIN_CODE) throw new Error('Kies een huishoudcode van minimaal 12 tekens');
+    const all = readJson(storage, CODES_KEY, {});
+    const map = isPlain(all) ? all : {};
+    map[slot] = { code: value, source, verified: !!verified, at: now() };
+    storage.setItem(CODES_KEY, JSON.stringify(map));
+    return map[slot];
+  }
+  function markCodeVerified(storage, identity, code) {
+    const cur = readCode(storage, identity);
+    if (!cur || cur.code !== code || cur.verified) return cur;
+    return setCode(storage, identity, code, { source: cur.source, verified: true });
+  }
+  // Mag met deze code een eerste versie naar een LEEG huishouden worden gestuurd? Alleen een code die de gebruiker
+  // zelf voor dit account en huishouden heeft ingevuld, of een code die al bewezen bij dit huishouden hoort.
+  const codeTrustedForEmpty = entry => !!entry && entry.code.length >= MIN_CODE && (entry.source === 'entered' || entry.verified === true);
+  // Kandidaat uit de oude globale configuratie, uitsluitend voor een identiteit die al vóór deze versie op dit apparaat
+  // bestond (doel van de migratie, of al gesynchroniseerd volgens de versie-administratie; toen gebruikte zij de globale
+  // code). Een nieuwe identiteit krijgt nooit de globale code. Ook dan alleen bruikbaar om bestaande cloudgegevens van
+  // dat huishouden te ontsleutelen (bewijs); nooit voor een eerste versie naar een leeg huishouden.
+  function legacyCodeCandidate(storage, identity) {
+    const slot = codeSlot(identity);
+    if (!slot) return null;
+    const existed = journal(storage).target === identity.key
+      || readConfig(storage).slots.some(([a, h]) => a === identity.accountId && h === identity.householdId);
+    if (!existed) return null;
+    const v = readJson(storage, SYNC_KEY, {});
+    const code = isPlain(v) ? String(v.householdCode || '').trim() : '';
+    return code.length >= MIN_CODE ? code : null;
+  }
+
+  return { backupAllowed, validateBackup, retainedFor, readCode, setCode, markCodeVerified, codeTrustedForEmpty, legacyCodeCandidate, CODES_KEY, SUPPORTED_VERSION, LEGACY_KEY, V1_KEY, V3, LOCAL_V3, CFG_KEY, AUTH_KEY, JOURNAL_KEY, DEVICE_FIELDS, accountKey, resolve, keysFor, readConfig, setAccount,
     migrateLegacy, bindLocalToAccount, retained, readDeviceFields, withoutDeviceFields, hashValue, journal };
 });

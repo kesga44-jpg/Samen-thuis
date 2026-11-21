@@ -23,6 +23,8 @@
   const FALLBACK_KEY = 'samenThuisSyncMetaFallbackV1';
   const sep = '\u0000';
   const keyOf = (...parts) => parts.map(String).join(sep);
+  // Slot van tabbladconflicten per identiteit (opdracht 7). Zonder scope: het oude apparaatbrede slot 'local'.
+  const tabSlot = scope => (scope ? 'tab|' + String(scope) : 'local');
 
   // ---------- Backends: getAll(store) → records, putMany(store, records), deleteMany(store, keys) ----------
   function memoryBackend() {
@@ -276,16 +278,20 @@
       // Tabbladconflict op één pad. Beide waarden blijven bewaard. Dezelfde botsing gemeld door twee tabbladen krijgt
       // dezelfde sleutel (pad + beide waarden), zodat er één record is met een teller in plaats van dubbele of verloren
       // historie. Openstaande conflicten worden nooit opgeruimd ten gunste van nieuwe, behalve bij de harde bovengrens.
-      async recordTabConflict({ path, section, financial = false, kept, other, base }) {
+      // Opdracht 7: scope = de dataset (identiteit) waarin het conflict ontstond. Elke scope heeft een eigen slot
+      // ('tab|<scope>'); records van vóór opdracht 7 (slot 'local', zonder scope) blijven bewaard maar zijn met een
+      // scope niet meer op te vragen. Zonder scope werkt de oude aanroep ongewijzigd (slot 'local').
+      async recordTabConflict({ path, section, financial = false, kept, other, base, scope = null }) {
+        const slot = tabSlot(scope);
         return write('tabbladconflict', async b => {
           const pair = [hashValue(kept === undefined ? null : kept), hashValue(other === undefined ? null : other)].sort();
-          const key = keyOf('local', 'tab', hashValue({ path: String(path), pair }));
-          const all = (await b.getAll('conflicts')).filter(r => r.slot === 'local' && r.kind === 'tab');
+          const key = keyOf(slot, 'tab', hashValue({ path: String(path), pair }));
+          const all = (await b.getAll('conflicts')).filter(r => r.slot === slot && r.kind === 'tab');
           const existing = all.find(r => r.key === key);
           const at = now();
           const record = existing
             ? { ...existing, count: (existing.count || 1) + 1, lastAt: at }
-            : { key, slot: 'local', kind: 'tab', path: String(path), section: section || String(path).split(/[.[]/)[0], financial: !!financial,
+            : { key, slot, scope: scope || null, kind: 'tab', path: String(path), section: section || String(path).split(/[.[]/)[0], financial: !!financial,
                 kept: kept === undefined ? null : kept, other: other === undefined ? null : other, base: base === undefined ? null : base,
                 at, lastAt: at, count: 1, resolved: null };
           await b.putMany('conflicts', [record]);
@@ -309,14 +315,15 @@
         return write('record', b => b.update('conflicts', key, cur => (cur && (!predicate || predicate(cur))) ? null : undefined));
       },
 
-      async listTabConflicts({ includeResolved = true } = {}) {
-        return (await bySlot('conflicts', 'local')).filter(r => r.kind === 'tab' && (includeResolved || !r.resolved))
+      async listTabConflicts({ includeResolved = true, scope = null } = {}) {
+        return (await bySlot('conflicts', tabSlot(scope))).filter(r => r.kind === 'tab' && (includeResolved || !r.resolved))
           .sort((x, y) => String(y.lastAt || y.at).localeCompare(String(x.lastAt || x.at)));
       },
-      async getTabConflict(key) { return (await bySlot('conflicts', 'local')).find(r => r.key === key) || null; },
-      async resolveTabConflict(key, resolution) {
+      async getTabConflict(key, { scope = null } = {}) { return (await bySlot('conflicts', tabSlot(scope))).find(r => r.key === key && r.kind === 'tab') || null; },
+      async resolveTabConflict(key, resolution, { scope = null } = {}) {
+        const slot = tabSlot(scope);
         return write('tabbladconflict', async b => {
-          const rec = (await b.getAll('conflicts')).find(r => r.key === key);
+          const rec = (await b.getAll('conflicts')).find(r => r.key === key && r.slot === slot && r.kind === 'tab');
           if (!rec) return false;
           await b.putMany('conflicts', [{ ...rec, resolved: { resolution, at: now() } }]);
           return true;

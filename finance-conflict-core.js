@@ -98,8 +98,10 @@
   //   '<accountId>:<huishoudenId>'  identiteit (zelfde notatie als slot() in account-sync.js)
   //   'device'                      tabbladconflict ontstaan zonder bekende identiteit (niet aangemeld / geen huishouden)
   //   'legacy-unknown'              oud record waarvan de identiteit niet vast te stellen is (quarantaine, nooit verwerkt)
-  // Een syncronde ziet uitsluitend records van de eigen identiteit; 'device'-records alleen zolang ze openstaan (dan wordt
-  // het onderdeel uit voorzorg niet verstuurd, omdat de lokale waarde een onopgeloste keuze bevat).
+  // Een syncronde ziet uitsluitend records van de eigen identiteit. 'device'-records horen bij het lokale profiel
+  // (opdracht 7: localKey = de lokale dataset waarin ze ontstonden) en zijn in een account niet zichtbaar, niet
+  // toepasbaar en niet bepalend; bij de expliciete koppeling van het lokale profiel aan een account verhuizen ze mee
+  // (adoptDevice).
   const DEVICE_SCOPE = 'device', LEGACY_SCOPE = 'legacy-unknown';
   const isIdentityScope = s => typeof s === 'string' && /^[^|:\s]+:[^|:\s]+$/.test(s);
   const isValidScope = s => s === DEVICE_SCOPE || isIdentityScope(s);
@@ -108,10 +110,11 @@
   const guardKey = (scope, section) => 'fing|' + scope + '|' + section;
   const choicesHash = (hashValue, choices) => hashValue(Object.keys(choices || {}).sort().map(k => [k, choices[k]]));
 
-  function newRecord({ scope, section, origin, base, local, remote, remoteVersion = null, remoteUpdatedBy = null, remoteUpdatedAt = null, localUser = null, householdId = null, forcedPaths = [], now }) {
+  function newRecord({ scope, section, origin, base, local, remote, remoteVersion = null, remoteUpdatedBy = null, remoteUpdatedAt = null, localUser = null, householdId = null, forcedPaths = [], localKey = null, now }) {
     const at = now();
     return {
       key: recordKey(scope, section), slot: scope, scope, kind: 'finance', section, origin, status: 'open', rev: 1,
+      localKey: scope === DEVICE_SCOPE && typeof localKey === 'string' ? localKey : null,
       base: clone(base) ?? null, local: clone(local) ?? null, remote: clone(remote) ?? null,
       remoteVersion, remoteUpdatedBy, remoteUpdatedAt, localUser, householdId, forcedPaths: [...forcedPaths],
       detectedAt: at, updatedAt: at, resolution: null, confirmedVersion: null
@@ -362,8 +365,7 @@
     async function beforeRound({ scope, data, prevBase = {}, prevBaseValues = {}, actor = null, householdId = null }) {
       requireScope(scope, { identity: true });
       let own = await list(scope);
-      const device = await list(DEVICE_SCOPE);
-      const fixes = interrupted([...own, ...device], data);
+      const fixes = interrupted(own, data);
       for (const ri of await findReintroductions({ scope, data, baseValues: prevBaseValues })) {
         if (own.some(r => r.section === ri.section)) continue;
         await open({ scope, section: ri.section, origin: 'reintroduction', base: prevBaseValues[ri.section], local: data[ri.section], remote: prevBaseValues[ri.section],
@@ -371,9 +373,8 @@
       }
       own = await list(scope);
       const foreign = await foreignSections({ scope, data });
-      const deviceOpen = device.filter(r => r.status === 'open').map(r => r.section);
-      const frozen = [...new Set([...frozenSections(own), ...deviceOpen, ...foreign])];
-      return { scope, records: own, frozen, fixes, foreign, deviceOpen };
+      const frozen = [...new Set([...frozenSections(own), ...foreign])];
+      return { scope, records: own, frozen, fixes, foreign, deviceOpen: [] };
     }
     async function afterRound({ scope, raw, records, snapshot, prevBase = {}, prevBaseValues = {}, cloud, householdId, encrypt, classify, actor }) {
       requireScope(scope, { identity: true });
@@ -413,7 +414,28 @@
       return done;
     }
 
-    const api = { list, all, get, open, view, resolve, completeLocal, rollback, interrupted, frozenSections, foreignSections, findReintroductions, processRound, markConfirmed, reopen, finalize, beforeRound, afterRound, afterCommit, migrate,
+    // Expliciete koppeling van het lokale profiel aan een account (opdracht 7): open apparaatrecords van precies die
+    // lokale dataset gaan mee naar de identiteit van het account. Eerst onder de nieuwe sleutel bewaren, pas daarna de
+    // oude sleutel weghalen; bestaat er al een record voor dat onderdeel, dan blijft het apparaatrecord staan.
+    // includeUntagged: ook records zonder localKey (van vóór opdracht 7), alleen als het gekoppelde profiel de
+    // oorspronkelijke dataset is waarin die records ontstonden.
+    async function adoptDevice({ localKey, scope, includeUntagged = false }) {
+      requireScope(scope, { identity: true });
+      if (typeof localKey !== 'string' || !localKey) return [];
+      const moved = [];
+      for (const r of await list(DEVICE_SCOPE)) {
+        if (r.status !== 'open' || !(r.localKey === localKey || (includeUntagged && !r.localKey))) continue;
+        const key = recordKey(scope, r.section);
+        const placed = await store.updateRecord(key, cur => (cur ? undefined : { ...r, key, slot: scope, scope, localKey: null, adoptedFrom: r.key, adoptedAt: now() }));
+        if (!placed) continue;
+        await store.deleteRecord(r.key, cur => cur && cur.scope === DEVICE_SCOPE && cur.rev === r.rev);
+        await audit(auditEntry({ hashValue, action: 'adopted', record: placed, note: 'van ' + r.key + ' naar ' + key, now }));
+        moved.push(r.section);
+      }
+      return moved;
+    }
+
+    const api = { adoptDevice, list, all, get, open, view, resolve, completeLocal, rollback, interrupted, frozenSections, foreignSections, findReintroductions, processRound, markConfirmed, reopen, finalize, beforeRound, afterRound, afterCommit, migrate,
       audit: async scope => { await migrate(); const a = await store.listRecords('finance-audit'); return scope ? a.filter(x => x.scope === scope) : a; } };
     // Gebonden aan één scope: dezelfde methodes zonder scope-parameter (voor de aanroepers en tests).
     api.scoped = scope => ({

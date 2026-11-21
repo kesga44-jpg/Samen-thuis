@@ -10,6 +10,8 @@
   const IDS = window.SamenThuisIdentityStore, IDENT = window.SamenThuisIdentity;
   const PRE_KEY = IDENT.keys().preSyncKey;
   const accountCfg = () => { const uid = AUTH.session()?.user?.id; return uid ? IDS.readConfig(localStorage).accounts[uid] || null : null; };
+  // Fout rond de huishoudcode met een eigen, specifieke melding (niet de algemene sleutelmelding).
+  const codeError = message => Object.assign(new Error(message), { name: 'HouseholdCodeError', codeError: true });
   class StaleIdentity extends Error { constructor(message) { super(message); this.name = 'StaleIdentity'; } }
   // Laatst door de server bevestigde waarde per onderdeel (per account + huishouden): basis voor automatisch samenvoegen.
   // Alleen op dit apparaat, in IndexedDB (sync-meta-store.js; fallback localStorage, daarna geheugen). Ontbreekt de basis,
@@ -22,9 +24,18 @@
   const FINC = window.SamenThuisFinanceConflicts;
   const FIN = FINC ? FINC.shared() : null;
   const isFinancialSection = s => !!(FINC && FINC.isFinancialSection(s));
-  // Financiële conflicten horen bij één identiteit: '<accountId>:<huishoudenId>' (zelfde notatie als slot()).
-  // Zonder bekende identiteit is er geen scope; dan worden alleen apparaatconflicten ('device') getoond.
-  const financeScope = () => FINC ? FINC.scopeFor(AUTH.session()?.user?.id || '', st.household?.id || accountCfg()?.householdId || '') : null;
+  // Financiële conflicten horen bij één identiteit: '<accountId>:<huishoudenId>' (zelfde notatie als slot()); zie ownScope.
+  // Apparaatconflicten ('device') horen bij het lokale profiel waarin ze ontstonden (opdracht 7). Alleen zichtbaar en
+  // herstelbaar in die lokale identiteit; records zonder localKey (van vóór opdracht 7) alleen zolang de oorspronkelijke
+  // dataset (samenThuisDataV2) nog het lokale profiel is. In een account nooit.
+  const deviceVisible = r => {
+    const id = IDENT.current();
+    if (id.mode !== 'local' || IDENT.switching()) return false;
+    return r.localKey ? r.localKey === id.key : id.key === IDS.LEGACY_KEY;
+  };
+  const deviceRecords = async () => (FIN ? (await FIN.list(FINC.DEVICE_SCOPE)).filter(deviceVisible) : []);
+  // Eigen financiële scope = de identiteit van deze paginalading (niet een later gelezen sessie of configuratie).
+  const ownScope = () => { const id = IDENT.current(); return FINC && id.mode === 'account' && !IDENT.switching() ? FINC.scopeFor(id.accountId, id.householdId) : null; };
   const loadBaseValues = async bases => { try { return await META.loadBaseValues(slot(), bases); } catch (_) { return {}; } };
   // Versie-administratie per slot. Staat de basis alleen in het geheugen (durability 'session'), dan blijft ook de
   // administratie in het geheugen: na herladen geldt dan geen enkele versie als bevestigd zonder duurzame basis.
@@ -59,7 +70,6 @@
     getToken: async () => (await AUTH.ready())?.access_token || ''
   });
   const esc2 = v => String(v ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  const code = () => String(syncConfig.householdCode || '').trim();
 
   async function accountSync({ manual = false, resolutions = {} } = {}) {
     syncIdentity();
@@ -84,7 +94,6 @@
     syncError = ''; updateSyncBadge();
     try {
       if (!window.crypto?.subtle) throw new Error('Versleuteling vereist HTTPS');
-      if (code().length < 12) throw new Error('Vul eerst de huishoudcode in (minimaal 12 tekens).');
       const c = cloud();
       // Elke ronde opnieuw: is het lidmaatschap veranderd (ander huishouden), dan hoort er een andere dataset bij.
       st.household = await c.membership();
@@ -100,6 +109,13 @@
       const assertIdentity = () => {
         if (IDENT.switching() || IDENT.current().key !== roundKey || (AUTH.session()?.user?.id || '') !== uid) throw new StaleIdentity('Account of huishouden is tijdens de synchronisatie gewijzigd; er is niets opgeslagen.');
       };
+      // Huishoudcode van precies dit account + huishouden (opdracht 7). Ontbreekt die, dan alleen de oude globale code
+      // als kandidaat: die mag uitsluitend gebruikt worden als hij bestaande gegevens van dit huishouden ontsleutelt.
+      const codeEntry = IDS.readCode(localStorage, ident);
+      const candidate = codeEntry ? null : IDS.legacyCodeCandidate(localStorage, ident);
+      const roundCode = codeEntry ? codeEntry.code : candidate;
+      if (!roundCode || roundCode.length < 12) throw codeError('Vul eerst de huishoudcode van dit huishouden in (minimaal 12 tekens). Er is niets verstuurd.');
+      const mayCreate = !candidate && IDS.codeTrustedForEmpty(codeEntry);
       const roundSlot = slot();
       const prevBase = readBases(roundSlot);
       const prevBaseValues = await loadBaseValues(prevBase);
@@ -117,15 +133,33 @@
       }
       // Consistente momentopname: wijzigingen die tijdens de ronde binnenkomen raken deze ronde niet.
       const snapshot = structuredClone(data);
-      const encrypt = v => encryptData(v, code());
-      const tracked = window.SamenThuisSyncMeta.trackUploads(c, META, roundSlot, HS.classifyError, (step, error) => console.warn('Syncmetadata (' + step + ') niet bewaard', error));
+      const encrypt = v => encryptData(v, roundCode);
+      const uploads = window.SamenThuisSyncMeta.trackUploads(c, META, roundSlot, HS.classifyError, (step, error) => console.warn('Syncmetadata (' + step + ') niet bewaard', error));
+      // Fail-closed vóór enig schrijven: leeg huishouden → alleen met een voor deze identiteit ingevulde of bewezen code;
+      // bestaande gegevens → eerst aantonen dat de code ze ontsleutelt (anders wordt er niets verstuurd).
+      const tracked = { ...uploads, async readState(hid) {
+        const rows = await uploads.readState(hid);
+        const own = (rows || []).filter(r => r && r.section !== 'sportCoach');
+        if (!own.length) {
+          if (!mayCreate) throw codeError('Dit huishouden heeft nog geen gegevens in de cloud. Vul de huishoudcode van dit huishouden in voordat er iets wordt verstuurd. Er is niets verstuurd.');
+          return rows;
+        }
+        try { await decryptData(own[0].payload, roundCode); }
+        catch (_) { throw codeError(candidate ? 'De opgeslagen huishoudcode hoort niet bij dit huishouden. Vul de huishoudcode van dit huishouden in. Er is niets verstuurd.' : 'De huishoudcode past niet bij de gegevens van dit huishouden. Er is niets verstuurd of overschreven.'); }
+        assertIdentity();
+        // Bewezen: de code hoort bij dit huishouden. Een kandidaat wordt pas nu de code van deze identiteit.
+        if (candidate) IDS.setCode(localStorage, ident, roundCode, { source: 'legacy-verified', verified: true });
+        else IDS.markCodeVerified(localStorage, ident, roundCode);
+        syncConfig.householdCode = roundCode; syncConfig.codeCandidate = false;
+        return rows;
+      } };
       // Een financieel onderdeel wordt nooit via de algemene keuzeknoppen opgelost (alleen via een keuze per veld).
       const generalResolutions = Object.fromEntries(Object.entries(resolutions || {}).filter(([s]) => !isFinancialSection(s)));
       const rawRound = await HS.runAccountSync({
         cloud: tracked, householdId: st.household.id,
         local: snapshot, base: prevBase, baseValues: prevBaseValues,
         hold: !!localStorage.getItem(RESTORE_HOLD_KEY), resolutions: generalResolutions,
-        encrypt, decrypt: p => decryptData(p, code()),
+        encrypt, decrypt: p => decryptData(p, roundCode),
         frozen: fin.frozen, protectedSections: FINC ? [...FINC.FINANCIAL_SECTIONS] : []
       });
       const finRound = FS
@@ -182,7 +216,7 @@
       if (CHANNEL) CHANNEL.post('sync-finished', { slot: roundSlot, status: result.status });
       outcome = result.status;
       if (result.status === 'ok') {
-        syncConfig.lastSyncedAt = new Date().toISOString(); localStorage.setItem(SYNC_KEY, JSON.stringify(syncConfig));
+        syncConfig.lastSyncedAt = new Date().toISOString(); // per identiteit vastgelegd in de versie-administratie (writeBases)
         try { localStorage.removeItem(RESTORE_HOLD_KEY); } catch (_) {}
         st.message = result.pushed.length || pulled.length
           ? `Synchronisatieronde afgerond: ${result.pushed.length} verstuurd, ${pulled.length} ontvangen.`
@@ -205,12 +239,12 @@
       return { status: outcome };
     } catch (error) {
       if (error && error.name === 'StaleIdentity') { st.message = error.message; syncError = ''; return { status: 'identity-changed' }; }
-      const c = HS.classifyError(error);
-      console.error('Accountsynchronisatie mislukt', error);
+      const c = error && error.codeError ? { kind: 'key', message: error.message } : HS.classifyError(error);
+      if (!(error && error.codeError)) console.error('Accountsynchronisatie mislukt', error);
       syncError = c.kind === 'network' ? '' : c.message; st.message = c.message;
       if (manual) toast(c.message);
       if (current === 'settings') render();
-      return { status: HS.classifyError(error).kind };
+      return { status: c.kind };
     }
   }
 
@@ -228,7 +262,6 @@
   async function activate() {
     st.busy = true; st.message = '';
     try {
-      if (code().length < 12) throw new Error('Vul eerst de huishoudcode in (minimaal 12 tekens); die blijft de versleutelingssleutel.');
       if (!AUTH.session()?.user?.id) throw new Error('Meld je eerst aan met je persoonlijke account.');
       const c = cloud(); st.household = await c.membership();
       if (!st.household) throw new Error('Maak eerst een huishouden aan of voeg je toe met de code van je huisgenoot.');
@@ -237,7 +270,13 @@
       // niets staat). Daarna accountsync aan voor dit account en opnieuw laden; de eerste ronde volgt na het laden.
       // Importing the opaque legacy payload would reintroduce SportCoach.
       const uid = AUTH.session().user.id;
+      const localKey = IDENT.current().mode === 'local' ? IDENT.current().key : null;
       const bound = IDS.bindLocalToAccount(localStorage, { accountId: uid, householdId: st.household.id });
+      // Open financiële apparaatconflicten van het zojuist gekoppelde lokale profiel gaan mee naar deze identiteit.
+      if (bound.bound && FIN && localKey) {
+        try { await FIN.adoptDevice({ localKey, scope: FINC.scopeFor(uid, st.household.id), includeUntagged: localKey === IDS.LEGACY_KEY }); }
+        catch (error) { console.error('Financiële apparaatconflicten niet meegenomen; ze blijven bij het lokale profiel bewaard', error); }
+      }
       IDS.setAccount(localStorage, uid, { enabled: true, householdId: st.household.id });
       st.message = bound.bound
         ? 'Accountsync is ingeschakeld. De gegevens van dit apparaat zijn aan dit account en huishouden gekoppeld; de oorspronkelijke kopie blijft bewaard.'
@@ -341,10 +380,11 @@
   async function refreshFinance() {
     if (!FIN) return;
     try {
-      const scope = financeScope();
+      const scope = ownScope();
       const own = scope ? await FIN.list(scope) : [];
-      const device = (await FIN.list(FINC.DEVICE_SCOPE)).filter(r => r.status === 'open');
-      const legacy = (await FIN.list(FINC.LEGACY_SCOPE)).filter(r => r.status === 'open');
+      const device = (await deviceRecords()).filter(r => r.status === 'open');
+      // Oude records zonder vaststaande identiteit: alleen de naam van het onderdeel, en alleen in het lokale profiel.
+      const legacy = IDENT.current().mode === 'local' ? (await FIN.list(FINC.LEGACY_SCOPE)).filter(r => r.status === 'open') : [];
       st.finance = [...own, ...device, ...legacy].map(r => ({ record: r, paths: r.status === 'open' && r.scope !== FINC.LEGACY_SCOPE ? FIN.view(r, data[r.section]) : [] }));
     } catch (error) { console.error('Financiële conflicten laden mislukt', error); }
     updateSyncBadge();
@@ -354,13 +394,17 @@
   async function resolveFinance(section, choices) {
     if (!FIN || !isFinancialSection(section)) return { ok: false, reason: 'not-financial' };
     // Alleen de eigen identiteit of een apparaatconflict; nooit een record van een ander account/huishouden.
-    const own = financeScope();
-    const scope = own && await FIN.get(own, section) ? own : (await FIN.get(FINC.DEVICE_SCOPE, section) ? FINC.DEVICE_SCOPE : null);
+    if (IDENT.switching()) return { ok: false, reason: 'identity-changed' };
+    const own = ownScope();
+    const deviceRec = !own && await FIN.get(FINC.DEVICE_SCOPE, section);
+    const scope = own && await FIN.get(own, section) ? own : (deviceRec && deviceVisible(deviceRec) ? FINC.DEVICE_SCOPE : null);
     if (!scope) return { ok: false, reason: 'not-found' };
+    const identityKey = IDENT.current().key;
     const bases = readBases(slot());
     const pushBase = scope !== FINC.DEVICE_SCOPE && bases[section] ? { version: bases[section].version, value: (await loadBaseValues(bases))[section] } : null;
     const r = await FIN.resolve({ scope, section, choices, currentLocal: data[section], actor: AUTH.session()?.user?.id || null, pushBase });
     if (!r.ok) { await refreshFinance(); return r; }
+    if (IDENT.switching() || IDENT.current().key !== identityKey) return { ok: false, reason: 'identity-changed' };
     if (HS.hashValue(data[section] ?? null) !== HS.hashValue(r.value ?? null)) {
       const previous = data[section];
       data[section] = structuredClone(r.value);
@@ -462,9 +506,16 @@
 
   // Financiële conflicten voor app.js (tabbladen) en voor tests: lijst, live weergave, expliciete keuze.
   window.SamenThuisFinanceSync = {
-    scope: financeScope,
-    list: async () => { if (!FIN) return []; const scope = financeScope(); return [...(scope ? await FIN.list(scope) : []), ...(await FIN.list(FINC.DEVICE_SCOPE))]; },
-    view: async section => { const scope = financeScope(); const r = FIN && ((scope && await FIN.get(scope, section)) || await FIN.get(FINC.DEVICE_SCOPE, section)); return r ? FIN.view(r, data[section]) : []; },
+    scope: ownScope,
+    list: async () => { if (!FIN) return []; const scope = ownScope(); return [...(scope ? await FIN.list(scope) : []), ...(await deviceRecords())]; },
+    view: async section => {
+      if (!FIN) return [];
+      const scope = ownScope();
+      const own = scope && await FIN.get(scope, section);
+      const dev = !scope && await FIN.get(FINC.DEVICE_SCOPE, section);
+      const r = own || (dev && deviceVisible(dev) ? dev : null);
+      return r ? FIN.view(r, data[section]) : [];
+    },
     resolve: resolveFinance, refresh: refreshFinance,
     notify: () => { if (CHANNEL) CHANNEL.post('finance-changed', {}); return refreshFinance(); }
   };
@@ -473,8 +524,8 @@
   (async () => {
     if (!FIN) return;
     try {
-      const scope = financeScope();
-      const fixes = FIN.interrupted([...(scope ? await FIN.list(scope) : []), ...(await FIN.list(FINC.DEVICE_SCOPE))], data);
+      const scope = ownScope();
+      const fixes = FIN.interrupted([...(scope ? await FIN.list(scope) : []), ...(await deviceRecords())], data);
       if (fixes.length) {
         const previous = data;
         data = { ...data, ...Object.fromEntries(fixes.map(f => [f.section, f.value])) };

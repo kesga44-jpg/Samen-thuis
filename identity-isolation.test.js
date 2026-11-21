@@ -134,14 +134,16 @@ test('I7. sleutels voor opslag en herstel zijn per identiteit gescheiden (geen g
   assert.equal(a.backupKey, null, 'geen extra volledige kopie per identiteit');
 });
 
-test('I8. back-up van A wordt niet aan B gekoppeld; lokale/oude back-ups alleen als expliciete actie; vergrendeld nooit', () => {
+test('I8. back-up van A wordt niet aan B gekoppeld; lokale/oude back-ups alleen in het lokale profiel; vergrendeld nooit', () => {
   const backupA = JSON.stringify({ meta: { exportIdentity: { mode: 'account', accountId: A, householdId: H1 } }, groceries: [] });
   const idA = { mode: 'account', accountId: A, householdId: H1 }, idB = { mode: 'account', accountId: B, householdId: H2 };
   assert.equal(IS.backupAllowed(backupA, idA).ok, true);
   assert.deepEqual(IS.backupAllowed(backupA, idB), { ok: false, reason: 'other-identity' });
   assert.equal(IS.backupAllowed(backupA, { mode: 'account', accountId: A, householdId: H2 }).ok, false, 'ander huishouden');
   assert.equal(IS.backupAllowed(backupA, { mode: 'local' }).ok, false);
-  assert.equal(IS.backupAllowed(JSON.stringify({ groceries: [] }), idB).ok, true, 'oud formaat: alleen via expliciete gebruikersactie');
+  // Opdracht 7: zonder bewezen herkomst nooit in een account; alleen in het lokale profiel.
+  assert.deepEqual(IS.backupAllowed(JSON.stringify({ groceries: [] }), idB), { ok: false, reason: 'unverified' });
+  assert.equal(IS.backupAllowed(JSON.stringify({ groceries: [] }), { mode: 'local', key: IS.LEGACY_KEY }).ok, true);
   assert.equal(IS.backupAllowed(JSON.stringify({}), { mode: 'locked' }).ok, false);
 });
 
