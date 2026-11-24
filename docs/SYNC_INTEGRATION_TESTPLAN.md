@@ -58,6 +58,8 @@ Grenzen: zonder accountsync blijft een opgelost tabbladconflict op `resolved-pen
 | Echte browser, nagebootste Supabase | `e2e/isolation-v7.mjs` | Opdracht 7: back-upmatrix, bewaarde gegevens/conflicten per identiteit, twee huishoudcodes op één apparaat met herstart, fail-closed eerste push, vertraagde `finance_config`-verzoeken rond een (in het geheugen gesimuleerde) sessiewissel, upload verzonden vóór een accountwissel, huishoudwissel tijdens een vertraagde ronde, localStorage-fallback zonder IndexedDB |
 | Nagebootste opslag en cloud | `isolation-m1.test.js` | M1: oud apparaatconflict zonder `localKey`, automatische migratie, onzekere herkomst, geblokkeerde upload, bewuste keuze en vrijgave |
 | Echte browser, nagebootste Supabase | `e2e/isolation-v7.mjs` (M1-a t/m M1-d, A1, A2, G1) | M1 met echte IndexedDB en automatische migratie bij het laden (het oude record is met een tijdstip in het verleden in IndexedDB gezet), allowlist bij herstellen en samenvoegen via de echte importpagina, lokale quarantaine van onbekende onderdelen, afscherming tegen opvragen met een parameter via de console |
+| Echte PostgreSQL | `migrations-pg.test.js` (save_finance_config) | Aanmaken, twee gelijktijdige sessies met dezelfde revisie (precies één schrijver), geen ABA via oude route of gelijke `updated_at`, revisie niet vrij te zetten, alleen eigen rij, niet voor anon |
+| Echte browser, nagebootste Supabase | `e2e/isolation-v7.mjs` (R1–R3, K1) en `e2e/sync-merge.mjs` | `finance_config` met en zonder migratie (terugval), conflict bij verouderde revisie, vergrendeling ook op de RPC; twee leden die tegelijk een leeg huishouden vullen met verschillende codes; oude code-sync blijft gepauzeerd en verstuurt niets |
 | **Vereist echte Supabase** | Dit plan, § 5 | RLS, echte versieconflicten, Auth-tokens, rate-limits, latentie, twee echte accounts |
 | Niet getest | — | Safari/WebKit en Firefox (andere storage-event- en IndexedDB-implementaties), iOS-PWA, achtergrondbeperking (timer-throttling) op mobiel |
 
@@ -100,3 +102,10 @@ Grenzen: zonder accountsync blijft een opgelost tabbladconflict op `resolved-pen
 6. Back-up van huishouden A terugzetten in huishouden B (zelfde en ander account) → geweigerd, geen herstelvlag gezet.
 7. Apparaat met een oud financieel apparaatconflict (van vóór opdracht 7) en automatische migratie naar een account → conflict verschijnt bij dat account, onderdeel wordt niet verstuurd tot een keuze; bij een ander account op hetzelfde apparaat verschijnt alleen de waarschuwing zonder bedragen.
 
+### 5c. Migratie 20261124 toepassen (handmatig, door de beheerder)
+
+1. Back-up van `personal_preferences` maken (Supabase-dashboard of `pg_dump -t public.personal_preferences`).
+2. `supabase/migrations/20261124000000_finance_config_revision.sql` uitvoeren (additief: kolom, trigger, functie).
+3. Controleren: `select has_function_privilege('anon','public.save_finance_config(bigint,jsonb)','EXECUTE')` geeft `false`.
+4. In de app een privé-potje wijzigen op twee apparaten tegelijk: één keer opslaan, de ander krijgt een keuze; in DevTools gaat het verzoek naar `/rpc/save_finance_config`.
+5. Terugdraaien: `supabase/rollbacks/20261124000000_finance_config_revision.rollback.sql`; de app valt dan vanzelf terug.

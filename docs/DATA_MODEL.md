@@ -10,6 +10,8 @@
 | `samenThuisDataV1` | Oude versie, alleen migratiebron | Nee | — |
 | `samenThuisSyncV1` | Huishoudcode, laatste synctijd (legacy-route en lokaal profiel; nooit door een account geschreven) | Nee | Nee |
 | `samenThuisHouseholdCodesV1` | Huishoudcode per `<account>|<huishouden>` (opdracht 7) | Nee | Nee |
+| `household_state` onderdeel `keycheck` | Controlewaarde van de huishoudcode (versleuteld), alleen in de cloud | Ja (cloud) | Ja |
+| `personal_preferences.finance_revision` | Serverrevisie van `finance_config` (migratie 20261124, handmatig) | Ja (cloud) | Nee |
 | `samenThuisDataV3|quarantine|<tijd>` | Onbekende onderdelen uit een back-up die in het lokale profiel is hersteld of samengevoegd (quarantaine, niet geladen) | Nee | Nee |
 | `samenThuisSyncConflictV1`, `samenThuisRestoreHold` | Conflict- en herstelstatus | Nee | Nee |
 | `samenThuisPreV23Backup`, `samenThuisCorruptBackup`, `samenThuisPreRestoreBackup` | Veiligheidskopieën | Nee | — |

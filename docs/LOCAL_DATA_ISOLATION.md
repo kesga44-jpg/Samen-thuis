@@ -84,11 +84,20 @@ Oude gegevens worden niet automatisch verwijderd; de gekoppelde kopie blijft als
 
 Een herlaadbeurt is geen bewijs dat een al verzonden verzoek is geannuleerd. Een upload die vóór de wissel is verzonden, wordt door de server verwerkt onder het token waarmee hij is verzonden (het oude account, in diens eigen huishouden of rij); de nieuwe identiteit verwerkt het antwoord niet. Bij terugkeer herkent de volgende ronde de al verwerkte upload zonder tweede upload (getest in `e2e/isolation-v7.mjs`).
 
+## 5b. Na opdracht 7 (24-11-2026)
+
+| Onderdeel | Regel |
+|---|---|
+| Opruimen | Op verzoek, nooit automatisch. Per bewaard item dat de actieve identiteit mag zien: eerst automatisch een download van precies dat item, daarna een expliciete bevestiging. `samenThuisDataV2`: alleen de huishoudgegevens verdwijnen; SportCoach, apparaatinstellingen en de revisie-administratie blijven; het journaal krijgt `v2Cleared`. Archief/quarantaine: verwijderd, met een grafsteen (`discarded`) zodat de eigenaarsbepaling van M1 gelijk blijft. Oude conflictregistraties (slot `local`, `legacy-unknown`): alleen in het lokale profiel in de herstelmodus, na download en bevestiging. Open apparaatconflicten die de upload blokkeren (M1) worden nooit zo opgeruimd. |
+| Controlewaarde huishoudcode | Wie een leeg huishouden als eerste vult, zet eerst het onderdeel `keycheck` (versleuteld met de code, versie 0). Tegelijk starten met een andere code: versieconflict, daarna ontsleutelfout op `keycheck`, niets verstuurd. `keycheck` komt nooit in de lokale gegevens en wordt uit back-ups genegeerd. Bestaande huishoudens zonder `keycheck` worden gecontroleerd op hun eerste onderdeel, zoals voorheen. |
+| `finance_config` | Met migratie `20261124000000_finance_config_revision.sql` (handmatig toe te passen): opslaan via `save_finance_config(p_expected_revision, p_config)`, revisie door de database opgehoogd (ook bij wijzigingen via de oude route, via een trigger). Zonder die migratie valt de app automatisch terug op de voorwaardelijke PATCH op `updated_at`. |
+| Huishoudprofielen | Een laat antwoord van `household_profile_list` na een accountwissel wordt niet toegepast. |
+
 ## 6. Grenzen
 - Twee accounts in hetzelfde huishouden op één apparaat hebben elk een eigen kopie (dubbele opslag).
 - Gekoppelde of quarantainegegevens blijven in `samenThuisDataV2` staan tot een latere, bewuste opruimactie (opslagruimte).
 - Huishoudcodes staan, net als vroeger de globale code, onversleuteld in localStorage (zelfde dreigingsmodel; B1).
-- Het versiekenmerk van `finance_config` is een tijdstempel van het apparaat. Een gelijk teruggeschreven `updated_at` (ABA) laat een verouderde voorwaardelijke update slagen; vastgelegd in `migrations-pg.test.js`. Oplossing vereist een databasewijziging (RPC met serverrevisie, buiten opdracht 7).
+- Zolang migratie `20261124000000_finance_config_revision.sql` niet is toegepast, gebruikt `finance_config` nog de tijdstempel van het apparaat als versie (ABA-risico, vastgelegd in `migrations-pg.test.js`). Na toepassen is dat opgelost (getest op lokale PostgreSQL).
 - `exportIdentity` staat in het back-upbestand zelf: bescherming tegen vergissingen, geen bewijs tegen opzet.
 - Wat lokaal in quarantaine blijft (niet geladen, niet gesynchroniseerd, nergens verwijderd): `samenThuisDataV2` met status `quarantined`; archieven zonder vastgelegd doel (`samenThuisDataV3|local-archive|<tijd>`); onbekende onderdelen uit back-ups (`samenThuisDataV3|quarantine|<tijd>`); tabbladconflicten van vóór opdracht 7 (IndexedDB, slot `local`); financiële records `legacy-unknown` en apparaatrecords met `ownerUnknown`. Downloaden kan alleen in het lokale profiel na **Herstelmodus openen** (de records in IndexedDB worden niet in de interface getoond).
 - Het eigenaarsoordeel van M1 rust op de apparaatklok (tijdstip van het conflict tegenover het migratiejournaal). Een sterk verzette klok kan een conflict aan het verkeerde profiel toewijzen; dat gaat alleen tussen profielen van hetzelfde apparaat, en een conflict zonder geldig tijdstip blijft blokkeren.
