@@ -67,6 +67,8 @@ test('B4 opgelost: importBackup herstelt via restoreBackupText met hold en zonde
 
 test('AUDIT sessie en huishoudcode staan onversleuteld in localStorage (bevestigd in code)', () => {
   assert.match(appSrc, /householdCode: String\(stored\.householdCode/);
-  assert.match(appSrc, /localStorage\.setItem\(SYNC_KEY, JSON\.stringify\(syncConfig\)\)/);
+  assert.match(appSrc, /localStorage\.setItem\(SYNC_KEY, JSON\.stringify\(\{ projectUrl: syncConfig\.projectUrl, anonKey: syncConfig\.anonKey, householdCode: syncConfig\.householdCode/);
+  // Opdracht 7: per account + huishouden, eveneens onversleuteld in localStorage (zelfde dreigingsmodel als hiervoor).
+  assert.match(fs.readFileSync(__dirname + '/identity-store-core.js', 'utf8'), /CODES_KEY = 'samenThuisHouseholdCodesV1'/);
   assert.match(appSrc, /localStorage\.getItem\(AUTH_KEY25\)/);
 });

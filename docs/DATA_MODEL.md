@@ -4,9 +4,15 @@
 
 | Sleutel | Inhoud | Sync | In back-up |
 |---|---|---|---|
-| `samenThuisDataV2` | Huishoudgegevens plus lokale SportCoach-data (zie § 2) | Behalve lokale-only velden, waaronder `sportCoach` | Ja, behalve `sportCoach` |
+| `samenThuisDataV2` | Altijd SportCoach en settings (apparaat); daarnaast het lokale profiel zolang het niet gekoppeld of in quarantaine is (zie `docs/LOCAL_DATA_ISOLATION.md`) | Alleen als lokaal profiel na expliciete koppeling | Ja, behalve `sportCoach` |
+| **`samenThuisDataV3|<account>|<huishouden>`**, `samenThuisDataV3|local` 🆕 | Huishoudgegevens per identiteit; lokaal profiel na koppeling | Per identiteit | Ja, met herkomst (`meta.exportIdentity`) |
+| **`samenThuisDataMigrationV1`** 🆕 | Migratiejournaal | Nee | Nee |
 | `samenThuisDataV1` | Oude versie, alleen migratiebron | Nee | — |
-| `samenThuisSyncV1` | Huishoudcode, laatste synctijd (legacy-route) | Nee | Nee |
+| `samenThuisSyncV1` | Huishoudcode, laatste synctijd (legacy-route en lokaal profiel; nooit door een account geschreven) | Nee | Nee |
+| `samenThuisHouseholdCodesV1` | Huishoudcode per `<account>|<huishouden>` (opdracht 7) | Nee | Nee |
+| `household_state` onderdeel `keycheck` | Controlewaarde van de huishoudcode (versleuteld), alleen in de cloud | Ja (cloud) | Ja |
+| `personal_preferences.finance_revision` | Serverrevisie van `finance_config` (migratie 20261124, handmatig) | Ja (cloud) | Nee |
+| `samenThuisDataV3|quarantine|<tijd>` | Onbekende onderdelen uit een back-up die in het lokale profiel is hersteld of samengevoegd (quarantaine, niet geladen) | Nee | Nee |
 | `samenThuisSyncConflictV1`, `samenThuisRestoreHold` | Conflict- en herstelstatus | Nee | Nee |
 | `samenThuisPreV23Backup`, `samenThuisCorruptBackup`, `samenThuisPreRestoreBackup` | Veiligheidskopieën | Nee | — |
 | `samenThuisPersonalAuthV1` | Supabase-sessie (persoonlijk account) | Nee | Nee |
@@ -16,6 +22,10 @@
 | **`samenThuisSyncBaseV1`** 🆕 | Oude code-sync: gegevens zoals na de laatste geslaagde synchronisatie (basis voor automatisch samenvoegen) | Nee | Nee |
 | **`samenThuisAccountSyncBaseValuesV1`** 🆕 | Accountsync: waarde per onderdeel bij de laatste geslaagde ronde (per account + huishouden) | Nee | Nee |
 | **`samenThuisPreMergeBackup`** 🆕 | Kopie van de lokale gegevens vlak vóór een automatische samenvoeging | Nee | Nee |
+| **`samenThuisSyncLeaseV1`** 🆕 | Lease voor één syncronde tegelijk (alleen als Web Locks ontbreken); verloopt na 30 s | Nee | Nee |
+| **`samenThuisSyncMetaFallbackV1`** 🆕 | Syncmetadata als IndexedDB niet beschikbaar is (herbouwbaar) | Nee | Nee |
+
+**IndexedDB `samenThuisSyncMetaV1`** 🆕 (alleen syncmetadata, nooit de applicatiegegevens): `baseValues` (per account+huishouden en onderdeel de laatst door de server bevestigde waarde plus de vorige), `inflight` (verzonden, nog niet bevestigde uploads) en `conflicts` (conflictsamenvattingen en tabbladconflicten per pad met beide waarden en de basis; dubbele meldingen worden één record; openstaande blijven, opgeloste max. 50, harde grens 500). Daarnaast in dezelfde store: `finance` (één record per scope (`<account>:<huishouden>`, `device` of `legacy-unknown`) en financieel onderdeel, key `fin|<scope>|<onderdeel>`, met basis/lokale/concurrerende waarde, gebruikers, tijdstippen; verdwijnt na serverbevestiging), `finance-audit` (zonder bedragen, max. 300) en `finance-guard` (hash van afgewezen waarden per veld, 30 dagen). `status().durability`: IndexedDB `durable`, localStorage `limited`, geheugen `session` (dan blijft ook de versie-administratie alleen in het geheugen). Vervangt `samenThuisAccountSyncBaseValuesV1`; die sleutel wordt eenmalig overgenomen en pas na bevestigde opslag verwijderd. In `samenThuisDataV2` staat in `meta.__tabRev` de herkomst van de laatst geschreven versie (`id`, `parent` en bij een samengevoegde versie `merged`; lokaal, wordt niet gesynchroniseerd).
 
 De drie sync-basissleutels zijn herbouwbaar: bij een volle opslag ruimt `save()` ze eerst op en valt de app terug op "kies een versie". Ze staan, net als alle huishouddata, onversleuteld op het apparaat (zie `docs/SECURITY.md` S-9).
 

@@ -182,7 +182,7 @@
       if (!stored) return { data: o.fresh(), status: 'empty' };
       const data = parseStoredData(stored, o.migrate);
       try {
-        if (!storage.getItem(o.backupKey)) {
+        if (o.backupKey && !storage.getItem(o.backupKey)) {
           storage.setItem(o.backupKey, stored);
           storage.setItem(o.backupAtKey, o.now());
         }
@@ -191,7 +191,7 @@
     } catch {
       const preserved = preserveCorruptData(storage, stored, o.corruptKey, o.now());
       try {
-        const backup = storage.getItem(o.backupKey);
+        const backup = o.backupKey ? storage.getItem(o.backupKey) : null;
         if (backup && backup !== stored) return { data: parseStoredData(backup, o.migrate), status: 'recovered', preserved };
       } catch {}
       return { data: o.fresh(), status: 'fresh', preserved };

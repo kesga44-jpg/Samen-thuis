@@ -16,18 +16,43 @@
   const toCents = value => { try { return L.cents(String(value).trim() || '0'); } catch (_) { return NaN; } };
   const uid = () => state.ctx?.auth.session()?.user?.id || '';
 
+  // ---- Identiteitsvergrendeling (opdracht 7) --------------------------------------------------------
+  // Een handeling (laden, opslaan, bevestigen) legt bij de start vast voor welk account en welke dataset hij geldt.
+  // Vóór elk verzoek: het token moet van precies dat account zijn; na elk antwoord: is de identiteit intussen
+  // gewijzigd (wissel, afmelden, ander huishouden), dan wordt het antwoord weggegooid en verder niets geschreven.
+  // Een herlaadbeurt is geen bewijs dat een al verzonden verzoek is geannuleerd; de server verwerkt het dan onder het
+  // token waarmee het is verzonden (het oude account), nooit onder het nieuwe.
+  const staleIdentity = () => Object.assign(new Error('Account of huishouden is intussen gewijzigd; er is niets opgeslagen of toegepast.'), { name: 'StaleIdentity', stale: true });
+  function identityLock() {
+    const id = globalThis.SamenThuisIdentity?.current?.() || null;
+    return { uid: uid(), identityKey: id ? id.key : null, householdId: id && id.mode === 'account' ? id.householdId : null };
+  }
+  function assertLock(lock) {
+    const I = globalThis.SamenThuisIdentity;
+    if (!lock || !lock.uid || I?.switching?.() || uid() !== lock.uid) throw staleIdentity();
+    if (I?.current && (I.current()?.key ?? null) !== lock.identityKey) throw staleIdentity();
+  }
+
   // ---- Netwerk -----------------------------------------------------------------------------------
-  async function api(path, options = {}) {
+  async function api(path, options = {}, lock = identityLock()) {
     const auth = state.ctx.auth;
+    assertLock(lock);
     const session = await auth.ready();
     if (!session?.access_token) throw Object.assign(new Error('Niet aangemeld'), { status: 401 });
+    if (session.user?.id !== lock.uid) throw staleIdentity(); // nooit met het token van een ander account verzenden
+    assertLock(lock);
     const response = await fetch(`${auth.base()}${path}`, { ...options, headers: { ...auth.headers(session.access_token), ...(options.headers || {}) } });
     const body = response.status === 204 ? null : await response.json().catch(() => null);
+    assertLock(lock); // laat antwoord van een vorige identiteit: niet gebruiken
     if (!response.ok) throw Object.assign(new Error(body?.message || `Fout (${response.status})`), { status: response.status, code: body?.code });
     return body;
   }
-  const rpc = (name, args) => api(`/rest/v1/rpc/${name}`, { method: 'POST', body: JSON.stringify(args) });
-  const friendly = error => error.code === '40001' || /Versieconflict/.test(error.message)
+  // RPC's met een huishouden: alleen het huishouden van de actieve identiteit (accountsync), nooit een ander.
+  function rpc(name, args, lock = identityLock()) {
+    if (lock.householdId && args && args.p_household && args.p_household !== lock.householdId) return Promise.reject(staleIdentity());
+    return api(`/rest/v1/rpc/${name}`, { method: 'POST', body: JSON.stringify(args) }, lock);
+  }
+  const friendly = error => error.stale ? error.message : error.code === '40001' || /Versieconflict/.test(error.message)
     ? 'Er is ondertussen iets gewijzigd op een ander apparaat. De gegevens zijn ververst; controleer en probeer opnieuw.'
     : error.code === 'PGRST202' || error.code === 'PGRST205' || error.status === 404
       ? 'De financiële databasemigratie is nog niet toegepast. Er is niets opgeslagen.'
@@ -37,43 +62,134 @@
     const remote = state.remote, session = state.ctx.auth.session();
     if (!session?.user?.id) { remote.status = 'signedout'; return false; }
     if (remote.busy || (!force && remote.status === 'ready' && Date.now() - remote.loadedAt < 20000)) return false;
+    const lock = identityLock();
+    // Gegevens van een vorig account nooit laten staan.
+    if (remote.uid && remote.uid !== lock.uid) Object.assign(remote, { householdId: '', members: [], incomes: [], distributions: [], status: 'idle', loadedAt: 0 });
     remote.busy = true;
     const before = JSON.stringify([remote.members, remote.incomes, remote.distributions]);
     try {
-      const own = await api(`/rest/v1/household_members?select=household_id&user_id=eq.${encodeURIComponent(session.user.id)}&order=joined_at.asc&limit=1`);
+      const own = await api(`/rest/v1/household_members?select=household_id&user_id=eq.${encodeURIComponent(lock.uid)}&order=joined_at.asc&limit=1`, {}, lock);
       const householdId = own?.[0]?.household_id;
       if (!householdId) { remote.status = 'nohousehold'; return false; }
+      // Accountsync actief: alleen het huishouden van deze identiteit; is het lidmaatschap anders, dan niets tonen.
+      if (lock.householdId && householdId !== lock.householdId) throw staleIdentity();
       const hid = encodeURIComponent(householdId);
       const [members, incomes, distributions] = await Promise.all([
-        api(`/rest/v1/household_members?select=user_id&household_id=eq.${hid}`),
-        api(`/rest/v1/finance_income_months?select=*&household_id=eq.${hid}`),
-        api(`/rest/v1/finance_distributions?select=*&household_id=eq.${hid}&order=month.asc,revision.asc`)
+        api(`/rest/v1/household_members?select=user_id&household_id=eq.${hid}`, {}, lock),
+        api(`/rest/v1/finance_income_months?select=*&household_id=eq.${hid}`, {}, lock),
+        api(`/rest/v1/finance_distributions?select=*&household_id=eq.${hid}&order=month.asc,revision.asc`, {}, lock)
       ]);
-      Object.assign(remote, { householdId, members: (members || []).map(item => item.user_id).sort(), incomes: incomes || [], distributions: distributions || [], status: 'ready', error: '', loadedAt: Date.now() });
-      await loadPersonal();
+      assertLock(lock);
+      Object.assign(remote, { uid: lock.uid, householdId, members: (members || []).map(item => item.user_id).sort(), incomes: incomes || [], distributions: distributions || [], status: 'ready', error: '', loadedAt: Date.now() });
+      await loadPersonal(lock);
       return JSON.stringify([remote.members, remote.incomes, remote.distributions]) !== before;
     } catch (error) {
-      remote.status = error.code === 'PGRST205' || error.status === 404 ? 'migration' : 'error';
+      remote.status = error.stale ? 'error' : error.code === 'PGRST205' || error.status === 404 ? 'migration' : 'error';
       remote.error = friendly(error);
       return false;
     } finally { remote.busy = false; }
   }
 
-  async function loadPersonal() {
+  // Privé-potjes en -uitgaven (personal_preferences.finance_config). base = laatst geladen/bevestigde versie: basis voor
+  // samenvoegen en voorwaardelijk opslaan (finance-conflict-core.js savePersonalConfig). Nooit stil overschrijven.
+  const FC = globalThis.SamenThuisFinanceConflicts, HSC = globalThis.SamenThuisHouseholdSync;
+  const personalValue = () => ({ pots: state.personal.pots, expenses: state.personal.expenses });
+  function applyPersonal(config) {
+    state.personal.pots = (config.pots || []).map(F.normalizePot);
+    state.personal.expenses = Array.isArray(config.expenses) ? config.expenses : [];
+  }
+  // Versiekenmerk van de privé-instellingen. Met migratie 20261124 (finance_revision): 'rev:<n>', door de server
+  // opgehoogd, opgeslagen via save_finance_config (geen ABA). Zonder die migratie: terugval op updated_at met een
+  // voorwaardelijke PATCH (oude route). De keuze wordt per paginalading onthouden.
+  let personalRoute = null; // 'rev' | 'ts'
+  const revToken = n => 'rev:' + String(n);
+  const missingColumn = error => error && (error.code === '42703' || error.code === 'PGRST204' || /finance_revision/.test(String(error.message || '')));
+  async function fetchPersonalRow(lock = identityLock()) {
+    const where = `user_id=eq.${encodeURIComponent(lock.uid)}&limit=1`;
+    if (personalRoute !== 'ts') {
+      try {
+        const rows = await api(`/rest/v1/personal_preferences?select=finance_config,finance_revision,updated_at&${where}`, {}, lock);
+        personalRoute = 'rev';
+        const row = rows?.[0];
+        return row ? { finance_config: row.finance_config, updated_at: revToken(row.finance_revision ?? 0) } : null;
+      } catch (error) {
+        if (!missingColumn(error)) throw error;
+        personalRoute = 'ts';
+      }
+    }
+    const rows = await api(`/rest/v1/personal_preferences?select=finance_config,updated_at&${where}`, {}, lock);
+    return rows?.[0] || null;
+  }
+  async function saveRevision(value, expected, lock) {
+    const rows = await rpc('save_finance_config', { p_expected_revision: expected, p_config: value }, lock);
+    const row = Array.isArray(rows) ? rows[0] : null;
+    return row && row.out_revision != null ? { finance_config: row.out_config, updated_at: revToken(row.out_revision) } : null;
+  }
+  async function loadPersonal(lock = identityLock()) {
+    // Privé-potjes horen bij één account: na een (nog niet herladen) wissel nooit de vorige set tonen of gebruiken.
+    if (state.personal.uid && state.personal.uid !== lock.uid) state.personal = { loaded: false, pots: [], expenses: [] };
     if (state.personal.loaded) return;
     try {
-      const rows = await api(`/rest/v1/personal_preferences?select=finance_config&user_id=eq.${encodeURIComponent(uid())}&limit=1`);
-      const config = rows?.[0]?.finance_config || {};
-      state.personal.pots = (config.pots || []).map(F.normalizePot);
-      state.personal.expenses = Array.isArray(config.expenses) ? config.expenses : [];
+      const row = await fetchPersonalRow(lock);
+      assertLock(lock);
+      const config = row?.finance_config || {};
+      applyPersonal(config);
+      state.personal.base = JSON.parse(JSON.stringify(config));
+      state.personal.uid = lock.uid;
       state.personal.loaded = true;
-    } catch (_) { /* kolom ontbreekt zolang de migratie niet is toegepast */ }
+    } catch (_) { /* kolom ontbreekt zolang de migratie niet is toegepast, of de identiteit is gewijzigd */ }
   }
-  async function savePersonal() {
-    await api('/rest/v1/personal_preferences?on_conflict=user_id', {
-      method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
-      body: JSON.stringify({ user_id: uid(), finance_config: { pots: state.personal.pots, expenses: state.personal.expenses } })
+  async function savePersonal(override) {
+    // Eén vergrendeling voor de hele ronde lezen → vergelijken → voorwaardelijk schrijven (alle verzoeken, ook herhalingen).
+    const lock = identityLock();
+    assertLock(lock);
+    if (state.personal.uid && state.personal.uid !== lock.uid) throw staleIdentity();
+    const local = override || personalValue();
+    const result = await FC.savePersonalConfig({
+      merge3: HSC.merge3, hashValue: HSC.hashValue, base: state.personal.base, local,
+      fetchRow: () => fetchPersonalRow(lock),
+      patchIf: async (value, updatedAt) => {
+        if (String(updatedAt).startsWith('rev:')) return saveRevision(value, Number(String(updatedAt).slice(4)), lock);
+        const rows = await api(`/rest/v1/personal_preferences?user_id=eq.${encodeURIComponent(lock.uid)}&updated_at=eq.${encodeURIComponent(updatedAt)}`, {
+          method: 'PATCH', headers: { Prefer: 'return=representation' }, body: JSON.stringify({ finance_config: value, updated_at: new Date().toISOString() })
+        }, lock);
+        return Array.isArray(rows) && rows.length === 1 ? rows[0] : null;
+      },
+      insertIfAbsent: async value => {
+        if (personalRoute === 'rev') return saveRevision(value, 0, lock);
+        const rows = await api('/rest/v1/personal_preferences?on_conflict=user_id', {
+          method: 'POST', headers: { Prefer: 'resolution=ignore-duplicates,return=representation' }, body: JSON.stringify({ user_id: lock.uid, finance_config: value })
+        }, lock);
+        return Array.isArray(rows) && rows.length ? rows[0] : null;
+      }
     });
+    assertLock(lock); // uitkomst van een vorige identiteit: lokale staat niet aanpassen
+    if (result.ok) {
+      state.personal.base = JSON.parse(JSON.stringify(result.value));
+      applyPersonal(result.value);
+      state.personal.conflict = null;
+      if (result.merged) state.notice = 'Je privé-potjes zijn samengevoegd met wijzigingen van een ander apparaat.';
+      return result;
+    }
+    if (result.conflict) {
+      state.personal.conflict = result.conflict;
+      state.notice = 'Je privé-potjes of -uitgaven zijn intussen op een ander apparaat anders gewijzigd. Er is niets overschreven; kies hieronder welke versie geldt.';
+      return result;
+    }
+    throw new Error('Opslaan van je privé-potjes lukte niet door gelijktijdige wijzigingen. Probeer het opnieuw.');
+  }
+  // Expliciete keuze bij een conflict: per conflicterend veld deze of de andere waarde; overige verschillen samengevoegd.
+  async function resolvePersonalConflict(side) {
+    const c = state.personal.conflict;
+    if (!c) return;
+    assertLock(identityLock());
+    if (state.personal.uid && state.personal.uid !== uid()) throw staleIdentity();
+    const choices = Object.fromEntries(c.paths.map(p => [p, side]));
+    const r = FC.resolveValue({ merge3: HSC.merge3, hashValue: HSC.hashValue, base: c.base, local: c.local, remote: c.remote, choices });
+    state.personal.base = JSON.parse(JSON.stringify(c.remote));   // de andere versie is nu bekend en gezien
+    state.personal.conflict = null;
+    applyPersonal(r.value);
+    await savePersonal(r.value);
   }
 
   // ---- Afgeleide gegevens ---------------------------------------------------------------------------
@@ -169,7 +285,7 @@
     const ordered = [...data.people].sort((a, b) => Number(Boolean(b.own)) - Number(Boolean(a.own)));
     const budget = ctx.budget();
     return `<div class="fin-grid">
-      ${notice ? `<p class="fin-note" role="status">${esc(notice)}</p>` : ''}${state.notice ? `<p class="fin-note" role="status">${esc(state.notice)}</p>` : ''}
+      ${notice ? `<p class="fin-note" role="status">${esc(notice)}</p>` : ''}${state.notice ? `<p class="fin-note" role="status">${esc(state.notice)}</p>` : ''}${state.personal.conflict ? `<div class="button-row" data-fin-personal-conflict><button class="secondary" type="button" data-fin-personal-resolve="local">Mijn versie bewaren</button><button class="secondary" type="button" data-fin-personal-resolve="remote">Andere versie gebruiken</button></div>` : ''}
       <label class="fin-month">Maand<input type="month" data-fin-month value="${esc(state.month)}"></label>
       ${statusBox(e)}
       <section class="fin-card"><h3>Gezamenlijk afdraagpercentage</h3>
@@ -279,7 +395,7 @@
 
   async function refresh(force) {
     const changed = await loadRemote(force);
-    const applied = state.ctx.applyDistributions(state.remote.distributions);
+    const applied = state.ctx.applyDistributions(state.remote.distributions, state.remote.householdId);
     if (changed || applied || state.remote.status !== 'idle' && !state.firstPaint) { state.firstPaint = true; if (!state.typing) state.ctx.render(); }
   }
 
@@ -290,10 +406,12 @@
     state.busy = true; state.notice = '';
     try { await action(); if (successNotice) state.notice = successNotice; }
     catch (error) { state.notice = friendly(error); }
-    finally { state.busy = false; await loadRemote(true); state.ctx.applyDistributions(state.remote.distributions); repaint(); }
+    finally { state.busy = false; await loadRemote(true); state.ctx.applyDistributions(state.remote.distributions, state.remote.householdId); repaint(); }
   }
 
   document.addEventListener('click', event => {
+    const personalChoice = event.target.closest('[data-fin-personal-resolve]');
+    if (personalChoice) { resolvePersonalConflict(personalChoice.dataset.finPersonalResolve).then(repaint).catch(error => { state.notice = friendly(error); repaint(); }); return; }
     const ctx = state.ctx; if (!ctx || !document.querySelector('.fin-pane')) return;
     if (event.target.closest('[data-fin-confirm-income]')) {
       const person = peopleList().find(item => item.own);
@@ -383,5 +501,6 @@
   // Wijzigingen van de andere persoon (inkomen, bevestiging, verdeling) verschijnen zonder handmatig vernieuwen.
   setInterval(() => { if (state.ctx && document.querySelector('.fin-pane') && !document.hidden) refresh(true); }, 30000);
 
-  globalThis.SamenThuisFinanceUi = { mount, state, refresh };
+  // savePersonal: ook voor de browsertest van de identiteitsvergrendeling (opdracht 7); bestaande leden ongewijzigd.
+  globalThis.SamenThuisFinanceUi = { mount, state, refresh, savePersonal };
 })();

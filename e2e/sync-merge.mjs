@@ -1,5 +1,5 @@
 // Optionele browsertest: twee apparaten (Kees en Daphne) met de echte app-code en een nagebootste Supabase-tabel
-// household_data (oude code-sync). Controleert dat gelijktijdige toevoegingen automatisch worden samengevoegd.
+// household_data (oude code-sync). Controleert dat de gepauzeerde oude route niets verstuurt of overschrijft.
 // Geen echte Supabase: alle verzoeken naar *.supabase.co worden in deze test beantwoord door een geheugentabel.
 // Gebruik: node e2e/sync-merge.mjs
 import { createRequire } from 'node:module';
@@ -56,43 +56,27 @@ async function deviceFor(name) {
   await page.goto(base, { waitUntil: 'load' }); await page.waitForTimeout(1500);
   return { name, page, context, errors };
 }
+// De oude code-sync (household_data) is in de app gepauzeerd (pauseLegacySync); accountsynchronisatie vervangt haar.
+// Deze test controleert daarom dat de oude route niets meer verstuurt of overschrijft, in plaats van het samenvoegen
+// via household_data (dat gedrag bestaat niet meer en liet deze test sinds de pauze falen).
+let requests = 0;
 const groceries = d => d.page.evaluate(() => data.groceries.map(g => g.title).sort());
 const add = (d, title) => d.page.evaluate(t => { data.groceries.push({ id: 'e2e-' + t, title: t, category: 'Overig', done: false }); save({ sync: false }); }, title);
-const syncNowIn = async d => { await d.page.evaluate(() => syncNow({ manual: true })); await d.page.waitForTimeout(700); };
+const syncNowIn = async d => { const r = await d.page.evaluate(() => syncNow({ manual: true })); await d.page.waitForTimeout(500); return r; };
 
 const kees = await deviceFor('Kees');
-await syncNowIn(kees);
+kees.context.on('request', r => { if (/household_data/.test(r.url())) requests++; });
 const daphne = await deviceFor('Daphne');
-await syncNowIn(daphne);
-check('beide apparaten starten met dezelfde gegevens', JSON.stringify(await groceries(kees)) === JSON.stringify(await groceries(daphne)));
-
+daphne.context.on('request', r => { if (/household_data/.test(r.url())) requests++; });
+table.set('test-huishouden-123', { id: 'test-huishouden-123', data: { groceries: [{ id: 'cloud', title: 'Uit de oude cloud' }] }, updated_at: '2026-01-01T00:00:00Z' });
 await add(kees, 'Brood'); await add(daphne, 'Kaas');
-await syncNowIn(daphne);
-await syncNowIn(kees);
-const k = await groceries(kees);
-check('Kees ziet na synchroniseren ook Daphnes toevoeging, zonder keuze', k.includes('Kaas') && k.includes('Brood'), k.join(', '));
-check('geen conflictmelding bij Kees', !(await kees.page.evaluate(() => !!getSyncConflict())));
-await syncNowIn(daphne);
-const d = await groceries(daphne);
-check('Daphne ziet bij de volgende ronde Kees’ toevoeging', d.includes('Brood') && d.includes('Kaas'), d.join(', '));
-
-// Automatisch ophalen zonder knop: focus-gebeurtenis (zoals terugkeren naar de app).
-await add(daphne, 'Appels'); await syncNowIn(daphne);
-await kees.page.evaluate(() => window.dispatchEvent(new Event('focus'))); await kees.page.waitForTimeout(900);
-check('Kees krijgt een nieuwe toevoeging automatisch bij terugkeren naar de app', (await groceries(kees)).includes('Appels'));
-
-// Echt conflict: hetzelfde item anders gewijzigd → keuze, met optie Beide samenvoegen.
-await kees.page.evaluate(() => { const x = data.groceries.find(g => g.title === 'Brood'); x.title = 'Volkorenbrood'; save({ sync: false }); });
-await daphne.page.evaluate(() => { const x = data.groceries.find(g => g.title === 'Brood'); x.title = 'Witbrood'; save({ sync: false }); });
-await syncNowIn(daphne); await syncNowIn(kees);
-check('zelfde item op beide apparaten anders gewijzigd → keuze gevraagd (niet stil overschreven)', await kees.page.evaluate(() => !!getSyncConflict()));
-await kees.page.evaluate(() => window.SamenThuisGoSub('settings', 'synchronisatie'));
-await kees.page.waitForTimeout(300);
-const btn = kees.page.locator('[data-sync-conflict-choice="merge"]').first();
-check('knop "Beide samenvoegen" zichtbaar', await btn.count() === 1);
-if (await btn.count()) { await btn.click(); await kees.page.waitForTimeout(1200); }
-const after = await groceries(kees);
-check('na samenvoegen: alle items aanwezig, cloudversie wint bij het conflicterende item', after.includes('Witbrood') && after.includes('Kaas') && after.includes('Appels') && !after.includes('Volkorenbrood'), after.join(', '));
+const rk = await syncNowIn(kees), rd = await syncNowIn(daphne);
+await kees.page.evaluate(() => window.dispatchEvent(new Event('focus'))); await kees.page.waitForTimeout(700);
+check('oude code-sync gepauzeerd: handmatig synchroniseren meldt de pauze', rk?.status === 'legacy-paused' && rd?.status === 'legacy-paused', JSON.stringify([rk, rd]));
+check('geen enkel verzoek naar household_data (ook niet bij terugkeren naar de app)', requests === 0, String(requests));
+const k = await groceries(kees), d = await groceries(daphne);
+check('lokale gegevens blijven behouden en worden niet overschreven door de oude cloud', k.includes('Brood') && !k.includes('Uit de oude cloud') && d.includes('Kaas') && !d.includes('Brood'), k.join(', ') + ' | ' + d.join(', '));
+check('oude cloudrij ongewijzigd', table.get('test-huishouden-123').data.groceries.length === 1);
 check('geen JavaScript-fouten', !kees.errors.length && !daphne.errors.length, [...kees.errors, ...daphne.errors].slice(0, 2).join(' | '));
 await browser.close(); server.close();
 console.log(results.join('\n')); console.log(`\n${results.length - failed} geslaagd, ${failed} mislukt`);

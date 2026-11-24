@@ -151,7 +151,8 @@ test('accountsynchronisatie blijft samenvoegen; legacy-sync is gepauzeerd', () =
   assert.doesNotMatch(app, /window\.SamenThuisHouseholdSync\.mergeData\(syncBase, data, remoteData\)/);
   assert.match(app, /'samenThuisSyncBaseV1', 'samenThuisAccountSyncBaseValuesV1'/, 'save() ruimt basiskopieën op bij volle opslag');
   assert.match(acct, /HS\.runAccountSync/);
-  assert.match(acct, /baseValues: loadBaseValues\(\)/);
+  assert.match(acct, /baseValues: prevBaseValues/);
+  assert.match(acct, /await loadBaseValues\(prevBase\)/, 'basiswaarden komen uit de duurzame metastore (IndexedDB)');
   assert.match(acct, /data-acct-resolve="\$\{esc2\(c\.section\)\}:merge"/);
   assert.match(fs.readFileSync(__dirname + '/household-sync-core.js', 'utf8'), /function mergeSection/);
   assert.match(app, /AUTO_SYNC_INTERVAL_MS = 30000/, 'app haalt elke 30 s nieuwe wijzigingen op als hij open staat');

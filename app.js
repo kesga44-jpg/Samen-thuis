@@ -1,7 +1,24 @@
 
 /* ===== GEÏNTEGREERD: app.js ===== */
-const STORAGE_KEY = 'samenThuisDataV2';
-const LEGACY_STORAGE_KEY = 'samenThuisDataV1';
+// Lokale gegevensisolatie (opdracht 6, identity-store-core.js): de identiteit (lokaal profiel of account+huishouden) wordt
+// bij het laden eenmalig vastgesteld en ligt daarna vast. Een wissel herlaadt de pagina (SamenThuisIdentity.reevaluate).
+const IDENTITY_STORE = window.SamenThuisIdentityStore;
+let IDENTITY_MIGRATION = { action: 'none' };
+try { IDENTITY_MIGRATION = IDENTITY_STORE.migrateLegacy(localStorage); } catch (error) { IDENTITY_MIGRATION = { action: 'error', error: String(error && error.message || error) }; }
+const ACTIVE_IDENTITY = (() => {
+  const id = IDENTITY_STORE.resolve(localStorage);
+  // Mislukte migratie: een accountdataset wordt niet geladen (anders zou de cloud een lege dataset vullen en de oude
+  // gegevens daarna in quarantaine raken). Volgende paginalading probeert opnieuw.
+  if (IDENTITY_MIGRATION.action === 'error' && id.mode === 'account') return Object.freeze({ ...id, mode: 'locked', key: null, reason: 'migration-failed' });
+  return Object.freeze(id);
+})();
+const IDENTITY_KEYS = Object.freeze(IDENTITY_STORE.keysFor(ACTIVE_IDENTITY));
+const STORAGE_KEY = IDENTITY_KEYS.storageKey;
+const LEGACY_STORAGE_KEY = IDENTITY_KEYS.legacyKey;
+// Apparaatvelden (SportCoach, settings) blijven in samenThuisDataV2 als de dataset een andere sleutel heeft.
+const SEPARATE_DEVICE_FIELDS = STORAGE_KEY !== IDENTITY_STORE.LEGACY_KEY;
+const DATA_LOCKED = ACTIVE_IDENTITY.mode === 'locked';
+let identitySwitching = false;
 const SYNC_KEY = 'samenThuisSyncV1';
 const SYNC_CONFLICT_KEY = 'samenThuisSyncConflictV1';
 const DEFAULT_PROJECT_URL = 'https://vwfuetxgapzfivydzhxc.supabase.co';
@@ -258,30 +275,112 @@ function migrateData(raw) {
 
 const RECOVERY_KEYS = {
   storageKey: STORAGE_KEY, legacyKey: LEGACY_STORAGE_KEY,
-  backupKey: 'samenThuisPreV23Backup', backupAtKey: 'samenThuisPreV23BackupAt',
-  corruptKey: 'samenThuisCorruptBackup', preRestoreKey: 'samenThuisPreRestoreBackup'
+  backupKey: IDENTITY_KEYS.backupKey, backupAtKey: IDENTITY_KEYS.backupAtKey,
+  corruptKey: IDENTITY_KEYS.corruptKey, preRestoreKey: IDENTITY_KEYS.preRestoreKey
 };
 
 function recoveryOptions() {
   return {
-    ...RECOVERY_KEYS, migrate: migrateData, fresh: freshLocalData, now: () => new Date().toISOString(),
-    preserveLocal: () => ({ sportCoach: clone(data?.sportCoach) })
+    ...RECOVERY_KEYS, migrate: migrateData, fresh: SEPARATE_DEVICE_FIELDS ? emptyLocalData : freshLocalData, now: () => new Date().toISOString(),
+    // Apparaatgebonden velden (SportCoach, apparaatinstellingen) komen nooit uit een back-up: de huidige blijven staan.
+    preserveLocal: () => ({ sportCoach: clone(data?.sportCoach), settings: clone(data?.settings) })
   };
 }
 
 let storageProtected = false;
-const RESTORE_HOLD_KEY = 'samenThuisRestoreHold';
+const RESTORE_HOLD_KEY = IDENTITY_KEYS.restoreHoldKey;
+
+// Apparaatvelden (SportCoach, settings) uit samenThuisDataV2 erbij zetten als de dataset een eigen sleutel heeft.
+function withDeviceFields(value) {
+  if (!SEPARATE_DEVICE_FIELDS || !value) return value;
+  const device = IDENTITY_STORE.readDeviceFields(localStorage);
+  IDENTITY_STORE.DEVICE_FIELDS.forEach(field => { if (device[field] !== undefined) value[field] = device[field]; });
+  return value;
+}
 
 function loadData() {
+  // Geen (volledige) identiteit: nooit een standaard- of voorbeeldset laden en niets schrijven.
+  if (DATA_LOCKED) return withDeviceFields(emptyLocalData());
   try {
     const result = SamenThuisCore.loadWithRecovery(localStorage, recoveryOptions());
     // Kon de beschadigde bron niet veilig bewaard worden, dan blokkeren we opslaan zodat die bron niet wordt overschreven.
     if (result.status !== 'ok' && result.status !== 'empty' && !result.preserved) storageProtected = true;
-    return result.data;
+    return withDeviceFields(result.data);
   } catch {
-    return freshLocalData();
+    return withDeviceFields(SEPARATE_DEVICE_FIELDS ? emptyLocalData() : freshLocalData());
   }
 }
+
+// Bewaarde gegevens die niet (meer) worden geladen: quarantaine of gekoppeld aan een account. Alleen downloaden.
+// Opdracht 7: elke identiteit ziet uitsluitend wat aantoonbaar bij haar hoort. Gegevens zonder bewezen eigenaar
+// (quarantaine) alleen in het lokale profiel, na het expliciet openen van de herstelmodus (alleen voor deze paginalading).
+let localRecoveryMode = false;
+const visibleRetained = () => IDENTITY_STORE.retainedFor(localStorage, ACTIVE_IDENTITY, { recovery: localRecoveryMode });
+// In het lokale profiel is de herstelmodus altijd aan te zetten (ook voor oude conflictregistraties in IndexedDB).
+const hiddenQuarantine = () => ACTIVE_IDENTITY.mode === 'local' && !localRecoveryMode;
+function retainedDataCard() {
+  const items = visibleRetained();
+  const offerRecovery = hiddenQuarantine();
+  if (!items.length && !offerRecovery && !(ACTIVE_IDENTITY.mode === 'local' && localRecoveryMode)) return '';
+  const label = item => !item.target ? (item.status === 'archief' ? 'Gearchiveerd lokaal profiel waarvan niet vaststaat bij welk account het hoort.' : 'Lokale gegevens van vóór de accountscheiding die niet aantoonbaar bij één account horen. Ze worden niet geladen of gesynchroniseerd.')
+    : item.status === 'gekoppeld' ? 'Lokale gegevens van vóór de accountscheiding; gekopieerd naar dit account en huishouden. De oorspronkelijke kopie blijft bewaard.'
+    : 'Gearchiveerd lokaal profiel (gekoppeld aan dit account en huishouden).';
+  const recovery = offerRecovery ? '<div class="button-row"><span>Bewaarde gegevens en oude conflictregistraties waarvan niet vaststaat bij welk account ze horen, zijn alleen in de herstelmodus te bekijken, te downloaden of op te ruimen.</span><button class="secondary" type="button" data-open-local-recovery>Herstelmodus openen</button></div>' : '';
+  const legacy = ACTIVE_IDENTITY.mode === 'local' && localRecoveryMode ? '<div class="button-row" data-legacy-conflicts-row><span>Oude conflictregistraties zonder vaststaande identiteit (van vóór de accountscheiding). Ze worden nergens getoond of gebruikt.</span><button class="secondary" type="button" data-discard-legacy-conflicts>Downloaden en opruimen</button></div>' : '';
+  return `<section class="card settings-card" data-retained-data><div class="card-head"><div><p class="eyebrow">Gegevens</p><h2>Back-up van bewaarde lokale gegevens</h2></div></div>${items.map(item => `<div class="button-row"><span>${esc(label(item))}</span><button class="secondary" type="button" data-download-retained="${esc(item.key)}">Downloaden</button><button class="secondary" type="button" data-discard-retained="${esc(item.key)}">Opruimen</button></div>`).join('')}${recovery}${legacy}</section>`;
+}
+// Opruimen (op verzoek, nooit automatisch): eerst altijd een download van precies wat verdwijnt, daarna een expliciete
+// bevestiging. SportCoach en apparaatinstellingen blijven altijd staan.
+function downloadRetainedItem(item) {
+  let value = null; try { value = JSON.parse(localStorage.getItem(item.key) || 'null'); } catch (_) {}
+  if (!value) return false;
+  const copy = IDENTITY_STORE.withoutDeviceFields(value);
+  copy.meta = { ...(copy.meta || {}), exportIdentity: { mode: 'retained', key: item.key, status: item.status, target: item.target || null } };
+  downloadBackup(new File([JSON.stringify(copy, null, 2)], `samen-thuis-bewaard-${todayISO()}.json`, { type: 'application/json' }));
+  return true;
+}
+document.addEventListener('click', async event => {
+  const btn = event.target.closest('[data-discard-retained]');
+  const legacyBtn = event.target.closest('[data-discard-legacy-conflicts]');
+  if ((!btn && !legacyBtn) || identitySwitching || DATA_LOCKED) return;
+  if (btn) {
+    const item = visibleRetained().find(entry => entry.key === btn.dataset.discardRetained);
+    if (!item) return;
+    if (!downloadRetainedItem(item)) return toast('Deze gegevens zijn niet leesbaar en worden niet opgeruimd.');
+    if (!confirm('Er is zojuist een download gemaakt. Staat die veilig opgeslagen? Pas dan verwijderen: deze bewaarde gegevens zijn daarna niet meer op dit apparaat. SportCoach en apparaatinstellingen blijven staan.')) return toast('Niets verwijderd.');
+    const r = IDENTITY_STORE.discardRetained(localStorage, ACTIVE_IDENTITY, item.key, { recovery: localRecoveryMode });
+    toast(r.ok ? 'Bewaarde gegevens opgeruimd.' : 'Niet opgeruimd: deze gegevens horen niet bij dit profiel.');
+    render();
+    return;
+  }
+  const meta = window.SamenThuisSyncMeta?.shared();
+  if (!meta?.legacyConflicts || ACTIVE_IDENTITY.mode !== 'local' || !localRecoveryMode) return;
+  const records = await meta.legacyConflicts();
+  if (!records.length) return toast('Er zijn geen oude conflictregistraties.');
+  downloadBackup(new File([JSON.stringify({ meta: { kind: 'samen-thuis-oude-conflictregistraties', at: new Date().toISOString() }, records }, null, 2)], `samen-thuis-oude-conflicten-${todayISO()}.json`, { type: 'application/json' }));
+  if (!confirm(`Er is zojuist een download gemaakt van ${records.length} oude conflictregistratie(s). Staat die veilig opgeslagen? Pas dan verwijderen.`)) return toast('Niets verwijderd.');
+  const n = await meta.discardLegacyConflicts(records.map(r => r.key));
+  toast(`${n} oude conflictregistratie(s) opgeruimd.`);
+  render();
+});
+document.addEventListener('click', event => {
+  if (event.target.closest('[data-open-local-recovery]')) {
+    if (ACTIVE_IDENTITY.mode !== 'local') return;
+    if (confirm('Herstelmodus openen? Je ziet dan bewaarde gegevens van vóór de accountscheiding waarvan niet vaststaat van wie ze zijn. Ze worden niet automatisch geladen of gesynchroniseerd.')) { localRecoveryMode = true; render(); }
+    return;
+  }
+  const btn = event.target.closest('[data-download-retained]');
+  if (!btn) return;
+  const key = btn.dataset.downloadRetained;
+  const item = visibleRetained().find(entry => entry.key === key);
+  if (!item || identitySwitching) return;
+  let value = null; try { value = JSON.parse(localStorage.getItem(key) || 'null'); } catch (_) {}
+  if (!value) return toast('Deze gegevens zijn niet leesbaar.');
+  const copy = IDENTITY_STORE.withoutDeviceFields(value);
+  // Herkomst: met doel alleen terug te zetten in die identiteit; zonder doel alleen in het lokale profiel.
+  copy.meta = { ...(copy.meta || {}), exportIdentity: { mode: 'retained', key, status: item.status, target: item.target || null } };
+  downloadBackup(new File([JSON.stringify(copy, null, 2)], `samen-thuis-bewaard-${todayISO()}.json`, { type: 'application/json' }));
+});
 
 function recoveryCard() {
   const items = SamenThuisCore.listCorruptBackups(localStorage, RECOVERY_KEYS.corruptKey, migrateData);
@@ -296,8 +395,27 @@ function freshLocalData() {
   fresh.meta = { ...fresh.meta, updatedAt: new Date(0).toISOString() };
   return fresh;
 }
+// Lege dataset zonder voorbeeldgegevens: voor een nieuwe identiteit (eerste ronde haalt de cloud op) en de vergrendelde staat.
+function emptyLocalData() {
+  const empty = migrateData({ planning: [], calendars: [], excludedCalendars: [], meals: [], groceries: [], freezer: [], chores: [], stock: [], ideas: [], home: [], tripFolders: [], tripSections: [], trips: [], dailyAnswers: {} });
+  empty.meta = { ...empty.meta, updatedAt: new Date(0).toISOString() };
+  return empty;
+}
 
+// Opdracht 7: in een account komt de huishoudcode uitsluitend uit de opslag van dat account + huishouden
+// (samenThuisHouseholdCodesV1). De oude globale code geldt alleen voor het lokale profiel; voor een account is hij hooguit
+// een kandidaat die pas wordt gebruikt nadat hij bestaande gegevens van dat huishouden heeft ontsleuteld (account-sync.js).
 function loadSyncConfig() {
+  if (ACTIVE_IDENTITY.mode !== 'local') {
+    const entry = ACTIVE_IDENTITY.mode === 'account' ? IDENTITY_STORE.readCode(localStorage, ACTIVE_IDENTITY) : null;
+    let lastSyncedAt = '';
+    try { lastSyncedAt = String(IDENTITY_STORE.readConfig(localStorage).raw.bases?.[ACTIVE_IDENTITY.scope]?.lastSyncedAt || ''); } catch (_) {}
+    return {
+      projectUrl: DEFAULT_PROJECT_URL, anonKey: DEFAULT_PUBLISHABLE_KEY,
+      householdCode: entry ? entry.code : '', lastSyncedAt,
+      codeCandidate: !entry && ACTIVE_IDENTITY.mode === 'account' && !!IDENTITY_STORE.legacyCodeCandidate(localStorage, ACTIVE_IDENTITY)
+    };
+  }
   try {
     const stored = JSON.parse(localStorage.getItem(SYNC_KEY) || '{}');
     return {
@@ -312,6 +430,177 @@ function loadSyncConfig() {
 }
 
 let data = loadData();
+// Meerdere tabbladen op dit apparaat: vóór elke schrijfactie controleren of een ander tabblad intussen heeft opgeslagen
+// (zie tab-sync-core.js). Zonder de module blijft het oude gedrag (direct schrijven) bestaan.
+const dataGuard = window.SamenThuisTabSync && window.SamenThuisHouseholdSync
+  ? window.SamenThuisTabSync.createDataGuard({ storage: localStorage, key: STORAGE_KEY, merge3: window.SamenThuisHouseholdSync.merge3 })
+  : null;
+
+// Dezelfde waarde in twee tabbladen anders gewijzigd. Per pad blijven beide waarden (en de basis) bewaard in het
+// conflictlogboek, zodat de andere waarde later terug te zetten is (SamenThuisTabConflicts.restore). Financiële paden
+// worden apart gemarkeerd en altijd expliciet gemeld; ze worden nooit stilzwijgend gekozen.
+function reportTabConflict(result) {
+  if (!result.conflicts.length) return;
+  const TS = window.SamenThuisTabSync;
+  const details = TS ? TS.describeConflicts({ paths: result.conflicts, kept: result.value, other: result.remote, base: result.base }) : [];
+  const financial = details.filter(d => d.financial), general = details.filter(d => !d.financial);
+  console.warn('Dezelfde gegevens zijn in twee tabbladen anders gewijzigd; beide waarden zijn bewaard.', details.map(d => d.path));
+  const meta = window.SamenThuisSyncMeta?.shared();
+  if (meta && !identitySwitching) general.forEach(d => meta.recordTabConflict({ ...d, scope: tabConflictScope() }).catch(error => console.error('Tabbladconflict kon niet worden bewaard', error)));
+  // Financieel: één record per onderdeel met basis, deze en de andere waarde; het onderdeel wordt niet geüpload tot er
+  // per veld expliciet is gekozen (finance-conflict-core.js). Geen kopie in het algemene tabbladlogboek.
+  const FIN = window.SamenThuisFinanceConflicts?.shared();
+  if (FIN) {
+    [...new Set(financial.map(d => d.section))].forEach(section => {
+      // Scope: de identiteit die nu actief is (account + huishouden); zonder bekende identiteit 'device'.
+      const scope = window.SamenThuisFinanceSync?.scope?.() || window.SamenThuisFinanceConflicts.DEVICE_SCOPE;
+      FIN.open({
+        scope, localKey: scope === window.SamenThuisFinanceConflicts.DEVICE_SCOPE ? ACTIVE_IDENTITY.key : null, section, origin: 'tab', base: result.base ? result.base[section] : null, local: result.value[section], remote: result.remote[section],
+        localUser: window.SamenThuisAuth25?.session()?.user?.id || null, householdId: scope.includes(':') ? scope.split(':')[1] : null, forcedPaths: financial.filter(d => d.section === section).map(d => d.path.slice(section.length).replace(/^\./, '')).filter(Boolean)
+      }).then(() => window.SamenThuisFinanceSync?.notify()).catch(error => console.error('Financieel conflict kon niet worden bewaard', error));
+    });
+  }
+  try {
+    toast(financial.length
+      ? 'Let op: financiële gegevens zijn in twee tabbladen verschillend gewijzigd. Dit onderdeel wordt niet gesynchroniseerd tot je bij Instellingen per bedrag kiest.'
+      : 'Ook in een ander tabblad gewijzigd: beide waarden zijn bewaard, de andere kun je terugzetten.');
+  } catch (_) {}
+}
+// Technische herstelfunctie (nog geen interface): zet bij een tabbladconflict de bewaarde andere waarde terug.
+// Opdracht 7: conflicten zijn per identiteit (dataset) opgeslagen; alleen die van de actieve identiteit zijn zichtbaar en
+// herstelbaar. Oude records zonder identiteit blijven bewaard maar worden door geen enkele identiteit getoond.
+function tabConflictScope() { return ACTIVE_IDENTITY.key || null; }
+window.SamenThuisTabConflicts = {
+  list: (opts = {}) => {
+    const scope = tabConflictScope();
+    if (!scope || DATA_LOCKED) return Promise.resolve([]);
+    return window.SamenThuisSyncMeta?.shared().listTabConflicts({ ...opts, scope }) || Promise.resolve([]);
+  },
+  async restore(key, which = 'other') {
+    const meta = window.SamenThuisSyncMeta?.shared(), TS = window.SamenThuisTabSync;
+    const scope = tabConflictScope();
+    if (!scope || DATA_LOCKED || identitySwitching) return false;
+    const rec = meta && await meta.getTabConflict(key, { scope });
+    if (!rec || !TS || !['other', 'kept', 'base'].includes(which)) return false;
+    if (identitySwitching || tabConflictScope() !== scope) return false;
+    if (!TS.setAt(data, rec.path, structuredClone(rec[which]))) return false;
+    if (save() === false) return false;
+    await meta.resolveTabConflict(key, which, { scope });
+    render();
+    return true;
+  }
+};
+
+// Apparaatvelden (SportCoach, settings) van de actieve gegevens opnieuw aan een samengevoegde waarde koppelen.
+const datasetView = value => SEPARATE_DEVICE_FIELDS ? IDENTITY_STORE.withoutDeviceFields(value) : value;
+function reattachDeviceFields(value, from) {
+  if (!SEPARATE_DEVICE_FIELDS) return value;
+  IDENTITY_STORE.DEVICE_FIELDS.forEach(field => { if (from[field] !== undefined) value[field] = from[field]; });
+  return value;
+}
+// Apparaatvelden horen in samenThuisDataV2, ook als de huishoudgegevens elders staan. Alleen deze velden worden daar
+// bijgewerkt; de rest van samenThuisDataV2 (bijv. gegevens in quarantaine) blijft ongewijzigd.
+const deviceGuard = SEPARATE_DEVICE_FIELDS && window.SamenThuisTabSync && window.SamenThuisHouseholdSync
+  ? window.SamenThuisTabSync.createDataGuard({ storage: localStorage, key: IDENTITY_STORE.LEGACY_KEY, merge3: window.SamenThuisHouseholdSync.merge3 })
+  : null;
+function writeDeviceFields() {
+  if (!SEPARATE_DEVICE_FIELDS) return;
+  let stored = {};
+  try { stored = JSON.parse(localStorage.getItem(IDENTITY_STORE.LEGACY_KEY) || '{}') || {}; } catch (_) { return; } // onleesbaar: niet aanraken
+  const next = { ...stored };
+  let changed = false;
+  IDENTITY_STORE.DEVICE_FIELDS.forEach(field => {
+    if (data[field] !== undefined && JSON.stringify(data[field]) !== JSON.stringify(stored[field])) { next[field] = data[field]; changed = true; }
+  });
+  if (!changed) return;
+  let value = next;
+  if (deviceGuard) {
+    const result = deviceGuard.prepareWrite(next);
+    if (result.external) { value = result.value; IDENTITY_STORE.DEVICE_FIELDS.forEach(field => { if (value[field] !== undefined) data[field] = value[field]; }); }
+  }
+  const text = deviceGuard ? deviceGuard.serialize(value) : JSON.stringify(value);
+  localStorage.setItem(IDENTITY_STORE.LEGACY_KEY, text);
+  if (deviceGuard) deviceGuard.commit(text);
+}
+
+// Enige plek die de actieve dataset schrijft. Gooit (zoals voorheen setItem) bij een volle opslag.
+// Vergrendeld (geen identiteit) of tijdens een identiteitswissel: niets schrijven.
+function writeDataToStorage() {
+  if (DATA_LOCKED || identitySwitching) return false;
+  if (dataGuard) {
+    const result = dataGuard.prepareWrite(datasetView(data));
+    if (result.external) { data = reattachDeviceFields(result.value, data); reportTabConflict(result); }
+  }
+  const payload = datasetView(data);
+  const text = dataGuard ? dataGuard.serialize(payload) : JSON.stringify(payload);
+  localStorage.setItem(STORAGE_KEY, text);
+  if (dataGuard) dataGuard.commit(text);
+  writeDeviceFields();
+  return true;
+}
+
+// ---------- Identiteit van deze paginalading ----------
+function identityLockMessage() {
+  if (ACTIVE_IDENTITY.reason === 'migration-failed') return 'Je gegevens konden niet veilig aan dit account worden gekoppeld. Er is niets gewijzigd; herlaad de app of maak ruimte vrij.';
+  return navigator.onLine
+    ? 'De gegevens van dit account worden geopend zodra het huishouden is bepaald. Tot dan wordt er niets opgeslagen.'
+    : 'Offline: het huishouden van dit account is nog onbekend, dus de gegevens kunnen niet veilig worden geopend. Er wordt niets opgeslagen.';
+}
+window.SamenThuisIdentity = {
+  current: () => ACTIVE_IDENTITY,
+  keys: () => IDENTITY_KEYS,
+  locked: () => DATA_LOCKED,
+  switching: () => identitySwitching,
+  migration: () => IDENTITY_MIGRATION,
+  retained: () => visibleRetained(),
+  // Na een wijziging van sessie of accountinstellingen: andere identiteit → niets meer schrijven en opnieuw laden.
+  reevaluate() {
+    if (identitySwitching) return true;
+    const next = IDENTITY_STORE.resolve(localStorage);
+    if (next.mode === ACTIVE_IDENTITY.mode && next.key === ACTIVE_IDENTITY.key && next.accountId === ACTIVE_IDENTITY.accountId) return false;
+    identitySwitching = true;
+    try { clearTimeout(syncTimer); } catch (_) {}
+    setTimeout(() => location.reload(), 0);
+    return true;
+  }
+};
+
+// Een ander tabblad heeft opgeslagen: samenvoegen in geheugen en opnieuw tekenen (niet tijdens typen in een veld).
+let tabRenderPending = false;
+function renderAfterTabChange() {
+  const active = document.activeElement;
+  const typing = active && active.closest && active.closest('#view') && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName);
+  if (typing) {
+    if (tabRenderPending) return;
+    tabRenderPending = true;
+    active.addEventListener('blur', () => { tabRenderPending = false; renderAfterTabChange(); }, { once: true });
+    return;
+  }
+  try { render(); } catch (_) {}
+}
+window.addEventListener('storage', event => {
+  if (event.storageArea !== localStorage) return;
+  // Ander tabblad heeft account, huishouden of migratiestatus gewijzigd: opnieuw laden met de juiste dataset.
+  if ([IDENTITY_STORE.AUTH_KEY, IDENTITY_STORE.CFG_KEY, IDENTITY_STORE.JOURNAL_KEY].includes(event.key)) { window.SamenThuisIdentity?.reevaluate(); return; }
+  // Huishoudcode van deze identiteit in een ander tabblad gewijzigd: opnieuw inlezen (nooit die van een andere identiteit).
+  if (event.key === IDENTITY_STORE.CODES_KEY) { syncConfig = loadSyncConfig(); return; }
+  if (deviceGuard && event.key === IDENTITY_STORE.LEGACY_KEY && event.newValue != null) {
+    let known = {}; try { known = JSON.parse(deviceGuard.known() || '{}') || {}; } catch (_) {}
+    const current = { ...known }; IDENTITY_STORE.DEVICE_FIELDS.forEach(field => { if (data[field] !== undefined) current[field] = data[field]; });
+    const r = deviceGuard.absorb(event.newValue, current);
+    if (r.external) { IDENTITY_STORE.DEVICE_FIELDS.forEach(field => { if (r.value[field] !== undefined) data[field] = r.value[field]; }); renderAfterTabChange(); }
+    return;
+  }
+  if (!dataGuard || event.key !== STORAGE_KEY || event.newValue == null || DATA_LOCKED || identitySwitching) return;
+  const result = dataGuard.absorb(event.newValue, datasetView(data));
+  if (!result.external) return;
+  data = reattachDeviceFields(result.value, data);
+  reportTabConflict(result);
+  // Het andere tabblad schreef zonder onze laatste wijziging te zien: samengevoegd resultaat terugschrijven.
+  if (result.needsWrite && !storageProtected) { try { writeDataToStorage(); } catch (_) {} }
+  renderAfterTabChange();
+});
+
 let syncConfig = loadSyncConfig();
 let current = 'today';
 let householdWeekStart = startOfWeek(todayISO());
@@ -371,6 +660,10 @@ function formConfig(view) {
 }
 
 function save({ touch = true, sync = true } = {}) {
+  if (DATA_LOCKED || identitySwitching) {
+    if (DATA_LOCKED) toast(identityLockMessage());
+    return false;
+  }
   migrateLegacyFreezerStock(data);
   if (storageProtected) {
     toast('Opslaan is geblokkeerd: beschadigde gegevens konden niet veilig worden bewaard. Maak een back-up en maak ruimte vrij.');
@@ -378,11 +671,12 @@ function save({ touch = true, sync = true } = {}) {
   }
   if (touch) data.meta.updatedAt = new Date().toISOString();
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    writeDataToStorage();
   } catch (error) {
     // Opslag vol: eerst de (herbouwbare) basiskopieën voor automatisch samenvoegen opruimen en opnieuw proberen.
-    ['samenThuisSyncBaseV1', 'samenThuisAccountSyncBaseValuesV1', 'samenThuisPreMergeBackup'].forEach(key => { try { localStorage.removeItem(key); } catch (_) {} });
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    ['samenThuisSyncBaseV1', 'samenThuisAccountSyncBaseValuesV1', 'samenThuisSyncMetaFallbackV1', 'samenThuisPreMergeBackup'].forEach(key => { try { localStorage.removeItem(key); } catch (_) {} });
+    try { writeDataToStorage(); }
+    catch (_) { toast('Opslaan mislukt: de opslag van dit apparaat is vol. Maak een back-up en maak ruimte vrij.'); return false; }
   }
   const saveState = document.querySelector('#saveState');
   if (saveState) {
@@ -424,6 +718,17 @@ function render() {
   document.querySelector('#view').innerHTML = renders[current]();
   updateSyncBadge();
 }
+// Vergrendeld: zichtbare melding boven elke pagina (er wordt niets opgeslagen of gesynchroniseerd).
+(() => {
+  if (!DATA_LOCKED) return;
+  const baseRenderLocked = render;
+  render = function (...args) {
+    const result = baseRenderLocked.apply(this, args);
+    const view = document.querySelector('#view');
+    if (view && !view.querySelector('[data-identity-locked]')) view.insertAdjacentHTML('afterbegin', `<section class="card" data-identity-locked role="alert"><p class="eyebrow">GEGEVENS NOG NIET GEOPEND</p><p>${esc(identityLockMessage())}</p></section>`);
+    return result;
+  };
+})();
 
 const empty = message => `<div class="empty">${esc(message)}</div>`;
 function calendarById(calendarId) {
@@ -711,12 +1016,13 @@ function renderSettings() {
   const configured = syncConfigured();
   return `<div class="settings-grid">
     <section class="card settings-card"><div class="card-head"><div><p class="eyebrow">Apparaten</p><h2>Versleutelde synchronisatie</h2></div><span class="tag ${configured ? 'green' : ''}">${configured ? 'Verbonden' : 'Code invullen'}</span></div><p>Vul op elk apparaat dezelfde geheime huishoudcode in. De overige verbindingsgegevens zijn al ingesteld. De oude code-sync is in deze client gepauzeerd; oude servertoegang blijft bestaan tot DB-1.</p>
-      <form id="syncForm" class="form-grid compact-form"><div class="field"><label for="syncHouseholdCode">Geheime huishoudcode (minimaal 12 tekens)</label><input id="syncHouseholdCode" name="householdCode" type="password" value="${esc(syncConfig.householdCode)}" minlength="12" autocomplete="off" placeholder="Jullie gedeelde geheime code"></div><div class="button-row"><button class="primary" type="submit">Bewaren en verbinden</button>${configured ? '<button class="secondary" type="button" data-sync-now>Nu synchroniseren</button>' : ''}</div></form>
+      <form id="syncForm" class="form-grid compact-form"><div class="field"><label for="syncHouseholdCode">${ACTIVE_IDENTITY.mode === 'account' ? 'Geheime huishoudcode van dit huishouden (minimaal 12 tekens)' : 'Geheime huishoudcode (minimaal 12 tekens)'}</label><input id="syncHouseholdCode" name="householdCode" type="password" value="${esc(syncConfig.householdCode)}" minlength="12" autocomplete="off" placeholder="Jullie gedeelde geheime code"></div><div class="button-row"><button class="primary" type="submit">Bewaren en verbinden</button>${configured ? '<button class="secondary" type="button" data-sync-now>Nu synchroniseren</button>' : ''}</div></form>
     </section>
     ${renderCalendarSettings()}
     ${renderSyncConflictCard()}
-    <section class="card settings-card"><div class="card-head"><div><p class="eyebrow">Gegevens</p><h2>Back-up</h2></div></div><p>Maak een JSON-back-up of herstel een eerdere back-up. SportCoach-gegevens worden niet in deze JSON opgenomen of erdoor hersteld. Een afzonderlijke veilige SportCoach-export is nog niet beschikbaar. Herstellen vervangt de overige gegevens op dit apparaat; Importeren voegt die samen. De synchronisatiecode en sleutel worden niet in de back-up gezet.</p><div class="button-row"><button class="secondary" data-action="backup">Back-up maken</button><button class="secondary" data-action="restore">Back-up herstellen (vervangen)</button></div></section>
+    <section class="card settings-card"><div class="card-head"><div><p class="eyebrow">Gegevens</p><h2>Back-up</h2></div></div><p>Maak een JSON-back-up of herstel een eerdere back-up. SportCoach-gegevens en apparaatinstellingen (zoals de weerlocatie) worden niet in deze JSON opgenomen of erdoor hersteld. Een back-up wordt alleen teruggezet in het account en huishouden waar hij vandaan komt. Een afzonderlijke veilige SportCoach-export is nog niet beschikbaar. Herstellen vervangt de overige gegevens op dit apparaat; Importeren voegt die samen. De synchronisatiecode en sleutel worden niet in de back-up gezet.</p><div class="button-row"><button class="secondary" data-action="backup">Back-up maken</button><button class="secondary" data-action="restore">Back-up herstellen (vervangen)</button></div></section>
     ${recoveryCard()}
+    ${retainedDataCard()}
     <section class="card settings-card"><div class="card-head"><div><p class="eyebrow">Apple Opdracht</p><h2>Eenvoudig tekstformaat</h2></div></div><p>Laat de Opdracht per afspraak één regel maken:</p><pre><code>Agendanaam | 2026-09-04 | 09:00 | Titel</code></pre><p>De persoon volgt uit de agenda. Een vijfde veld met Kees, Daphne of Samen is optioneel en gaat voor de agendakeuze. Een zesde veld mag de eindtijd bevatten. Bij onbekende namen kies je de persoon één keer.</p><p>Dit is een import, geen tweerichtingskoppeling. Verplaatsen of verwijderen in Apple Agenda wordt niet automatisch overgenomen.</p></section>
   </div>`;
 }
@@ -1405,6 +1711,10 @@ function downloadBackup(file) {
 async function exportBackup() {
   const backupData = { ...data };
   delete backupData.sportCoach;
+  delete backupData.settings; // apparaatinstellingen horen niet in een huishoudback-up (worden bij herstel ook genegeerd)
+  // Herkomst vastleggen: een back-up van een account wordt nooit automatisch aan een ander account gekoppeld.
+  backupData.meta = { ...(data.meta || {}), exportIdentity: ACTIVE_IDENTITY.mode === 'account' ? { mode: 'account', accountId: ACTIVE_IDENTITY.accountId, householdId: ACTIVE_IDENTITY.householdId } : { mode: 'local' } };
+  delete backupData.meta.__tabRev;
   const file = new File([JSON.stringify(backupData, null, 2)], `samen-thuis-backup-${todayISO()}.json`, { type: 'application/json' });
   const isAppleMobile = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   if (isAppleMobile && navigator.share && navigator.canShare?.({ files: [file] })) {
@@ -1424,24 +1734,56 @@ async function importBackup(file) {
     const text = await file.text();
     try { SamenThuisCore.restoreBackupText({ getItem: () => null, setItem() {}, removeItem() {} }, recoveryOptions(), text); }
     catch { toast('Dit bestand is geen geldige back-up'); return; }
+    const allowed = IDENTITY_STORE.backupAllowed(text, ACTIVE_IDENTITY);
+    if (!allowed.ok) {
+      toast(backupRefusal(allowed.reason));
+      return;
+    }
+    if (identitySwitching) return;
     if (storageProtected) { toast('Opslaan is geblokkeerd; back-up niet geladen. Maak ruimte vrij.'); return; }
+    // Alleen toegestane onderdelen herstellen. In een account is een onbekend onderdeel al geweigerd; in het lokale
+    // profiel gaan onbekende onderdelen eerst naar een aparte quarantaine (niet geladen, niet gesynchroniseerd).
+    const { known, unknown } = IDENTITY_STORE.splitBackup(JSON.parse(text));
+    let quarantined = null;
+    try { quarantined = IDENTITY_STORE.quarantineUnknown(localStorage, unknown, { source: file.name || 'back-up' }); }
+    catch { toast('Geen ruimte om onbekende onderdelen apart te bewaren; back-up niet geladen. Er is niets gewijzigd.'); return; }
     // Herstelvlag en kopie van de huidige gegevens worden vóór het overschrijven vastgelegd.
     try {
-      data = SamenThuisCore.restoreBackupText(localStorage, { ...recoveryOptions(), holdKey: RESTORE_HOLD_KEY }, text);
+      data = SamenThuisCore.restoreBackupText(localStorage, { ...recoveryOptions(), holdKey: RESTORE_HOLD_KEY }, JSON.stringify(known));
+      if (data.meta) delete data.meta.exportIdentity;
     } catch {
       toast('Back-up laden mislukt; je huidige gegevens zijn ongewijzigd');
       return;
     }
     save({ touch: false, sync: false });
     render();
-    toast(syncConfigured() ? 'Back-up hersteld · bij de volgende synchronisatie kies je zelf welke versie geldt' : 'Back-up hersteld');
+    toast((syncConfigured() ? 'Back-up hersteld · bij de volgende synchronisatie kies je zelf welke versie geldt' : 'Back-up hersteld')
+      + (quarantined ? ` · onbekende onderdelen (${Object.keys(unknown).join(', ')}) apart bewaard, niet geladen` : ''));
   } catch {
     toast('Dit bestand is geen geldige back-up');
   }
 }
 
+function backupRefusal(reason) {
+  if (reason === 'locked') return identityLockMessage();
+  if (reason === 'version') return 'Deze back-up komt uit een nieuwere of onbekende versie van de app en wordt niet teruggezet. Er is niets gewijzigd.';
+  if (reason === 'schema') return 'Deze back-up heeft een onverwachte opbouw en wordt niet teruggezet. Er is niets gewijzigd.';
+  if (reason === 'unknown-sections') return 'Deze back-up bevat onderdelen die niet in een account mogen worden hersteld. Er is niets gewijzigd.';
+  if (reason === 'unverified') return 'Van deze back-up staat niet vast bij welk account en huishouden hij hoort. Hij wordt daarom niet in dit account teruggezet. Zet hem terug zonder accountsync (lokaal profiel) en koppel daarna bewust. Er is niets gewijzigd.';
+  return 'Deze back-up hoort bij een ander account of huishouden en wordt hier niet teruggezet. Meld je aan met dat account. Er is niets gewijzigd.';
+}
+
 function syncConfigured() {
-  return Boolean(syncConfig.projectUrl && syncConfig.anonKey && syncConfig.householdCode?.length >= 12);
+  // Vergrendeld (huishouden nog onbekend): de accountronde mag het huishouden bepalen; die verstuurt niets vóór de
+  // identiteitscontrole en de controle van de huishoudcode.
+  if (ACTIVE_IDENTITY.mode === 'locked') return Boolean(syncConfig.projectUrl && syncConfig.anonKey);
+  return Boolean(syncConfig.projectUrl && syncConfig.anonKey && (syncConfig.householdCode?.length >= 12 || (ACTIVE_IDENTITY.mode === 'account' && syncConfig.codeCandidate)));
+}
+// Synchronisatie-instellingen bewaren. In een account nooit in de globale sleutel (daar staat de code van het lokale
+// profiel); de code staat per account + huishouden en de laatste synchronisatie in de versie-administratie.
+function persistSyncConfig() {
+  if (ACTIVE_IDENTITY.mode !== 'local') return;
+  localStorage.setItem(SYNC_KEY, JSON.stringify({ projectUrl: syncConfig.projectUrl, anonKey: syncConfig.anonKey, householdCode: syncConfig.householdCode, lastSyncedAt: syncConfig.lastSyncedAt }));
 }
 
 function updateSyncBadge(message) {
@@ -1522,9 +1864,16 @@ function handleSyncForm(event) {
   const fields = Object.fromEntries(new FormData(event.target));
   const next = { projectUrl: DEFAULT_PROJECT_URL, anonKey: DEFAULT_PUBLISHABLE_KEY, householdCode: String(fields.householdCode || '').trim() };
   if (next.householdCode.length < 12) return toast('Kies een huishoudcode van minimaal 12 tekens');
+  if (DATA_LOCKED || identitySwitching) return toast(identityLockMessage());
   const changedHousehold = next.projectUrl !== syncConfig.projectUrl || next.anonKey !== syncConfig.anonKey || next.householdCode !== syncConfig.householdCode;
-  syncConfig = { ...syncConfig, ...next, lastSyncedAt: changedHousehold ? '' : syncConfig.lastSyncedAt };
-  localStorage.setItem(SYNC_KEY, JSON.stringify(syncConfig));
+  if (ACTIVE_IDENTITY.mode === 'account') {
+    // Expliciet ingevuld voor dit account + huishouden. Bij bestaande cloudgegevens wordt hij bij de eerste ronde
+    // gecontroleerd (ontsleutelen); een verkeerde code verstuurt niets.
+    const kept = IDENTITY_STORE.readCode(localStorage, ACTIVE_IDENTITY);
+    if (!kept || kept.code !== next.householdCode) IDENTITY_STORE.setCode(localStorage, ACTIVE_IDENTITY, next.householdCode, { source: 'entered', verified: false });
+  }
+  syncConfig = { ...syncConfig, ...next, codeCandidate: false, lastSyncedAt: changedHousehold ? '' : syncConfig.lastSyncedAt };
+  persistSyncConfig();
   render();
   syncNow({ manual: true });
 }
@@ -1790,7 +2139,7 @@ if (syncConfigured()) syncNow();
       section.updatedAt ||= section.createdAt;
     });
     (data.trips || []).forEach(normalisePriority);
-    if (persist) localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    if (persist) writeDataToStorage();
   }
 
   function syncTimeLabel(value) {
@@ -2259,7 +2608,7 @@ if (syncConfigured()) syncNow();
     if (current !== 'trips') return;
     setTimeout(() => {
       normaliseTravelData();
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+      writeDataToStorage();
       if (syncConfigured()) scheduleSync();
     }, 0);
   });
@@ -5993,12 +6342,25 @@ function fuelMate243(obj){
 }
 function sigImport246(x,kind=''){if(!x||typeof x!=='object')return String(x);if(kind==='cars')return plateImport243(x.plate||'')||String(x.id||'');if(kind==='fuelEntries')return [x.carId||'',String(x.date||'').slice(0,10),num243(x.odometer),num243(x.liters||x.volume),num243(x.total||x.totalCost)].join('|');if(kind==='planning')return [x.title||'',x.date||'',x.time||'',x.person||''].join('|').toLowerCase();return String(x.id||[x.title||x.name||'',x.date||x.due||'',x.category||''].join('|')).toLowerCase()}
 function mergeArray246(a,b,kind=''){return SamenThuisCore.mergeUnique(a,b,x=>sigImport246(x,kind))}
+// Opdracht 7 (vervolg): samenvoegen van een volledige back-up volgt dezelfde regels als herstellen: herkomst per
+// identiteit, schema/versie, strikte allowlist in een account, onbekende onderdelen lokaal in quarantaine, nooit
+// apparaatinstellingen, SportCoach of meta (herkomst) uit het bestand.
+function mergeBackupChecked(text){
+  if(DATA_LOCKED||identitySwitching)throw new Error(identityLockMessage());
+  const allowed=IDENTITY_STORE.backupAllowed(text,ACTIVE_IDENTITY);
+  if(!allowed.ok)throw new Error(backupRefusal(allowed.reason));
+  const { known, unknown }=IDENTITY_STORE.splitBackup(JSON.parse(text));
+  delete known.meta;
+  const quarantined=IDENTITY_STORE.quarantineUnknown(localStorage,unknown,{source:'samenvoegen'});
+  mergeBackup246(known);save();render();
+  toast('Back-up samengevoegd · bestaande gegevens behouden'+(quarantined?` · onbekende onderdelen (${Object.keys(unknown).join(', ')}) apart bewaard, niet geladen`:''));
+}
 function mergeBackup246(raw){const incoming=typeof migrateData==='function'?migrateData(raw):raw;if(!incoming||typeof incoming!=='object')throw new Error('Ongeldige Samen Thuis back-up');const keys=['planning','meals','groceries','chores','stock','trips','ideas','home','freezer','cars','fuelEntries'];keys.forEach(k=>{if(Array.isArray(incoming[k]))data[k]=mergeArray246(data[k],incoming[k],k)});Object.entries(incoming).forEach(([k,v])=>{if(keys.includes(k)||k==='sportCoach'||v==null)return;if(v&&typeof v==='object'&&!Array.isArray(v)){data[k]={...v,...((data[k]&&typeof data[k]==='object'&&!Array.isArray(data[k]))?data[k]:{})}}else if(data[k]===undefined||data[k]===null||data[k]==='')data[k]=v})}
 async function runImport243(){
  if(!importFile243)return toast('Kies eerst een bestand');
  try{
   const ext=importFile243.name.split('.').pop().toLowerCase(), text=(ext==='xlsx'||ext==='xls')?'':await importFile243.text();
-  if(importTarget243==='backup'){if(ext!=='json')throw new Error('Voor een volledige back-up is JSON nodig');mergeBackup246(JSON.parse(text));save();render();toast('Back-up samengevoegd · bestaande gegevens behouden');return}
+  if(importTarget243==='backup'){if(ext!=='json')throw new Error('Voor een volledige back-up is JSON nodig');mergeBackupChecked(text);return}
   if(importTarget243==='budget'){const o=JSON.parse(text);data.budgetV23={...o,...(data.budgetV23||{})};save();render();toast('Budget samengevoegd · bestaande waarden behouden');return}
   if(importTarget243==='auto'){
    if(ext==='json'){fuelMate243(JSON.parse(text))}
@@ -6367,7 +6729,11 @@ document.addEventListener('click', event => {
         other: householdProfiles25.map(p => window.SamenThuisProfile25.displayName(p)).find(Boolean) || 'Huisgenoot'
       }),
       syncMirrors: () => syncGoalMirrors25(ledgerState25()),
-      applyDistributions(rows) {
+      // Alleen serververdelingen van het huishouden van de actieve dataset toepassen (nooit in een lokaal profiel of
+      // in de dataset van een ander huishouden).
+      applyDistributions(rows, householdId) {
+        const id = window.SamenThuisIdentity?.current();
+        if (!id || id.mode !== 'account' || !householdId || id.householdId !== householdId) return false;
         const ledger = ledgerState25(); let changed = false;
         const pots = ledgerPots25();
         const byMonth = {};
@@ -7554,9 +7920,12 @@ document.addEventListener('click', event => {
     localStorage.setItem(personalPreferencesCore25.storageKey(userId), JSON.stringify(preferences));
     return preferences;
   }
-  async function writePersonalPreferences25(preferences) {
+  // expectedUserId: het account waarvoor de voorkeuren zijn samengesteld. Is de sessie intussen van een ander account
+  // (wissel vóór de herlaadbeurt), dan wordt er niets verzonden: nooit voorkeuren van A in de rij van B (opdracht 7).
+  async function writePersonalPreferences25(preferences, expectedUserId) {
     const session = await readySession25();
     if (!session?.user?.id) throw new Error('Meld je opnieuw aan om voorkeuren te synchroniseren.');
+    if (!expectedUserId || session.user.id !== expectedUserId || window.SamenThuisIdentity?.switching()) throw new Error('Account gewijzigd; voorkeuren van het vorige account zijn niet verzonden.');
     personalWriteInFlight25 = true;
     try {
       const response = await fetch(`${authBase25()}/rest/v1/personal_preferences?on_conflict=user_id`, {
@@ -7585,12 +7954,14 @@ document.addEventListener('click', event => {
       throw new Error(error.message || `Voorkeuren ophalen mislukt (${response.status}); controleer de persoonlijke-voorkeurenmigratie.`);
     }
     const rows = await response.json();
+    // Laat antwoord na een accountwissel: niet toepassen (opdracht 7).
+    if (authSession25?.user?.id !== session.user.id || window.SamenThuisIdentity?.switching()) return;
     const saved = Array.isArray(rows) ? rows[0] : null;
     if (saved) setPersonalPreferences25({ ui: saved.ui_config, dashboard: saved.dashboard_config, profile: saved.profile_config });
     else {
       const local = localAccountPreferences25(session.user.id);
       setPersonalPreferences25(local || { ui: uiDefault25(), dashboard: dashboardCore?.defaults(DASH_DEFAULTS) });
-      await writePersonalPreferences25(saveLocalAccountPreferences25(session.user.id));
+      await writePersonalPreferences25(saveLocalAccountPreferences25(session.user.id), session.user.id);
     }
     personalPreferencesReady25 = true;
     await loadHouseholdProfiles25();
@@ -7610,6 +7981,8 @@ document.addEventListener('click', event => {
       throw new Error(error.message || `Profielen van je huishouden ophalen mislukt (${response.status}); controleer de profielmigratie.`);
     }
     const rows = await response.json();
+    // Laat antwoord na een accountwissel: niet toepassen (profielen van het vorige huishouden).
+    if (authSession25?.user?.id !== session.user.id || window.SamenThuisIdentity?.switching()) return;
     householdProfiles25 = Array.isArray(rows) ? rows.map(row => ({
       userId: row.user_id, ...personalPreferencesCore25.normalizeProfile(row.profile_config)
     })) : [];
@@ -7630,6 +8003,8 @@ document.addEventListener('click', event => {
       } else {
         authSession25 = { ...result, expires_at: Date.now() + Number(result.expires_in || 3600) * 1000 };
         localStorage.setItem(AUTH_KEY25, JSON.stringify(authSession25));
+        // Ander account met accountsync: andere dataset → opnieuw laden (niets van het vorige account blijft actief).
+        if (window.SamenThuisIdentity?.reevaluate()) return;
         personalPreferencesReady25 = false;
         await loadPersonalPreferences25();
       }
@@ -7649,6 +8024,7 @@ document.addEventListener('click', event => {
     };
     localStorage.setItem(AUTH_KEY25, JSON.stringify(authSession25));
     history.replaceState({}, '', `${location.pathname}${location.search}`);
+    if (window.SamenThuisIdentity?.reevaluate()) return true;
     await loadPersonalPreferences25();
     return true;
   }
@@ -7661,6 +8037,8 @@ document.addEventListener('click', event => {
     authSession25 = null; personalPreferencesReady25 = false; householdProfiles25 = [];
     localStorage.removeItem(AUTH_KEY25);
     authNotice25 = 'Je bent afgemeld. Lokale voorkeuren blijven op dit apparaat staan.';
+    // Accountgegevens zijn niet meer actief: het lokale profiel laden (de accountgegevens blijven apart bewaard).
+    if (window.SamenThuisIdentity?.reevaluate()) return;
     if (current === 'settings') render();
   }
   function personalSettings25() {
@@ -7688,7 +8066,8 @@ document.addEventListener('click', event => {
       if (authSession25?.user?.id) {
         clearTimeout(personalSaveTimer25);
         personalSaveTimer25 = null;
-        await writePersonalPreferences25(saveLocalAccountPreferences25(authSession25.user.id));
+        const userId = authSession25.user.id;
+        await writePersonalPreferences25(saveLocalAccountPreferences25(userId), userId);
       }
       this.refresh();
     },
@@ -7800,9 +8179,11 @@ document.addEventListener('click', event => {
   window.addEventListener('samenThuisPreferencesChange', () => {
     if (applyingRemotePreferences25 || !authSession25?.user?.id || !personalPreferencesReady25) return;
     clearTimeout(personalSaveTimer25);
+    const userId = authSession25.user.id; // voorkeuren gewijzigd onder dit account
     personalSaveTimer25 = setTimeout(async () => {
       personalSaveTimer25 = null;
-      try { await writePersonalPreferences25(saveLocalAccountPreferences25(authSession25.user.id)); }
+      if (authSession25?.user?.id !== userId) return; // intussen ander account: niets verzenden
+      try { await writePersonalPreferences25(saveLocalAccountPreferences25(userId), userId); }
       catch (error) {
         authNotice25 = error.message || 'Persoonlijke voorkeuren konden niet worden gesynchroniseerd.';
         toast(authNotice25);
