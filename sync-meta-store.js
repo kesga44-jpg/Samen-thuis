@@ -208,7 +208,27 @@
       putRecord: record => (record && (record.kind === 'tab' || record.kind === 'sync') ? deny() : store.putRecord(record)),
       // Een bestaand record van een andere identiteit wordt nooit overschreven of als 'afwezig' behandeld.
       updateRecord: (key, fn) => store.updateRecord(key, value => (hidden(value) ? undefined : fn(value))),
-      deleteRecord: (key, predicate) => store.deleteRecord(key, value => !!value && !hidden(value) && (!predicate || predicate(value)))
+      deleteRecord: (key, predicate) => store.deleteRecord(key, value => !!value && !hidden(value) && (!predicate || predicate(value))),
+      // Oude conflictregistraties zonder identiteit (tabbladconflicten van vóór opdracht 7 en financiële records
+      // 'legacy-unknown'): alleen in een lokale identiteit op te vragen, om te downloaden en daarna bewust op te ruimen.
+      // Open apparaatconflicten die de upload blokkeren (M1) horen hier niet bij: die worden per account opgelost.
+      async legacyConflicts() {
+        const c = cur();
+        if (!c.tab || c.slot) return [];
+        const tab = (await store.listRecords('tab')).filter(r => r.slot === 'local');
+        const fin = (await store.listRecords('finance')).filter(r => r.scope === 'legacy-unknown');
+        return [...tab, ...fin];
+      },
+      async discardLegacyConflicts(keys) {
+        const c = cur();
+        if (!c.tab || c.slot || !Array.isArray(keys)) return 0;
+        let n = 0;
+        for (const key of keys) {
+          const removed = await store.deleteRecord(key, v => (v.kind === 'tab' && v.slot === 'local') || (v.kind === 'finance' && v.scope === 'legacy-unknown'));
+          if (removed !== undefined) n++;
+        }
+        return n;
+      }
     };
   }
 

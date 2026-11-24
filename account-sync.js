@@ -146,21 +146,41 @@
       const uploads = window.SamenThuisSyncMeta.trackUploads(c, META, roundSlot, HS.classifyError, (step, error) => console.warn('Syncmetadata (' + step + ') niet bewaard', error));
       // Fail-closed vóór enig schrijven: leeg huishouden → alleen met een voor deze identiteit ingevulde of bewezen code;
       // bestaande gegevens → eerst aantonen dat de code ze ontsleutelt (anders wordt er niets verstuurd).
-      const tracked = { ...uploads, async readState(hid) {
-        const rows = await uploads.readState(hid);
-        const own = (rows || []).filter(r => r && r.section !== 'sportCoach');
-        if (!own.length) {
-          if (!mayCreate) throw codeError('Dit huishouden heeft nog geen gegevens in de cloud. Vul de huishoudcode van dit huishouden in voordat er iets wordt verstuurd. Er is niets verstuurd.');
-          return rows;
-        }
-        try { await decryptData(own[0].payload, roundCode); }
+      // Controlewaarde van de huishoudcode in de cloud (onderdeel 'keycheck', versleuteld met de code). Wie een leeg
+      // huishouden als eerste vult, zet die eerst met versie 0; wie tegelijk met een andere code begint, krijgt een
+      // versieconflict en daarna een ontsleutelfout op de controlewaarde, en verstuurt niets (geen gemengde codes).
+      // De controlewaarde gaat nooit naar de lokale gegevens.
+      const KEYCHECK = 'keycheck';
+      const verify = async rowsIn => {
+        const own = (rowsIn || []).filter(r => r && r.section !== 'sportCoach');
+        const probe = own.find(r => r.section === KEYCHECK) || own[0];
+        try { await decryptData(probe.payload, roundCode); }
         catch (_) { throw codeError(candidate ? 'De opgeslagen huishoudcode hoort niet bij dit huishouden. Vul de huishoudcode van dit huishouden in. Er is niets verstuurd.' : 'De huishoudcode past niet bij de gegevens van dit huishouden. Er is niets verstuurd of overschreven.'); }
         assertIdentity();
         // Bewezen: de code hoort bij dit huishouden. Een kandidaat wordt pas nu de code van deze identiteit.
         if (candidate) IDS.setCode(localStorage, ident, roundCode, { source: 'legacy-verified', verified: true });
         else IDS.markCodeVerified(localStorage, ident, roundCode);
         syncConfig.householdCode = roundCode; syncConfig.codeCandidate = false;
-        return rows;
+      };
+      const withoutKeycheck = rowsIn => (rowsIn || []).filter(r => r && r.section !== KEYCHECK);
+      const tracked = { ...uploads, async readState(hid) {
+        let rows = await uploads.readState(hid);
+        const own = (rows || []).filter(r => r && r.section !== 'sportCoach');
+        if (!own.length) {
+          if (!mayCreate) throw codeError('Dit huishouden heeft nog geen gegevens in de cloud. Vul de huishoudcode van dit huishouden in voordat er iets wordt verstuurd. Er is niets verstuurd.');
+          assertIdentity();
+          try { await c.putState(hid, KEYCHECK, await encrypt({ kind: 'samen-thuis-keycheck', v: 1 }), 0); }
+          catch (error) {
+            if (!(error && (error.code === '40001' || error.status === 409))) throw error;
+            rows = await uploads.readState(hid); // iemand anders was net eerder: diens code moet ook de onze zijn
+            await verify(rows);
+            return withoutKeycheck(rows);
+          }
+          IDS.markCodeVerified(localStorage, ident, roundCode);
+          return withoutKeycheck(rows);
+        }
+        await verify(rows);
+        return withoutKeycheck(rows);
       } };
       // Een financieel onderdeel wordt nooit via de algemene keuzeknoppen opgelost (alleen via een keuze per veld).
       const generalResolutions = Object.fromEntries(Object.entries(resolutions || {}).filter(([s]) => !isFinancialSection(s)));

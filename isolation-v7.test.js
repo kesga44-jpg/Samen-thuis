@@ -257,7 +257,8 @@ test('V15. bron: accountronde gebruikt de code van de identiteit, nooit ongecont
   const app = fs.readFileSync(__dirname + '/app.js', 'utf8');
   assert.doesNotMatch(acctSrc, /syncConfig\.householdCode \|\| ''\)\.trim\(\)/, 'geen globale code() meer');
   assert.match(acctSrc, /if \(!mayCreate\) throw codeError\('Dit huishouden heeft nog geen gegevens in de cloud/);
-  assert.match(acctSrc, /try \{ await decryptData\(own\[0\]\.payload, roundCode\); \}/);
+  assert.match(acctSrc, /const probe = own\.find\(r => r\.section === KEYCHECK\) \|\| own\[0\];\n\s*try \{ await decryptData\(probe\.payload, roundCode\); \}/);
+  assert.match(acctSrc, /await c\.putState\(hid, KEYCHECK, await encrypt\(/, 'controlewaarde vóór de eerste gegevens');
   assert.match(acctSrc, /if \(candidate\) IDS\.setCode\(localStorage, ident, roundCode, \{ source: 'legacy-verified', verified: true \}\);/);
   assert.doesNotMatch(acctSrc, /localStorage\.setItem\(SYNC_KEY/, 'accountronde schrijft de globale sleutel niet');
   assert.match(app, /if \(ACTIVE_IDENTITY\.mode !== 'local'\) return;\n  localStorage\.setItem\(SYNC_KEY/, 'globale code alleen vanuit het lokale profiel');
@@ -362,4 +363,75 @@ test('V20. bron: de app gebruikt de afgeschermde opslag en M1-koppeling', () => 
   assert.match(metaSrc, /sharedStore = createSyncMetaStore\(\{ indexedDB: idb, storage, hashValue: globalThis\.SamenThuisHouseholdSync\.hashValue, activeScope \}\);/);
   assert.match(acctSrc, /await classifyLegacyDevice\(\); \/\/ idempotent/);
   assert.match(acctSrc, /return !!r\.localKey && r\.localKey === id\.key;/, 'oude records zonder profiel nergens met waarden zichtbaar');
+});
+
+// ---------- Opruimen (op verzoek; download en bevestiging zitten in app.js) ----------
+test('V21. opruimen: alleen zichtbare items; SportCoach en instellingen blijven; grafsteen houdt eigenaarsbepaling gelijk', () => {
+  const st = boundDevice();
+  const v2 = JSON.parse(st.getItem(IS.LEGACY_KEY));
+  assert.deepEqual(IS.discardRetained(st, acct(B, H2), IS.LEGACY_KEY), { ok: false, reason: 'not-visible' }, 'B kan de kopie van A niet opruimen');
+  assert.deepEqual(IS.discardRetained(st, LOCAL_V3, IS.LEGACY_KEY, { recovery: true }), { ok: false, reason: 'not-visible' });
+  const r = IS.discardRetained(st, acct(A, H1), IS.LEGACY_KEY);
+  assert.deepEqual([r.ok, r.kept.sort()], [true, ['settings', 'sportCoach']]);
+  const after = JSON.parse(st.getItem(IS.LEGACY_KEY));
+  assert.equal(after.groceries, undefined); assert.equal(after.budgetV23, undefined);
+  assert.deepEqual([after.sportCoach, after.settings], [v2.sportCoach, v2.settings]);
+  assert.equal(JSON.parse(st.getItem(IS.JOURNAL_KEY)).v2, 'bound', 'migratiestatus ongewijzigd');
+  assert.deepEqual(IS.retainedFor(st, acct(A, H1)), []);
+  assert.ok(st.getItem(IS.accountKey(A, H1)), 'de eigen dataset van A blijft onaangetast');
+  // Archief: verwijderd, grafsteen blijft meetellen voor M1.
+  const st2 = memoryStorage();
+  const at = '2026-11-10T12:00:00.000Z', archive = `${IS.V3}|local-archive|${Date.parse('2026-11-12T00:00:00.000Z')}`;
+  st2.setItem(IS.JOURNAL_KEY, JSON.stringify({ v2: 'bound', target: IS.accountKey(A, H1), at, archives: { [archive]: IS.accountKey(B, H2) } }));
+  st2.setItem(archive, JSON.stringify({ groceries: [{ id: 'arch' }] }));
+  const ownerBefore = IS.legacyRecordOwner(st2, '2026-11-11T00:00:00.000Z');
+  assert.equal(IS.discardRetained(st2, acct(A, H1), archive).ok, false, 'archief van B niet door A');
+  assert.equal(IS.discardRetained(st2, acct(B, H2), archive).ok, true);
+  assert.equal(st2.getItem(archive), null);
+  assert.deepEqual(IS.legacyRecordOwner(st2, '2026-11-11T00:00:00.000Z'), ownerBefore, 'eigenaarsbepaling onveranderd na opruimen');
+  // Quarantaine alleen in het lokale profiel met herstelmodus.
+  const q = IS.quarantineUnknown(st2, { evil: 1 });
+  assert.equal(IS.discardRetained(st2, LOCAL_V3, q).ok, false, 'zonder herstelmodus niet');
+  assert.equal(IS.discardRetained(st2, acct(B, H2), q, { recovery: true }).ok, false, 'nooit vanuit een account');
+  assert.equal(IS.discardRetained(st2, LOCAL_V3, q, { recovery: true }).ok, true);
+  const app = fs.readFileSync(__dirname + '/app.js', 'utf8');
+  const handler = app.slice(app.indexOf("const btn = event.target.closest('[data-discard-retained]')"), app.indexOf("const meta = window.SamenThuisSyncMeta?.shared();\n  if (!meta?.legacyConflicts"));
+  assert.ok(handler.indexOf('downloadRetainedItem(item)') < handler.indexOf('confirm(') && handler.indexOf('confirm(') < handler.indexOf('discardRetained('), 'eerst download, dan bevestiging, dan pas verwijderen');
+});
+
+test('V22. oude conflictregistraties: alleen in een lokale identiteit op te vragen en op te ruimen; M1-blokkades niet', async () => {
+  const { meta, raw, as } = guardedPair();
+  await raw.recordTabConflict({ path: 'oud', section: 'groceries', kept: 1, other: 'oud-geheim' });
+  await raw.putRecord({ key: 'fin|legacy-unknown|budget', slot: 'legacy-unknown', scope: 'legacy-unknown', kind: 'finance', section: 'budget', status: 'open', rev: 1 });
+  await raw.putRecord({ key: 'fin|device|budgetV23', slot: 'device', scope: 'device', kind: 'finance', section: 'budgetV23', status: 'open', rev: 1, ownerUnknown: true });
+  assert.deepEqual(await meta.legacyConflicts(), [], 'account: niets');
+  assert.equal(await meta.discardLegacyConflicts(['fin|legacy-unknown|budget']), 0);
+  as(null);
+  assert.deepEqual(await meta.legacyConflicts(), []);
+  const local = SM.createSyncMetaStore({ indexedDB: fakeIndexedDB(), storage: memoryStorage(), hashValue: HS.hashValue, activeScope: () => ({ tab: IS.LOCAL_V3, slot: null }) });
+  await local.putRecord({ key: 'fin|legacy-unknown|budget', slot: 'legacy-unknown', scope: 'legacy-unknown', kind: 'finance', section: 'budget', status: 'open', rev: 1 });
+  await local.putRecord({ key: 'fin|device|budgetV23', slot: 'device', scope: 'device', kind: 'finance', section: 'budgetV23', status: 'open', rev: 1, ownerUnknown: true });
+  const found = await local.legacyConflicts();
+  assert.deepEqual(found.map(r => r.key), ['fin|legacy-unknown|budget'], 'M1-blokkade niet in de opruimlijst');
+  assert.equal(await local.discardLegacyConflicts([...found.map(r => r.key), 'fin|device|budgetV23']), 1);
+  assert.ok(await local.getRecord('fin|device|budgetV23'), 'blokkerend apparaatconflict blijft staan');
+  assert.equal((await raw.listRecords('finance')).length, 2, 'andere opslag ongewijzigd');
+});
+
+// ---------- Bewaking van de allowlist ----------
+test('V23. allowlist dekt elk onderdeel dat de app zelf schrijft (nieuwe module → eerst ACCOUNT_SECTIONS bijwerken)', () => {
+  const html = fs.readFileSync(__dirname + '/index.html', 'utf8');
+  const files = [...html.matchAll(/src="\.?\/?([^"?]+\.js)/g)].map(m => m[1]).filter(f => fs.existsSync(__dirname + '/' + f));
+  assert.ok(files.includes('app.js') && files.length > 20, 'scripts uit index.html gevonden');
+  const allowed = new Set([...IS.ACCOUNT_SECTIONS, 'meta', ...IS.DEVICE_FIELDS]);
+  const missing = [];
+  for (const f of files) {
+    const src = fs.readFileSync(__dirname + '/' + f, 'utf8');
+    for (const m of src.matchAll(/\bdata\.([A-Za-z_][A-Za-z0-9_]*)\s*(\|\|=|\?\?=|=(?!=|>))/g)) if (!allowed.has(m[1])) missing.push(`${m[1]} (${f})`);
+  }
+  // initialData (app.js) bevat de basisonderdelen.
+  const app = fs.readFileSync(__dirname + '/app.js', 'utf8');
+  const init = app.slice(app.indexOf('const initialData = {'), app.indexOf('\n};', app.indexOf('const initialData = {')));
+  for (const m of init.matchAll(/^  ([A-Za-z_][A-Za-z0-9_]*):/gm)) if (!allowed.has(m[1])) missing.push(`${m[1]} (initialData)`);
+  assert.deepEqual([...new Set(missing)], [], 'onderdelen die de app schrijft maar die een accountback-up zou weigeren');
 });

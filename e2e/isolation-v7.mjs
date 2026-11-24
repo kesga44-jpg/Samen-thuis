@@ -25,9 +25,11 @@ const A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', B = 'bbbbbbbb-bbbb-4bbb-8bbb-b
 const H1 = '11111111-1111-4111-8111-111111111111', H2 = '22222222-2222-4222-8222-222222222222';
 const MEMBER = { [A]: H1, [B]: H2 };
 const CODE1 = 'code-van-huishouden-1', CODE2 = 'code-van-huishouden-2';
-const cloud = { [H1]: new Map(), [H2]: new Map() };
+const H3 = '33333333-3333-4333-8333-333333333333', X = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', Y = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+MEMBER[X] = H3; MEMBER[Y] = H3;
+const cloud = { [H1]: new Map(), [H2]: new Map(), [H3]: new Map() };
 const prefs = new Map(); // user → { finance_config, updated_at }
-const ctl = { puts: [], prefReqs: [], hold: null, readDelayMs: 0 };
+const ctl = { puts: [], prefReqs: [], hold: null, readDelayMs: 0, revision: false };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 // Verzoek vasthouden tot de test het vrijgeeft (gesimuleerde trage verbinding). De server verwerkt een PATCH direct bij
 // ontvangst (zoals een echte server), alleen het antwoord wordt vertraagd.
@@ -59,13 +61,28 @@ async function supabase(route) {
     if (ctl.holdPut) { const g = ctl.holdPut; ctl.holdPut = null; g.arrived(); await g.p; }
     return json(200, v + 1);
   }
+  // Migratie 20261124 (finance_revision + save_finance_config) nagebootst; ctl.revision=false = database zonder migratie.
+  if (url.pathname.endsWith('/rest/v1/rpc/save_finance_config')) {
+    if (!ctl.revision) return json(404, { code: 'PGRST202', message: 'functie ontbreekt' });
+    const b = JSON.parse(req.postData() || '{}');
+    const entry = { method: 'RPC', user, target: user, at: Date.now() };
+    ctl.prefReqs.push(entry);
+    const row = prefs.get(user);
+    let out = [];
+    if (!row && b.p_expected_revision === 0) { prefs.set(user, { finance_config: b.p_config, updated_at: new Date().toISOString(), finance_revision: 1 }); entry.applied = true; }
+    else if (row && (row.finance_revision || 0) === b.p_expected_revision) { prefs.set(user, { ...row, finance_config: b.p_config, updated_at: new Date().toISOString(), finance_revision: (row.finance_revision || 0) + 1 }); entry.applied = true; }
+    if (entry.applied) { const r = prefs.get(user); out = [{ out_config: r.finance_config, out_revision: r.finance_revision, out_updated_at: r.updated_at }]; }
+    if (ctl.hold && ctl.hold.method === 'RPC') { const g = ctl.hold; ctl.hold = null; g.arrived(); await g.p; }
+    return json(200, out);
+  }
   if (url.pathname.endsWith('/rest/v1/personal_preferences')) {
+    if (!ctl.revision && req.method() === 'GET' && /finance_revision/.test(url.searchParams.get('select') || '')) return json(400, { code: '42703', message: 'column personal_preferences.finance_revision does not exist' });
     // RLS: uitsluitend de eigen rij (auth.uid() uit het token), ongeacht wat er in de query of payload staat.
     const target = (url.searchParams.get('user_id') || '').replace(/^eq\./, '');
     const entry = { method: req.method(), user, target, at: Date.now() };
     ctl.prefReqs.push(entry);
     let result;
-    if (req.method() === 'GET') result = [200, target === user && prefs.has(user) ? [prefs.get(user)] : []];
+    if (req.method() === 'GET') result = [200, target === user && prefs.has(user) ? [{ finance_revision: 0, ...prefs.get(user) }] : []];
     else if (req.method() === 'PATCH') {
       const body = JSON.parse(req.postData() || '{}');
       const row = prefs.get(user), expected = (url.searchParams.get('updated_at') || '').replace(/^eq\./, '');
@@ -296,7 +313,29 @@ try {
   await arrival3; await sessionSwitch(B); g.open(); await load3;
   const st3 = await page.evaluate(() => ({ loaded: SamenThuisFinanceUi.state.personal.loaded, pots: SamenThuisFinanceUi.state.personal.pots.map(p => p.name), status: SamenThuisFinanceUi.state.remote.status }));
   check('F3. laden vóór wissel, antwoord erna: privé-potjes van A niet geladen in de pagina', !st3.loaded && !st3.pots.includes('A-pot'), JSON.stringify(st3));
-  check('F0. vóór de wissel geladen: privé-potjes van A', loadedA.loaded && loadedA.pots.some(p => p.name === 'A-pot'));
+  check('F0. vóór de wissel geladen: privé-potjes van A (database zonder migratie: terugval op updated_at)', loadedA.loaded && loadedA.pots.some(p => p.name === 'A-pot'));
+  // ---- Met migratie 20261124 (nagebootst): serverrevisie, conflict bij verouderde revisie, vergrendeling ook op de RPC ----
+  ctl.revision = true;
+  await page.goto(base, { waitUntil: 'load' }); await page.waitForTimeout(700);
+  prefs.set(A, { finance_config: { pots: [{ id: 'p', name: 'A-pot' }], expenses: [] }, updated_at: '2026-11-01T10:00:00.000Z', finance_revision: 5 });
+  await setupUi(); await page.evaluate(() => SamenThuisFinanceUi.refresh(true));
+  const reqsR = ctl.prefReqs.length;
+  const saveR = await page.evaluate(async () => { const s = SamenThuisFinanceUi.state; s.personal.pots = [...s.personal.pots, { id: 'r1', name: 'Via revisie' }]; try { await SamenThuisFinanceUi.savePersonal(); return 'ok'; } catch (e) { return e.name + ': ' + e.message; } });
+  const sentR = ctl.prefReqs.slice(reqsR).map(r => r.method);
+  check('R1. met migratie: opslaan via save_finance_config (revisie 5 → 6), geen PATCH op updated_at', saveR === 'ok' && sentR.includes('RPC') && !sentR.includes('PATCH') && prefs.get(A).finance_revision === 6 && prefs.get(A).finance_config.pots.some(p => p.name === 'Via revisie'), JSON.stringify({ saveR, sentR }));
+  // Ander apparaat schrijft tussendoor hetzelfde veld anders (revisie 7): samenvoegen of expliciete keuze, nooit stil overschreven.
+  prefs.set(A, { ...prefs.get(A), finance_config: { pots: [{ id: 'p', name: 'A-pot hernoemd elders' }, { id: 'r1', name: 'Via revisie' }], expenses: [] }, finance_revision: 7 });
+  const saveC = await page.evaluate(async () => { const s = SamenThuisFinanceUi.state; s.personal.pots = s.personal.pots.map(p => p.id === 'p' ? { ...p, name: 'A-pot hier hernoemd' } : p); try { await SamenThuisFinanceUi.savePersonal(); return { ok: true, conflict: !!s.personal.conflict }; } catch (e) { return { error: e.name }; } });
+  check('R2. met migratie: tegelijk hetzelfde veld gewijzigd → conflict, niets overschreven', saveC.conflict === true && prefs.get(A).finance_config.pots[0].name === 'A-pot hernoemd elders' && prefs.get(A).finance_revision === 7, JSON.stringify(saveC));
+  await setupUi(); await page.evaluate(() => SamenThuisFinanceUi.refresh(true));
+  g = gate(); const arrivalR = new Promise(r => { arrived = r; }); ctl.hold = { method: 'RPC', p: g.p, arrived };
+  const saveRS = page.evaluate(async () => { const s = SamenThuisFinanceUi.state; s.personal.pots = [...s.personal.pots, { id: 'r3', name: 'Onderweg' }]; try { await SamenThuisFinanceUi.savePersonal(); return 'ok'; } catch (e) { return e.name; } });
+  const baseR = await page.evaluate(() => JSON.stringify(SamenThuisFinanceUi.state.personal.base));
+  await arrivalR; await sessionSwitch(B); g.open();
+  const outRS = await saveRS;
+  check('R3. met migratie: RPC vóór wissel verwerkt als A, laat antwoord verworpen, B onaangeroerd', outRS === 'StaleIdentity' && prefs.get(A).finance_config.pots.some(p => p.name === 'Onderweg') && prefs.get(B).finance_config.pots[0].name === 'B-pot'
+    && (await page.evaluate(() => JSON.stringify(SamenThuisFinanceUi.state.personal.base))) === baseR, outRS);
+  ctl.revision = false;
 
   // ---- Vertraagde syncronde tijdens een huishoudwissel (storage-event uit een ander tabblad) ----
   await page.goto(base, { waitUntil: 'load' }); await page.waitForTimeout(700);
@@ -361,6 +400,28 @@ try {
   const local = await p3.evaluate(() => ({ t: data.groceries.map(g => g.title), evil: 'evilSection' in data, q: Object.keys(localStorage).filter(k => k.startsWith('samenThuisDataV3|quarantine|')).map(k => JSON.parse(localStorage.getItem(k)).evilSection), w: data.settings?.weatherPlace || null }));
   check('A2. lokaal profiel: bekende onderdelen hersteld, onbekend onderdeel apart in quarantaine (niet geladen), instellingen niet overgenomen', JSON.stringify(local.t) === '["Lokaal hersteld"]' && !local.evil && JSON.stringify(local.q) === '[{"geheim":1}]' && local.w !== 'Maastricht', JSON.stringify(local));
   await ctx3.close();
+
+  // ======== Apparaten 4 en 5: twee nieuwe leden vullen tegelijk een leeg huishouden met verschillende codes ========
+  const cx = await device(), cy = await device();
+  const px = await openPage(cx), py = await openPage(cy);
+  for (const [p, u, code, item] of [[px, X, 'code-van-x-123456', 'X-melk'], [py, Y, 'code-van-y-654321', 'Y-kaas']]) {
+    await p.evaluate(() => localStorage.clear());
+    await switchTo(p, u, { enable: { uid: u, hid: H3 } });
+    await p.evaluate(({ u, H3, code }) => localStorage.setItem('samenThuisHouseholdCodesV1', JSON.stringify({ [`${u}|${H3}`]: { code, source: 'entered', verified: false } })), { u, H3, code });
+    await p.reload({ waitUntil: 'load' }); await p.waitForTimeout(800); await waitIdle(p);
+    await p.evaluate(t => { data.groceries = [{ id: t, title: t, category: 'Overig', done: false }]; save({ sync: false }); }, item);
+  }
+  cloud[H3].clear(); // automatische rondes bij het laden tellen niet mee: het huishouden is weer leeg
+  const putsRace = ctl.puts.length;
+  ctl.readDelayMs = 700; // beide lezen een leeg huishouden voordat de ander iets heeft gezet
+  const [rx, ry] = await Promise.all([px.evaluate(() => window.SamenThuisAccountSync.sync()), py.evaluate(() => window.SamenThuisAccountSync.sync())]);
+  ctl.readDelayMs = 0;
+  const racePuts = ctl.puts.slice(putsRace).filter(p => p.hid === H3);
+  const writers = [...new Set(racePuts.map(p => p.user))];
+  const winnerCode = writers[0] === X ? 'code-van-x-123456' : 'code-van-y-654321';
+  const allWinner = await Promise.all([...cloud[H3].values()].map(r => decryptWith(px, r.payload, winnerCode)));
+  check('K1. tegelijk leeg huishouden met verschillende codes: precies één lid schrijft, alles met één code, de ander verstuurt niets', writers.length === 1 && racePuts.some(p => p.section === 'keycheck') && allWinner.every(Boolean), JSON.stringify({ rx, ry, racePuts }));
+  await cx.close(); await cy.close();
 
   // ======== Apparaat 2: zonder IndexedDB (localStorage-fallback) ========
   const ctx2 = await device({ noIndexedDB: true });

@@ -386,11 +386,53 @@ test('finance_config: voorwaardelijke update op updated_at is atomair bij gelijk
   assert.equal(psql(`select finance_config->'pots'->>0 from personal_preferences where user_id='${E}'`, E).out, 'apparaat-1');
 });
 
-// Restrisico 1A (buiten opdracht 7; vereist een databasewijziging): het versiekenmerk is een tijdstempel van het apparaat.
-// Schrijft een apparaat exact dezelfde updated_at terug (zelfde milliseconde of klokafwijking), dan slaagt een verouderde
-// voorwaardelijke update. Deze test legt het restrisico vast; hij hoort te falen zodra er een serverrevisie is.
+// Restrisico van de OUDE route (voorwaardelijke PATCH op updated_at, terugval zolang 20261124 niet is toegepast): een
+// gelijk teruggeschreven updated_at (ABA) laat een verouderde update slagen. De nieuwe route (save_finance_config met
+// finance_revision, tests hieronder) heeft dit probleem niet.
 test('restrisico: gelijk teruggeschreven updated_at (ABA) laat een verouderde voorwaardelijke update slagen', { skip }, () => {
   const t = psql(`select to_json(updated_at)#>>'{}' from personal_preferences where user_id='${E}'`, E).out;
   ok(psql(`update personal_preferences set finance_config='{"pots":["nieuw"]}', updated_at='${t}' where user_id='${E}' and updated_at='${t}'`, E));
   assert.equal(psql(`with u as (update personal_preferences set finance_config='{"pots":["verouderd"]}', updated_at=now() where user_id='${E}' and updated_at='${t}' returning 1) select count(*) from u`, E).out, '1');
 });
+
+// ---- 20261124000000_finance_config_revision: serverrevisie voor finance_config (echte PostgreSQL, echte RLS) ----
+const K = '0000000k-0000-4000-8000-00000000000k'.replace(/k/g, 'a'), L = '0000000b-0000-4000-8000-0000000000bb';
+const save = (rev, label) => `select coalesce((select out_revision::text from public.save_finance_config(${rev}, '{"pots":["${label}"]}'::jsonb)), 'conflict')`;
+test('save_finance_config: aanmaken, gelijktijdige apparaten met dezelfde revisie → precies één schrijver', { skip }, async () => {
+  ok(psql(`insert into auth.users values ('${K}'),('${L}') on conflict do nothing`));
+  assert.equal(psql(save(0, 'eerste'), K).out, '1', 'nog geen rij: aangemaakt met revisie 1');
+  assert.equal(psql(save(0, 'nogmaals-nul'), K).out, 'conflict', 'rij bestaat al: revisie 0 is verouderd');
+  const first = psqlAsync(`begin; ${save(1, 'apparaat-1')}; select pg_sleep(1.2); commit;`, K);
+  await new Promise(r => setTimeout(r, 400));
+  const second = await psqlAsync(`${save(1, 'apparaat-2')};`, K);
+  const one = await first;
+  ok(one); ok(second);
+  assert.equal(one.out.split('\n')[0], '2', 'eerste apparaat wint');
+  assert.equal(second.out, 'conflict', 'tweede apparaat met dezelfde revisie: conflict, niets overschreven');
+  assert.equal(psql(`select finance_config->'pots'->>0 || '|' || finance_revision from personal_preferences where user_id='${K}'`, K).out, 'apparaat-1|2');
+});
+test('save_finance_config: geen ABA meer, ook niet via de oude PATCH-route of een gelijk teruggeschreven updated_at', { skip }, () => {
+  const t = psql(`select to_json(updated_at)#>>'{}' from personal_preferences where user_id='${K}'`, K).out;
+  // Oudere client werkt finance_config bij via de oude route en schrijft daarbij dezelfde updated_at terug.
+  ok(psql(`update personal_preferences set finance_config='{"pots":["oude-client"]}', updated_at='${t}' where user_id='${K}' and updated_at='${t}'`, K));
+  assert.equal(psql(`select finance_revision from personal_preferences where user_id='${K}'`, K).out, '3', 'trigger verhoogt de revisie bij elke wijziging');
+  assert.equal(psql(save(2, 'verouderd'), K).out, 'conflict', 'verouderde revisie: geweigerd ondanks gelijke updated_at');
+  // De revisie is niet vrij te zetten (ook niet terug naar een oude waarde).
+  ok(psql(`update personal_preferences set finance_revision = 1 where user_id='${K}'`, K));
+  assert.equal(psql(`select finance_revision from personal_preferences where user_id='${K}'`, K).out, '3');
+  ok(psql(`update personal_preferences set ui_config='{"x":1}' where user_id='${K}'`, K));
+  assert.equal(psql(`select finance_revision from personal_preferences where user_id='${K}'`, K).out, '3', 'andere voorkeuren: geen revisiewijziging, dus geen onnodig conflict');
+  assert.equal(psql(save(3, 'actueel'), K).out, '4');
+});
+test('save_finance_config: alleen de eigen rij, niet voor anon, alleen een geldig object', { skip }, () => {
+  assert.equal(psql(save(0, 'L-eigen'), L).out, '1', 'L maakt de eigen rij');
+  assert.equal(psql(`select finance_config->'pots'->>0 from personal_preferences where user_id='${K}'`, K).out, 'actueel', 'L raakt de rij van K niet');
+  assert.equal(psql(`select count(*) from personal_preferences where user_id='${K}'`, L).out, '0');
+  assert.equal(psql(`select has_function_privilege('anon','public.save_finance_config(bigint,jsonb)','EXECUTE')`).out, 'f');
+  assert.equal(psql(`select has_function_privilege('authenticated','public.save_finance_config(bigint,jsonb)','EXECUTE')`).out, 't');
+  assert.equal(psql(`select has_function_privilege('authenticated','public.personal_preferences_bump_finance_revision()','EXECUTE')`).out, 'f');
+  bad(psql(`select * from public.save_finance_config(1, '[1,2]'::jsonb)`, L), /Ongeldige configuratie/);
+  bad(psql(`select * from public.save_finance_config(-1, '{}'::jsonb)`, L), /Ongeldige revisie/);
+  bad(psql(`select * from public.save_finance_config(0, '{}'::jsonb)`), /Niet aangemeld/);
+});
+

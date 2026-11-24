@@ -98,9 +98,32 @@
     state.personal.pots = (config.pots || []).map(F.normalizePot);
     state.personal.expenses = Array.isArray(config.expenses) ? config.expenses : [];
   }
+  // Versiekenmerk van de privé-instellingen. Met migratie 20261124 (finance_revision): 'rev:<n>', door de server
+  // opgehoogd, opgeslagen via save_finance_config (geen ABA). Zonder die migratie: terugval op updated_at met een
+  // voorwaardelijke PATCH (oude route). De keuze wordt per paginalading onthouden.
+  let personalRoute = null; // 'rev' | 'ts'
+  const revToken = n => 'rev:' + String(n);
+  const missingColumn = error => error && (error.code === '42703' || error.code === 'PGRST204' || /finance_revision/.test(String(error.message || '')));
   async function fetchPersonalRow(lock = identityLock()) {
-    const rows = await api(`/rest/v1/personal_preferences?select=finance_config,updated_at&user_id=eq.${encodeURIComponent(lock.uid)}&limit=1`, {}, lock);
+    const where = `user_id=eq.${encodeURIComponent(lock.uid)}&limit=1`;
+    if (personalRoute !== 'ts') {
+      try {
+        const rows = await api(`/rest/v1/personal_preferences?select=finance_config,finance_revision,updated_at&${where}`, {}, lock);
+        personalRoute = 'rev';
+        const row = rows?.[0];
+        return row ? { finance_config: row.finance_config, updated_at: revToken(row.finance_revision ?? 0) } : null;
+      } catch (error) {
+        if (!missingColumn(error)) throw error;
+        personalRoute = 'ts';
+      }
+    }
+    const rows = await api(`/rest/v1/personal_preferences?select=finance_config,updated_at&${where}`, {}, lock);
     return rows?.[0] || null;
+  }
+  async function saveRevision(value, expected, lock) {
+    const rows = await rpc('save_finance_config', { p_expected_revision: expected, p_config: value }, lock);
+    const row = Array.isArray(rows) ? rows[0] : null;
+    return row && row.out_revision != null ? { finance_config: row.out_config, updated_at: revToken(row.out_revision) } : null;
   }
   async function loadPersonal(lock = identityLock()) {
     // Privé-potjes horen bij één account: na een (nog niet herladen) wissel nooit de vorige set tonen of gebruiken.
@@ -126,12 +149,14 @@
       merge3: HSC.merge3, hashValue: HSC.hashValue, base: state.personal.base, local,
       fetchRow: () => fetchPersonalRow(lock),
       patchIf: async (value, updatedAt) => {
+        if (String(updatedAt).startsWith('rev:')) return saveRevision(value, Number(String(updatedAt).slice(4)), lock);
         const rows = await api(`/rest/v1/personal_preferences?user_id=eq.${encodeURIComponent(lock.uid)}&updated_at=eq.${encodeURIComponent(updatedAt)}`, {
           method: 'PATCH', headers: { Prefer: 'return=representation' }, body: JSON.stringify({ finance_config: value, updated_at: new Date().toISOString() })
         }, lock);
         return Array.isArray(rows) && rows.length === 1 ? rows[0] : null;
       },
       insertIfAbsent: async value => {
+        if (personalRoute === 'rev') return saveRevision(value, 0, lock);
         const rows = await api('/rest/v1/personal_preferences?on_conflict=user_id', {
           method: 'POST', headers: { Prefer: 'resolution=ignore-duplicates,return=representation' }, body: JSON.stringify({ user_id: lock.uid, finance_config: value })
         }, lock);

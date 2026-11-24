@@ -177,8 +177,8 @@
   // (quarantaine). Een archief zonder vastgelegd doel (van vóór opdracht 7) geldt als quarantaine.
   function retained(storage) {
     const j = journal(storage), out = [];
-    if (j.v2 === 'quarantined') out.push({ key: LEGACY_KEY, status: 'quarantaine', reason: j.reason, at: j.at, target: null });
-    if (j.v2 === 'bound') out.push({ key: LEGACY_KEY, status: 'gekoppeld', target: j.target || null, at: j.at });
+    if (j.v2 === 'quarantined' && !j.v2Cleared) out.push({ key: LEGACY_KEY, status: 'quarantaine', reason: j.reason, at: j.at, target: null });
+    if (j.v2 === 'bound' && !j.v2Cleared) out.push({ key: LEGACY_KEY, status: 'gekoppeld', target: j.target || null, at: j.at });
     const archives = j.archives || {};
     try {
       for (let i = 0; i < storage.length; i++) {
@@ -215,15 +215,38 @@
     // Ontstaan in samenThuisDataV3|local. Is dat profiel daarna gearchiveerd, dan hoort het conflict bij dat archief.
     const archives = j.archives || {};
     let first = null;
+    const consider = k => {
+      const m = k && k.startsWith(`${V3}|local-archive|`) ? Number(k.slice(`${V3}|local-archive|`.length)) : NaN;
+      if (Number.isFinite(m) && m > t && (!first || m < first.ms)) first = { ms: m, key: k };
+    };
     try {
-      for (let i = 0; i < storage.length; i++) {
-        const k = storage.key(i);
-        const m = k && k.startsWith(`${V3}|local-archive|`) ? Number(k.slice(`${V3}|local-archive|`.length)) : NaN;
-        if (Number.isFinite(m) && m > t && (!first || m < first.ms)) first = { ms: m, key: k };
-      }
+      for (let i = 0; i < storage.length; i++) consider(storage.key(i));
+      Object.keys(j.discarded || {}).forEach(consider); // opgeruimde archieven tellen mee voor de eigenaarsbepaling
     } catch (_) { return { kind: 'unknown', reason: 'opslag-onleesbaar' }; }
     if (first) return typeof archives[first.key] === 'string' ? toOwner(archives[first.key]) : { kind: 'unknown', reason: 'archief-zonder-doel' };
     return { kind: 'local', key: LOCAL_V3 };
+  }
+
+  // ---------- Opruimen van bewaarde gegevens (alleen na download en expliciete bevestiging in de app) ----------
+  // Alleen een item dat de actieve identiteit mag zien (retainedFor). Nooit automatisch.
+  //   - samenThuisDataV2: de huishoudgegevens worden verwijderd, de apparaatvelden (SportCoach, instellingen) blijven;
+  //     het journaal krijgt v2Cleared (de migratiestatus zelf verandert niet).
+  //   - archief of quarantainesleutel: verwijderd; een grafsteen in het journaal houdt de eigenaarsbepaling (M1) gelijk.
+  function discardRetained(storage, identity, key, { recovery = false, now = () => new Date().toISOString() } = {}) {
+    const item = retainedFor(storage, identity, { recovery }).find(entry => entry.key === key);
+    if (!item) return { ok: false, reason: 'not-visible' };
+    const j = journal(storage);
+    if (key === LEGACY_KEY) {
+      const device = readDeviceFields(storage);
+      const old = parse(read(storage, LEGACY_KEY));
+      const meta = old && isPlain(old.meta) ? old.meta : { version: 2 }; // revisie-administratie van het apparaat behouden
+      storage.setItem(LEGACY_KEY, JSON.stringify({ meta: { ...meta, clearedAt: now() }, ...device }));
+      writeJournal(storage, { ...j, v2Cleared: true, clearedAt: now() });
+      return { ok: true, key, kept: Object.keys(device) };
+    }
+    writeJournal(storage, { ...j, discarded: { ...(j.discarded || {}), [key]: { target: item.target || null, status: item.status, at: now() } } });
+    storage.removeItem(key);
+    return { ok: true, key, kept: [] };
   }
 
   // Bewaarde gegevens die de actieve identiteit mag zien (opdracht 7):
@@ -264,13 +287,15 @@
     'offers25', 'offerSearchCache25', 'offerArchive25', 'offerCategoryCache25', 'offerCurrentQuery25', 'offerScheduled25', 'favoriteOffers25',
     'priceReferences', 'priceReferenceUpdatedAt', 'priceReferenceSource'
   ]);
-  const NON_DATA_FIELDS = Object.freeze(['meta', ...DEVICE_FIELDS]);
+  // 'keycheck' is de controlewaarde van de huishoudcode in de cloud; oudere versies kunnen die als onderdeel hebben
+  // opgehaald. Hij wordt uit back-ups genegeerd (nooit hersteld, geen reden om te weigeren).
+  const NON_DATA_FIELDS = Object.freeze(['meta', 'keycheck', ...DEVICE_FIELDS]);
   const unknownSections = value => Object.keys(isPlain(value) ? value : {}).filter(k => !ACCOUNT_SECTIONS.includes(k) && !NON_DATA_FIELDS.includes(k));
   // Splitst een back-up in toegestane gegevens (zonder apparaatvelden) en onbekende onderdelen.
   function splitBackup(value) {
     const known = {}, unknown = {};
     for (const [k, v] of Object.entries(isPlain(value) ? value : {})) {
-      if (DEVICE_FIELDS.includes(k)) continue;
+      if (DEVICE_FIELDS.includes(k) || k === 'keycheck') continue;
       if (k === 'meta' || ACCOUNT_SECTIONS.includes(k)) known[k] = v; else unknown[k] = v;
     }
     return { known, unknown };
@@ -372,6 +397,6 @@
     return code.length >= MIN_CODE ? code : null;
   }
 
-  return { legacyRecordOwner, ACCOUNT_SECTIONS, unknownSections, splitBackup, quarantineUnknown, backupAllowed, validateBackup, retainedFor, readCode, setCode, markCodeVerified, codeTrustedForEmpty, legacyCodeCandidate, CODES_KEY, SUPPORTED_VERSION, LEGACY_KEY, V1_KEY, V3, LOCAL_V3, CFG_KEY, AUTH_KEY, JOURNAL_KEY, DEVICE_FIELDS, accountKey, resolve, keysFor, readConfig, setAccount,
+  return { discardRetained, legacyRecordOwner, ACCOUNT_SECTIONS, unknownSections, splitBackup, quarantineUnknown, backupAllowed, validateBackup, retainedFor, readCode, setCode, markCodeVerified, codeTrustedForEmpty, legacyCodeCandidate, CODES_KEY, SUPPORTED_VERSION, LEGACY_KEY, V1_KEY, V3, LOCAL_V3, CFG_KEY, AUTH_KEY, JOURNAL_KEY, DEVICE_FIELDS, accountKey, resolve, keysFor, readConfig, setAccount,
     migrateLegacy, bindLocalToAccount, retained, readDeviceFields, withoutDeviceFields, hashValue, journal };
 });

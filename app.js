@@ -316,17 +316,53 @@ function loadData() {
 // (quarantaine) alleen in het lokale profiel, na het expliciet openen van de herstelmodus (alleen voor deze paginalading).
 let localRecoveryMode = false;
 const visibleRetained = () => IDENTITY_STORE.retainedFor(localStorage, ACTIVE_IDENTITY, { recovery: localRecoveryMode });
-const hiddenQuarantine = () => ACTIVE_IDENTITY.mode === 'local' && !localRecoveryMode && IDENTITY_STORE.retained(localStorage).some(item => !item.target);
+// In het lokale profiel is de herstelmodus altijd aan te zetten (ook voor oude conflictregistraties in IndexedDB).
+const hiddenQuarantine = () => ACTIVE_IDENTITY.mode === 'local' && !localRecoveryMode;
 function retainedDataCard() {
   const items = visibleRetained();
   const offerRecovery = hiddenQuarantine();
-  if (!items.length && !offerRecovery) return '';
+  if (!items.length && !offerRecovery && !(ACTIVE_IDENTITY.mode === 'local' && localRecoveryMode)) return '';
   const label = item => !item.target ? (item.status === 'archief' ? 'Gearchiveerd lokaal profiel waarvan niet vaststaat bij welk account het hoort.' : 'Lokale gegevens van vóór de accountscheiding die niet aantoonbaar bij één account horen. Ze worden niet geladen of gesynchroniseerd.')
     : item.status === 'gekoppeld' ? 'Lokale gegevens van vóór de accountscheiding; gekopieerd naar dit account en huishouden. De oorspronkelijke kopie blijft bewaard.'
     : 'Gearchiveerd lokaal profiel (gekoppeld aan dit account en huishouden).';
-  const recovery = offerRecovery ? '<div class="button-row"><span>Er zijn bewaarde gegevens waarvan niet vaststaat bij welk account ze horen. Ze zijn alleen te bekijken in de herstelmodus.</span><button class="secondary" type="button" data-open-local-recovery>Herstelmodus openen</button></div>' : '';
-  return `<section class="card settings-card" data-retained-data><div class="card-head"><div><p class="eyebrow">Gegevens</p><h2>Back-up van bewaarde lokale gegevens</h2></div></div>${items.map(item => `<div class="button-row"><span>${esc(label(item))}</span><button class="secondary" type="button" data-download-retained="${esc(item.key)}">Downloaden</button></div>`).join('')}${recovery}</section>`;
+  const recovery = offerRecovery ? '<div class="button-row"><span>Bewaarde gegevens en oude conflictregistraties waarvan niet vaststaat bij welk account ze horen, zijn alleen in de herstelmodus te bekijken, te downloaden of op te ruimen.</span><button class="secondary" type="button" data-open-local-recovery>Herstelmodus openen</button></div>' : '';
+  const legacy = ACTIVE_IDENTITY.mode === 'local' && localRecoveryMode ? '<div class="button-row" data-legacy-conflicts-row><span>Oude conflictregistraties zonder vaststaande identiteit (van vóór de accountscheiding). Ze worden nergens getoond of gebruikt.</span><button class="secondary" type="button" data-discard-legacy-conflicts>Downloaden en opruimen</button></div>' : '';
+  return `<section class="card settings-card" data-retained-data><div class="card-head"><div><p class="eyebrow">Gegevens</p><h2>Back-up van bewaarde lokale gegevens</h2></div></div>${items.map(item => `<div class="button-row"><span>${esc(label(item))}</span><button class="secondary" type="button" data-download-retained="${esc(item.key)}">Downloaden</button><button class="secondary" type="button" data-discard-retained="${esc(item.key)}">Opruimen</button></div>`).join('')}${recovery}${legacy}</section>`;
 }
+// Opruimen (op verzoek, nooit automatisch): eerst altijd een download van precies wat verdwijnt, daarna een expliciete
+// bevestiging. SportCoach en apparaatinstellingen blijven altijd staan.
+function downloadRetainedItem(item) {
+  let value = null; try { value = JSON.parse(localStorage.getItem(item.key) || 'null'); } catch (_) {}
+  if (!value) return false;
+  const copy = IDENTITY_STORE.withoutDeviceFields(value);
+  copy.meta = { ...(copy.meta || {}), exportIdentity: { mode: 'retained', key: item.key, status: item.status, target: item.target || null } };
+  downloadBackup(new File([JSON.stringify(copy, null, 2)], `samen-thuis-bewaard-${todayISO()}.json`, { type: 'application/json' }));
+  return true;
+}
+document.addEventListener('click', async event => {
+  const btn = event.target.closest('[data-discard-retained]');
+  const legacyBtn = event.target.closest('[data-discard-legacy-conflicts]');
+  if ((!btn && !legacyBtn) || identitySwitching || DATA_LOCKED) return;
+  if (btn) {
+    const item = visibleRetained().find(entry => entry.key === btn.dataset.discardRetained);
+    if (!item) return;
+    if (!downloadRetainedItem(item)) return toast('Deze gegevens zijn niet leesbaar en worden niet opgeruimd.');
+    if (!confirm('Er is zojuist een download gemaakt. Staat die veilig opgeslagen? Pas dan verwijderen: deze bewaarde gegevens zijn daarna niet meer op dit apparaat. SportCoach en apparaatinstellingen blijven staan.')) return toast('Niets verwijderd.');
+    const r = IDENTITY_STORE.discardRetained(localStorage, ACTIVE_IDENTITY, item.key, { recovery: localRecoveryMode });
+    toast(r.ok ? 'Bewaarde gegevens opgeruimd.' : 'Niet opgeruimd: deze gegevens horen niet bij dit profiel.');
+    render();
+    return;
+  }
+  const meta = window.SamenThuisSyncMeta?.shared();
+  if (!meta?.legacyConflicts || ACTIVE_IDENTITY.mode !== 'local' || !localRecoveryMode) return;
+  const records = await meta.legacyConflicts();
+  if (!records.length) return toast('Er zijn geen oude conflictregistraties.');
+  downloadBackup(new File([JSON.stringify({ meta: { kind: 'samen-thuis-oude-conflictregistraties', at: new Date().toISOString() }, records }, null, 2)], `samen-thuis-oude-conflicten-${todayISO()}.json`, { type: 'application/json' }));
+  if (!confirm(`Er is zojuist een download gemaakt van ${records.length} oude conflictregistratie(s). Staat die veilig opgeslagen? Pas dan verwijderen.`)) return toast('Niets verwijderd.');
+  const n = await meta.discardLegacyConflicts(records.map(r => r.key));
+  toast(`${n} oude conflictregistratie(s) opgeruimd.`);
+  render();
+});
 document.addEventListener('click', event => {
   if (event.target.closest('[data-open-local-recovery]')) {
     if (ACTIVE_IDENTITY.mode !== 'local') return;
@@ -7945,6 +7981,8 @@ document.addEventListener('click', event => {
       throw new Error(error.message || `Profielen van je huishouden ophalen mislukt (${response.status}); controleer de profielmigratie.`);
     }
     const rows = await response.json();
+    // Laat antwoord na een accountwissel: niet toepassen (profielen van het vorige huishouden).
+    if (authSession25?.user?.id !== session.user.id || window.SamenThuisIdentity?.switching()) return;
     householdProfiles25 = Array.isArray(rows) ? rows.map(row => ({
       userId: row.user_id, ...personalPreferencesCore25.normalizeProfile(row.profile_config)
     })) : [];
